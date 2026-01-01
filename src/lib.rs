@@ -25,6 +25,7 @@
 //!         sdk_version: None,  // Use latest
 //!         target_dir: std::path::PathBuf::from("C:\\msvc-kit"),
 //!         arch: Architecture::X64,
+//!         ..Default::default()
 //!     };
 //!
 //!     let install_info = download_msvc(&options).await?;

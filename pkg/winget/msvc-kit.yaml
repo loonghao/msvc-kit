@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.singleton.1.6.0.schema.json
+
+PackageIdentifier: loonghao.msvc-kit
+PackageVersion: 0.1.0
+PackageLocale: en-US
+Publisher: loonghao
+PublisherUrl: https://github.com/loonghao
+PublisherSupportUrl: https://github.com/loonghao/msvc-kit/issues
+Author: loonghao
+PackageName: msvc-kit
+PackageUrl: https://github.com/loonghao/msvc-kit
+License: MIT
+LicenseUrl: https://github.com/loonghao/msvc-kit/blob/main/LICENSE
+ShortDescription: A portable MSVC Build Tools installer and manager for Rust development
+Description: |
+  msvc-kit is a command-line tool for downloading and managing MSVC compiler 
+  and Windows SDK without requiring a full Visual Studio installation.
+  
+  Features:
+  - Download MSVC compiler components from Microsoft servers
+  - Download Windows SDK to specified directories
+  - Configure environment variables for immediate use
+  - Compatible with Rust's cc-rs crate
+  - Library API for integration into other Rust projects
+Tags:
+  - msvc
+  - build-tools
+  - compiler
+  - windows-sdk
+  - rust
+  - development
+  - cli
+ReleaseNotesUrl: https://github.com/loonghao/msvc-kit/releases
+ManifestType: singleton
+ManifestVersion: 1.6.0
+Installers:
+  - Architecture: x64
+    InstallerType: portable
+    InstallerUrl: https://github.com/loonghao/msvc-kit/releases/download/v0.1.0/msvc-kit-x86_64-windows.exe
+    InstallerSha256: # To be filled after release
+    Commands:
+      - msvc-kit
+  - Architecture: x86
+    InstallerType: portable
+    InstallerUrl: https://github.com/loonghao/msvc-kit/releases/download/v0.1.0/msvc-kit-i686-windows.exe
+    InstallerSha256: # To be filled after release
+    Commands:
+      - msvc-kit
+  - Architecture: arm64
+    InstallerType: portable
+    InstallerUrl: https://github.com/loonghao/msvc-kit/releases/download/v0.1.0/msvc-kit-aarch64-windows.exe
+    InstallerSha256: # To be filled after release
+    Commands:
+      - msvc-kit
