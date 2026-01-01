@@ -1,0 +1,73 @@
+[package]
+name = "msvc-kit"
+version = "0.1.0"
+edition = "2021"
+authors = ["loonghao <hal.long@outlook.com>"]
+description = "A portable MSVC Build Tools installer and manager for Rust development"
+license = "MIT"
+repository = "https://github.com/loonghao/msvc-kit"
+keywords = ["msvc", "windows", "build-tools", "compiler", "sdk"]
+categories = ["development-tools", "command-line-utilities"]
+readme = "README.md"
+
+[lib]
+name = "msvc_kit"
+path = "src/lib.rs"
+
+[[bin]]
+name = "msvc-kit"
+path = "src/bin/msvc-kit.rs"
+
+[dependencies]
+# CLI framework
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# Async runtime
+tokio = { version = "1.43", features = ["full"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Compression
+zip = "2.2"
+cab = "0.6"
+
+# Progress display
+indicatif = "0.17"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Path utilities
+directories = "6.0"
+
+# Windows registry (Windows only)
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
+# Async utilities
+futures = "0.3"
+
+# SHA256 verification
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+rstest = "0.24"
+tempfile = "3.15"
+mockito = "1.6"
+
+[profile.release]
+lto = true
+strip = true
+opt-level = "z"
