@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/loonghao/msvc-kit/compare/v0.1.3...v0.1.4) (2026-01-03)
+
+
+### Bug Fixes
+
+* replace unreliable error test with HashMismatch test ([17af874](https://github.com/loonghao/msvc-kit/commit/17af87447e1cd4f46842f700359bad7357b42643))
+
 ## [0.1.3](https://github.com/loonghao/msvc-kit/compare/v0.1.2...v0.1.3) (2026-01-03)
 
 
