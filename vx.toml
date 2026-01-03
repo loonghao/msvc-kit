@@ -6,6 +6,8 @@
 
 [tools]
 rust = "latest"
+just = "latest"
+node = "22"
 
 [settings]
 # Automatically install missing tools when entering dev environment
@@ -14,10 +16,25 @@ auto_install = true
 cache_duration = "7d"
 
 [scripts]
-build = "cargo build"
-build-release = "cargo build --release"
-check = "cargo check"
-doc = "cargo doc"
-format = "cargo fmt"
-lint = "cargo clippy"
-test = "cargo test"
+# Build commands
+build = "just build"
+build-release = "just build-release"
+
+# Quality commands
+check = "just check"
+fmt = "just fmt"
+lint = "just lint"
+test = "just test"
+
+# Documentation
+doc = "just doc"
+docs-dev = "just docs-dev"
+docs-build = "just docs-build"
+
+# Development
+run = "just run"
+ci = "just ci"
+
+# Release
+release-check = "just release-check"
+publish = "just publish"
