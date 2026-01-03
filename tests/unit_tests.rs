@@ -1,10 +1,19 @@
 //! Unit tests for msvc-kit
 
 use msvc_kit::config::MsvcKitConfig;
+use msvc_kit::downloader::{
+    compute_hash, hashes_match, ComponentType, DownloadOptions, DownloadPreview,
+    FileSystemCacheManager, HttpClientConfig, NoopProgressHandler, PackagePreview, ProgressHandler,
+};
+use msvc_kit::env::{generate_activation_script, get_env_vars, MsvcEnvironment, ShellType};
 use msvc_kit::error::MsvcKitError;
-use msvc_kit::version::{Architecture, MsvcVersion, SdkVersion};
-use msvc_kit::DownloadOptions;
+use msvc_kit::installer::InstallInfo;
+use msvc_kit::version::{
+    is_msvc_installed, is_sdk_installed, Architecture, InstalledVersion, MsvcVersion, SdkVersion,
+};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 // ============================================================================
 // Architecture Tests
@@ -642,5 +651,875 @@ mod library_reexports_tests {
     fn test_config_types_reexport() {
         // Verify config types are accessible from crate root
         let _config = msvc_kit::MsvcKitConfig::default();
+    }
+}
+
+// ============================================================================
+// InstallInfo Tests
+// ============================================================================
+
+mod install_info_tests {
+    use super::*;
+
+    fn create_test_install_info(component_type: &str) -> InstallInfo {
+        InstallInfo {
+            component_type: component_type.to_string(),
+            version: "14.44.33807".to_string(),
+            install_path: PathBuf::from("C:/test/path"),
+            downloaded_files: vec![],
+            arch: Architecture::X64,
+        }
+    }
+
+    #[test]
+    fn test_install_info_is_valid() {
+        let info = create_test_install_info("msvc");
+        // Path doesn't exist, so should be invalid
+        assert!(!info.is_valid());
+    }
+
+    #[test]
+    fn test_install_info_total_size() {
+        let info = create_test_install_info("msvc");
+        // No files, so size should be 0
+        assert_eq!(info.total_size(), 0);
+    }
+
+    #[test]
+    fn test_install_info_bin_dir_msvc() {
+        let info = create_test_install_info("msvc");
+        let bin_dir = info.bin_dir();
+        assert!(bin_dir.to_string_lossy().contains("bin"));
+        assert!(bin_dir.to_string_lossy().contains("Hostx64"));
+        assert!(bin_dir.to_string_lossy().contains("x64"));
+    }
+
+    #[test]
+    fn test_install_info_bin_dir_sdk() {
+        let info = InstallInfo {
+            component_type: "sdk".to_string(),
+            version: "10.0.26100.0".to_string(),
+            install_path: PathBuf::from("C:/test/sdk"),
+            downloaded_files: vec![],
+            arch: Architecture::X64,
+        };
+        let bin_dir = info.bin_dir();
+        assert!(bin_dir.to_string_lossy().contains("bin"));
+        assert!(bin_dir.to_string_lossy().contains("10.0.26100.0"));
+    }
+
+    #[test]
+    fn test_install_info_bin_dir_unknown() {
+        let info = InstallInfo {
+            component_type: "unknown".to_string(),
+            version: "1.0".to_string(),
+            install_path: PathBuf::from("C:/test"),
+            downloaded_files: vec![],
+            arch: Architecture::X64,
+        };
+        let bin_dir = info.bin_dir();
+        assert!(bin_dir.to_string_lossy().contains("bin"));
+    }
+
+    #[test]
+    fn test_install_info_include_dir_msvc() {
+        let info = create_test_install_info("msvc");
+        let include_dir = info.include_dir();
+        assert!(include_dir.to_string_lossy().contains("include"));
+    }
+
+    #[test]
+    fn test_install_info_include_dir_sdk() {
+        let info = InstallInfo {
+            component_type: "sdk".to_string(),
+            version: "10.0.26100.0".to_string(),
+            install_path: PathBuf::from("C:/test/sdk"),
+            downloaded_files: vec![],
+            arch: Architecture::X64,
+        };
+        let include_dir = info.include_dir();
+        assert!(include_dir.to_string_lossy().contains("Include"));
+        assert!(include_dir.to_string_lossy().contains("10.0.26100.0"));
+    }
+
+    #[test]
+    fn test_install_info_lib_dir_msvc() {
+        let info = create_test_install_info("msvc");
+        let lib_dir = info.lib_dir();
+        assert!(lib_dir.to_string_lossy().contains("lib"));
+        assert!(lib_dir.to_string_lossy().contains("x64"));
+    }
+
+    #[test]
+    fn test_install_info_lib_dir_sdk() {
+        let info = InstallInfo {
+            component_type: "sdk".to_string(),
+            version: "10.0.26100.0".to_string(),
+            install_path: PathBuf::from("C:/test/sdk"),
+            downloaded_files: vec![],
+            arch: Architecture::X64,
+        };
+        let lib_dir = info.lib_dir();
+        assert!(lib_dir.to_string_lossy().contains("Lib"));
+        assert!(lib_dir.to_string_lossy().contains("um"));
+    }
+
+    #[test]
+    fn test_install_info_to_json() {
+        let info = create_test_install_info("msvc");
+        let json = info.to_json();
+        assert_eq!(json["component_type"], "msvc");
+        assert_eq!(json["version"], "14.44.33807");
+        assert_eq!(json["arch"], "x64");
+    }
+}
+
+// ============================================================================
+// MsvcEnvironment Tests
+// ============================================================================
+
+mod msvc_environment_tests {
+    use super::*;
+
+    fn create_test_environment() -> MsvcEnvironment {
+        MsvcEnvironment {
+            vc_install_dir: PathBuf::from("C:\\VC"),
+            vc_tools_install_dir: PathBuf::from("C:\\VC\\Tools\\MSVC\\14.44.33807"),
+            vc_tools_version: "14.44.33807".to_string(),
+            windows_sdk_dir: PathBuf::from("C:\\Windows Kits\\10"),
+            windows_sdk_version: "10.0.26100.0".to_string(),
+            include_paths: vec![
+                PathBuf::from("C:\\VC\\include"),
+                PathBuf::from("C:\\Windows Kits\\10\\Include\\10.0.26100.0\\ucrt"),
+            ],
+            lib_paths: vec![
+                PathBuf::from("C:\\VC\\lib\\x64"),
+                PathBuf::from("C:\\Windows Kits\\10\\Lib\\10.0.26100.0\\ucrt\\x64"),
+            ],
+            bin_paths: vec![
+                PathBuf::from("C:\\VC\\bin\\Hostx64\\x64"),
+                PathBuf::from("C:\\Windows Kits\\10\\bin\\10.0.26100.0\\x64"),
+            ],
+            arch: Architecture::X64,
+            host_arch: Architecture::X64,
+        }
+    }
+
+    #[test]
+    fn test_msvc_environment_include_path_string() {
+        let env = create_test_environment();
+        let include = env.include_path_string();
+        assert!(include.contains("VC"));
+        assert!(include.contains("ucrt"));
+        assert!(include.contains(";"));
+    }
+
+    #[test]
+    fn test_msvc_environment_lib_path_string() {
+        let env = create_test_environment();
+        let lib = env.lib_path_string();
+        assert!(lib.contains("x64"));
+        assert!(lib.contains(";"));
+    }
+
+    #[test]
+    fn test_msvc_environment_bin_path_string() {
+        let env = create_test_environment();
+        let bin = env.bin_path_string();
+        assert!(bin.contains("Hostx64"));
+        assert!(bin.contains(";"));
+    }
+
+    #[test]
+    fn test_msvc_environment_has_cl_exe() {
+        let env = create_test_environment();
+        // Paths don't exist, so should return false
+        assert!(!env.has_cl_exe());
+    }
+
+    #[test]
+    fn test_msvc_environment_cl_exe_path() {
+        let env = create_test_environment();
+        // Paths don't exist, so should return None
+        assert!(env.cl_exe_path().is_none());
+    }
+
+    #[test]
+    fn test_msvc_environment_link_exe_path() {
+        let env = create_test_environment();
+        assert!(env.link_exe_path().is_none());
+    }
+
+    #[test]
+    fn test_msvc_environment_lib_exe_path() {
+        let env = create_test_environment();
+        assert!(env.lib_exe_path().is_none());
+    }
+
+    #[test]
+    fn test_msvc_environment_ml64_exe_path() {
+        let env = create_test_environment();
+        assert!(env.ml64_exe_path().is_none());
+    }
+
+    #[test]
+    fn test_msvc_environment_nmake_exe_path() {
+        let env = create_test_environment();
+        assert!(env.nmake_exe_path().is_none());
+    }
+
+    #[test]
+    fn test_msvc_environment_rc_exe_path() {
+        let env = create_test_environment();
+        assert!(env.rc_exe_path().is_none());
+    }
+
+    #[test]
+    fn test_msvc_environment_tool_paths() {
+        let env = create_test_environment();
+        let paths = env.tool_paths();
+        assert!(paths.cl.is_none());
+        assert!(paths.link.is_none());
+        assert!(paths.lib.is_none());
+        assert!(paths.ml64.is_none());
+        assert!(paths.nmake.is_none());
+        assert!(paths.rc.is_none());
+    }
+
+    #[test]
+    fn test_msvc_environment_to_json() {
+        let env = create_test_environment();
+        let json = env.to_json();
+        assert_eq!(json["vc_tools_version"], "14.44.33807");
+        assert_eq!(json["windows_sdk_version"], "10.0.26100.0");
+        assert_eq!(json["arch"], "x64");
+        assert_eq!(json["host_arch"], "x64");
+    }
+
+    #[test]
+    fn test_get_env_vars_platform_info() {
+        let env = create_test_environment();
+        let vars = get_env_vars(&env);
+        assert_eq!(vars.get("Platform").unwrap(), "x64");
+        assert_eq!(vars.get("VSCMD_ARG_HOST_ARCH").unwrap(), "x64");
+        assert_eq!(vars.get("VSCMD_ARG_TGT_ARCH").unwrap(), "x64");
+    }
+
+    #[test]
+    fn test_get_env_vars_windows_sdk_bin_path() {
+        let env = create_test_environment();
+        let vars = get_env_vars(&env);
+        let sdk_bin = vars.get("WindowsSdkBinPath").unwrap();
+        assert!(sdk_bin.contains("bin"));
+        assert!(sdk_bin.contains("10.0.26100.0"));
+    }
+}
+
+// ============================================================================
+// Shell Script Generation Tests
+// ============================================================================
+
+mod shell_script_generation_tests {
+    use super::*;
+
+    fn create_test_environment() -> MsvcEnvironment {
+        MsvcEnvironment {
+            vc_install_dir: PathBuf::from("C:\\VC"),
+            vc_tools_install_dir: PathBuf::from("C:\\VC\\Tools\\MSVC\\14.44"),
+            vc_tools_version: "14.44.33807".to_string(),
+            windows_sdk_dir: PathBuf::from("C:\\Windows Kits\\10"),
+            windows_sdk_version: "10.0.26100.0".to_string(),
+            include_paths: vec![PathBuf::from("C:\\include")],
+            lib_paths: vec![PathBuf::from("C:\\lib")],
+            bin_paths: vec![PathBuf::from("C:\\bin")],
+            arch: Architecture::X64,
+            host_arch: Architecture::X64,
+        }
+    }
+
+    #[test]
+    fn test_generate_cmd_script() {
+        let env = create_test_environment();
+        let script = generate_activation_script(&env, ShellType::Cmd);
+        assert!(script.contains("@echo off"));
+        assert!(script.contains("set \""));
+        assert!(script.contains("MSVC environment"));
+    }
+
+    #[test]
+    fn test_generate_powershell_script() {
+        let env = create_test_environment();
+        let script = generate_activation_script(&env, ShellType::PowerShell);
+        assert!(script.contains("$env:"));
+        assert!(script.contains("Write-Host"));
+        assert!(script.contains("MSVC environment"));
+    }
+
+    #[test]
+    fn test_generate_bash_script() {
+        let env = create_test_environment();
+        let script = generate_activation_script(&env, ShellType::Bash);
+        assert!(script.contains("#!/bin/bash"));
+        assert!(script.contains("export "));
+        assert!(script.contains("MSVC environment"));
+    }
+
+    #[test]
+    fn test_shell_type_equality() {
+        assert_eq!(ShellType::Cmd, ShellType::Cmd);
+        assert_eq!(ShellType::PowerShell, ShellType::PowerShell);
+        assert_eq!(ShellType::Bash, ShellType::Bash);
+        assert_ne!(ShellType::Cmd, ShellType::PowerShell);
+    }
+}
+
+// ============================================================================
+// Version Installation Check Tests
+// ============================================================================
+
+mod version_installation_tests {
+    use super::*;
+
+    #[test]
+    fn test_is_msvc_installed_nonexistent_dir() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        assert!(!is_msvc_installed(temp_dir.path(), "14.44.33807"));
+    }
+
+    #[test]
+    fn test_is_msvc_installed_empty_msvc_dir() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let msvc_dir = temp_dir.path().join("VC").join("Tools").join("MSVC");
+        std::fs::create_dir_all(&msvc_dir).unwrap();
+        assert!(!is_msvc_installed(temp_dir.path(), "14.44.33807"));
+    }
+
+    #[test]
+    fn test_is_msvc_installed_exact_version() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let msvc_dir = temp_dir
+            .path()
+            .join("VC")
+            .join("Tools")
+            .join("MSVC")
+            .join("14.44.33807");
+        std::fs::create_dir_all(&msvc_dir).unwrap();
+        assert!(is_msvc_installed(temp_dir.path(), "14.44.33807"));
+    }
+
+    #[test]
+    fn test_is_msvc_installed_prefix_match() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let msvc_dir = temp_dir
+            .path()
+            .join("VC")
+            .join("Tools")
+            .join("MSVC")
+            .join("14.44.33807");
+        std::fs::create_dir_all(&msvc_dir).unwrap();
+        // Should match prefix
+        assert!(is_msvc_installed(temp_dir.path(), "14.44"));
+    }
+
+    #[test]
+    fn test_is_sdk_installed_nonexistent_dir() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        assert!(!is_sdk_installed(temp_dir.path(), "10.0.26100.0"));
+    }
+
+    #[test]
+    fn test_is_sdk_installed_exact_version() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let sdk_dir = temp_dir
+            .path()
+            .join("Windows Kits")
+            .join("10")
+            .join("Include")
+            .join("10.0.26100.0");
+        std::fs::create_dir_all(&sdk_dir).unwrap();
+        assert!(is_sdk_installed(temp_dir.path(), "10.0.26100.0"));
+    }
+
+    #[test]
+    fn test_is_sdk_installed_partial_match() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let sdk_dir = temp_dir
+            .path()
+            .join("Windows Kits")
+            .join("10")
+            .join("Include")
+            .join("10.0.26100.0");
+        std::fs::create_dir_all(&sdk_dir).unwrap();
+        // Should match partial version
+        assert!(is_sdk_installed(temp_dir.path(), "26100"));
+    }
+}
+
+// ============================================================================
+// Version Display Tests
+// ============================================================================
+
+mod version_display_tests {
+    use super::*;
+
+    #[test]
+    fn test_msvc_version_display_not_latest() {
+        let version = MsvcVersion::new("14.44.33807", "MSVC 14.44");
+        let display = format!("{}", version);
+        assert!(display.contains("14.44.33807"));
+        assert!(!display.contains("latest"));
+    }
+
+    #[test]
+    fn test_sdk_version_display_not_latest() {
+        let version = SdkVersion::new("10.0.26100.0", "Windows SDK");
+        let display = format!("{}", version);
+        assert!(display.contains("10.0.26100.0"));
+        assert!(!display.contains("latest"));
+    }
+
+    #[test]
+    fn test_version_component_name() {
+        let msvc = MsvcVersion::new("14.44", "MSVC");
+        assert_eq!(msvc.component_name(), "MSVC");
+
+        let sdk = SdkVersion::new("10.0.26100.0", "SDK");
+        assert_eq!(sdk.component_name(), "Windows SDK");
+    }
+}
+
+// ============================================================================
+// InstalledVersion Tests
+// ============================================================================
+
+mod installed_version_tests {
+    use super::*;
+
+    #[test]
+    fn test_installed_version_creation() {
+        let msvc = MsvcVersion::new("14.44.33807", "MSVC 14.44");
+        let sdk = SdkVersion::new("10.0.26100.0", "Windows SDK");
+
+        let installed = InstalledVersion {
+            msvc: Some(msvc),
+            sdk: Some(sdk),
+            installed_at: chrono::Utc::now(),
+            arch: Architecture::X64,
+        };
+
+        assert!(installed.msvc.is_some());
+        assert!(installed.sdk.is_some());
+        assert_eq!(installed.arch, Architecture::X64);
+    }
+
+    #[test]
+    fn test_installed_version_serde() {
+        let installed = InstalledVersion {
+            msvc: Some(MsvcVersion::new("14.44", "MSVC")),
+            sdk: None,
+            installed_at: chrono::Utc::now(),
+            arch: Architecture::Arm64,
+        };
+
+        let json = serde_json::to_string(&installed).unwrap();
+        let parsed: InstalledVersion = serde_json::from_str(&json).unwrap();
+        assert!(parsed.msvc.is_some());
+        assert!(parsed.sdk.is_none());
+        assert_eq!(parsed.arch, Architecture::Arm64);
+    }
+}
+
+// ============================================================================
+// DownloadOptions Builder Tests
+// ============================================================================
+
+mod download_options_builder_tests {
+    use super::*;
+
+    #[test]
+    fn test_builder_all_options() {
+        let options = DownloadOptions::builder()
+            .msvc_version("14.44")
+            .sdk_version("10.0.26100.0")
+            .target_dir("C:/custom")
+            .arch(Architecture::Arm64)
+            .host_arch(Architecture::X64)
+            .verify_hashes(false)
+            .parallel_downloads(16)
+            .dry_run(true)
+            .build();
+
+        assert_eq!(options.msvc_version, Some("14.44".to_string()));
+        assert_eq!(options.sdk_version, Some("10.0.26100.0".to_string()));
+        assert_eq!(options.target_dir, PathBuf::from("C:/custom"));
+        assert_eq!(options.arch, Architecture::Arm64);
+        assert_eq!(options.host_arch, Some(Architecture::X64));
+        assert!(!options.verify_hashes);
+        assert_eq!(options.parallel_downloads, 16);
+        assert!(options.dry_run);
+    }
+
+    #[test]
+    fn test_builder_partial_options() {
+        let options = DownloadOptions::builder()
+            .msvc_version("14.44")
+            .target_dir("C:/test")
+            .build();
+
+        assert_eq!(options.msvc_version, Some("14.44".to_string()));
+        assert!(options.sdk_version.is_none());
+        assert_eq!(options.target_dir, PathBuf::from("C:/test"));
+    }
+
+    #[test]
+    fn test_download_options_debug() {
+        let options = DownloadOptions::default();
+        let debug_str = format!("{:?}", options);
+        assert!(debug_str.contains("DownloadOptions"));
+        assert!(debug_str.contains("msvc_version"));
+        assert!(debug_str.contains("target_dir"));
+    }
+}
+
+// ============================================================================
+// DownloadPreview Tests
+// ============================================================================
+
+mod download_preview_tests {
+    use super::*;
+
+    #[test]
+    fn test_download_preview_format() {
+        let preview = DownloadPreview {
+            component: "MSVC".to_string(),
+            version: "14.44.33807".to_string(),
+            package_count: 10,
+            file_count: 100,
+            total_size: 1024 * 1024 * 500, // 500 MB
+            packages: vec![],
+        };
+
+        let formatted = preview.format();
+        assert!(formatted.contains("MSVC"));
+        assert!(formatted.contains("14.44.33807"));
+        assert!(formatted.contains("10 packages"));
+        assert!(formatted.contains("100 files"));
+    }
+
+    #[test]
+    fn test_package_preview() {
+        let package = PackagePreview {
+            id: "Microsoft.VC.Tools".to_string(),
+            version: "14.44.33807".to_string(),
+            file_count: 50,
+            size: 1024 * 1024 * 100,
+        };
+
+        assert_eq!(package.id, "Microsoft.VC.Tools");
+        assert_eq!(package.version, "14.44.33807");
+        assert_eq!(package.file_count, 50);
+    }
+}
+
+// ============================================================================
+// ComponentType Tests
+// ============================================================================
+
+mod component_type_tests {
+    use super::*;
+
+    #[test]
+    fn test_component_type_as_str() {
+        assert_eq!(ComponentType::Msvc.as_str(), "msvc");
+        assert_eq!(ComponentType::Sdk.as_str(), "sdk");
+    }
+
+    #[test]
+    fn test_component_type_display() {
+        assert_eq!(format!("{}", ComponentType::Msvc), "msvc");
+        assert_eq!(format!("{}", ComponentType::Sdk), "sdk");
+    }
+
+    #[test]
+    fn test_component_type_equality() {
+        assert_eq!(ComponentType::Msvc, ComponentType::Msvc);
+        assert_eq!(ComponentType::Sdk, ComponentType::Sdk);
+        assert_ne!(ComponentType::Msvc, ComponentType::Sdk);
+    }
+
+    #[test]
+    fn test_component_type_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(ComponentType::Msvc);
+        set.insert(ComponentType::Sdk);
+        assert_eq!(set.len(), 2);
+        assert!(set.contains(&ComponentType::Msvc));
+        assert!(set.contains(&ComponentType::Sdk));
+    }
+}
+
+// ============================================================================
+// Hash Utility Tests
+// ============================================================================
+
+mod hash_utility_tests {
+    use super::*;
+
+    #[test]
+    fn test_compute_hash_empty() {
+        let hash = compute_hash(b"");
+        assert_eq!(
+            hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn test_compute_hash_known_value() {
+        let hash = compute_hash(b"test");
+        assert_eq!(
+            hash,
+            "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+        );
+    }
+
+    #[test]
+    fn test_hashes_match_case_insensitive() {
+        assert!(hashes_match("ABCDEF", "abcdef"));
+        assert!(hashes_match("AbCdEf", "aBcDeF"));
+        assert!(hashes_match("123abc", "123ABC"));
+    }
+
+    #[test]
+    fn test_hashes_match_different() {
+        assert!(!hashes_match("abc123", "abc124"));
+        assert!(!hashes_match("", "abc"));
+    }
+}
+
+// ============================================================================
+// HttpClientConfig Tests
+// ============================================================================
+
+mod http_client_config_tests {
+    use super::*;
+
+    #[test]
+    fn test_http_client_config_default() {
+        let config = HttpClientConfig::default();
+        assert!(config.user_agent.contains("msvc-kit"));
+        assert_eq!(config.connect_timeout, Some(Duration::from_secs(30)));
+        assert_eq!(config.timeout, Some(Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn test_http_client_config_custom() {
+        let config = HttpClientConfig::with_user_agent("custom/1.0")
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(60));
+
+        assert_eq!(config.user_agent, "custom/1.0");
+        assert_eq!(config.connect_timeout, Some(Duration::from_secs(10)));
+        assert_eq!(config.timeout, Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn test_http_client_config_build() {
+        let config = HttpClientConfig::default();
+        let _client = config.build();
+        // Just verify it doesn't panic
+    }
+}
+
+// ============================================================================
+// Progress Handler Tests
+// ============================================================================
+
+mod progress_handler_tests {
+    use super::*;
+
+    #[test]
+    fn test_noop_progress_handler() {
+        let handler = NoopProgressHandler;
+        // All methods should be no-ops and not panic
+        handler.on_start("MSVC", 100, 1024 * 1024);
+        handler.on_file_start("test.vsix", 1024);
+        handler.on_progress(512);
+        handler.on_file_complete("test.vsix", "downloaded");
+        handler.on_complete(10, 5);
+        handler.on_error("test error");
+        handler.on_message("test message");
+    }
+
+    #[test]
+    fn test_progress_handler_boxed() {
+        let handler: Arc<dyn ProgressHandler> = Arc::new(NoopProgressHandler);
+        handler.on_start("SDK", 50, 512 * 1024);
+        handler.on_complete(50, 0);
+    }
+}
+
+// ============================================================================
+// FileSystemCacheManager Tests
+// ============================================================================
+
+mod cache_manager_tests {
+    use super::*;
+    use msvc_kit::downloader::CacheManager;
+
+    #[test]
+    fn test_filesystem_cache_basic_operations() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cache = FileSystemCacheManager::new(temp_dir.path());
+
+        // Test set and get
+        cache.set("test_key", b"test_value").unwrap();
+        assert_eq!(cache.get("test_key"), Some(b"test_value".to_vec()));
+
+        // Test contains
+        assert!(cache.contains("test_key"));
+        assert!(!cache.contains("nonexistent"));
+    }
+
+    #[test]
+    fn test_filesystem_cache_invalidate() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cache = FileSystemCacheManager::new(temp_dir.path());
+
+        cache.set("key", b"value").unwrap();
+        assert!(cache.contains("key"));
+
+        cache.invalidate("key").unwrap();
+        assert!(!cache.contains("key"));
+    }
+
+    #[test]
+    fn test_filesystem_cache_clear() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cache = FileSystemCacheManager::new(temp_dir.path());
+
+        cache.set("key1", b"value1").unwrap();
+        cache.set("key2", b"value2").unwrap();
+
+        cache.clear().unwrap();
+
+        assert!(!cache.contains("key1"));
+        assert!(!cache.contains("key2"));
+    }
+
+    #[test]
+    fn test_filesystem_cache_entry_path() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cache = FileSystemCacheManager::new(temp_dir.path());
+
+        let path = cache.entry_path("some/nested/key");
+        assert!(path.ends_with("some/nested/key") || path.ends_with("some\\nested\\key"));
+    }
+
+    #[test]
+    fn test_filesystem_cache_nested_keys() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cache = FileSystemCacheManager::new(temp_dir.path());
+
+        cache.set("nested/path/key", b"nested_value").unwrap();
+        assert_eq!(cache.get("nested/path/key"), Some(b"nested_value".to_vec()));
+    }
+
+    #[test]
+    fn test_filesystem_cache_default_dir() {
+        let cache = FileSystemCacheManager::default_cache_dir();
+        let cache_dir = cache.cache_dir();
+        // Just verify it returns a valid path
+        assert!(!cache_dir.to_string_lossy().is_empty());
+    }
+}
+
+// ============================================================================
+// Error Conversion Tests
+// ============================================================================
+
+mod error_conversion_tests {
+    use super::*;
+
+    #[test]
+    fn test_error_from_io_error() {
+        let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let error: MsvcKitError = io_error.into();
+        assert!(matches!(error, MsvcKitError::Io(_)));
+    }
+
+    #[test]
+    fn test_error_download_network() {
+        let error = MsvcKitError::DownloadNetwork {
+            file: "test.vsix".to_string(),
+            url: "https://example.com/test.vsix".to_string(),
+            source: reqwest::Client::new()
+                .get("invalid://url")
+                .build()
+                .unwrap_err(),
+        };
+        let msg = error.to_string();
+        assert!(msg.contains("test.vsix"));
+    }
+
+    #[test]
+    fn test_error_serialization() {
+        let error = MsvcKitError::Config("test config error".to_string());
+        assert!(error.to_string().contains("test config error"));
+    }
+}
+
+// ============================================================================
+// Constants Tests
+// ============================================================================
+
+mod constants_tests {
+    use msvc_kit::constants::{download, extraction, hash, progress, USER_AGENT, VS_CHANNEL_URL};
+
+    #[test]
+    fn test_user_agent() {
+        assert!(USER_AGENT.contains("msvc-kit"));
+    }
+
+    #[test]
+    fn test_vs_channel_url() {
+        assert!(VS_CHANNEL_URL.starts_with("https://"));
+        assert!(VS_CHANNEL_URL.contains("vs"));
+    }
+
+    #[test]
+    fn test_download_constants() {
+        // Verify constants are accessible and have expected values
+        assert_eq!(download::MAX_RETRIES, 4);
+        assert_eq!(download::DEFAULT_PARALLEL_DOWNLOADS, 4);
+        assert_eq!(download::MIN_CONCURRENCY, 2);
+        // Verify throughput thresholds relationship
+        let low = download::LOW_THROUGHPUT_MBPS;
+        let high = download::HIGH_THROUGHPUT_MBPS;
+        assert!(
+            low < high,
+            "LOW_THROUGHPUT_MBPS should be less than HIGH_THROUGHPUT_MBPS"
+        );
+    }
+
+    #[test]
+    fn test_progress_constants() {
+        // Verify progress constants are accessible
+        assert_eq!(progress::SPINNER_TICK_MS, 80);
+        assert_eq!(progress::PROGRESS_TICK_MS, 120);
+        assert_eq!(progress::UPDATE_INTERVAL.as_millis(), 200);
+    }
+
+    #[test]
+    fn test_hash_constants() {
+        // Verify hash buffer size is 1 MB
+        assert_eq!(hash::HASH_BUFFER_SIZE, 1024 * 1024);
+    }
+
+    #[test]
+    fn test_extraction_constants() {
+        // Verify extraction buffer size is 128 KB
+        assert_eq!(extraction::EXTRACT_BUFFER_SIZE, 128 * 1024);
     }
 }
