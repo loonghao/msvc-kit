@@ -65,7 +65,7 @@ jobs:
         run: ls -R artifacts
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/msvc-kit-x86_64-windows.exe/msvc-kit.exe
