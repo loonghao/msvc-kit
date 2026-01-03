@@ -76,7 +76,7 @@ hex = "0.4"
 self_update = { version = "0.42", features = ["archive-zip"], optional = true }
 
 # Embedded KV database
-redb = "1.5"
+redb = "3.0"
 bincode = "1.3"
 
 [dev-dependencies]
