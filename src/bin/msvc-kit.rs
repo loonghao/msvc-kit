@@ -535,13 +535,17 @@ async fn main() -> anyhow::Result<()> {
         } => {
             if !accept_license {
                 println!("⚠️  License Agreement Required\n");
-                println!("The MSVC compiler and Windows SDK are subject to Microsoft's license terms:");
+                println!(
+                    "The MSVC compiler and Windows SDK are subject to Microsoft's license terms:"
+                );
                 println!("  https://visualstudio.microsoft.com/license-terms/\n");
                 println!("By using --accept-license, you confirm that you have read and accepted");
                 println!("Microsoft's Visual Studio License Terms.\n");
                 println!("Usage:");
                 println!("  msvc-kit bundle --accept-license [--output <dir>] [--arch <arch>]\n");
-                anyhow::bail!("You must accept the license terms with --accept-license to proceed.");
+                anyhow::bail!(
+                    "You must accept the license terms with --accept-license to proceed."
+                );
             }
 
             let arch: Architecture = arch.parse().map_err(|e: String| anyhow::anyhow!(e))?;
@@ -626,14 +630,18 @@ async fn main() -> anyhow::Result<()> {
             tokio::fs::write(&bash_script_path, &bash_script).await?;
 
             // Copy msvc-kit executable
-            let exe_name = if cfg!(windows) { "msvc-kit.exe" } else { "msvc-kit" };
+            let exe_name = if cfg!(windows) {
+                "msvc-kit.exe"
+            } else {
+                "msvc-kit"
+            };
             let current_exe = std::env::current_exe()?;
             let target_exe = output.join(exe_name);
             tokio::fs::copy(&current_exe, &target_exe).await?;
 
             // Generate README
             let readme_content = format!(
-r#"Portable MSVC Toolchain Bundle
+                r#"Portable MSVC Toolchain Bundle
 ==============================
 
 MSVC Version:       {}
