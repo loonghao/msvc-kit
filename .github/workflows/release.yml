@@ -142,7 +142,7 @@ jobs:
           - msvc-kit-aarch64-windows
     steps:
       - name: Download artifact from PR workflow
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: dist/
@@ -151,7 +151,7 @@ jobs:
         continue-on-error: true
 
       - name: Re-upload artifact for release
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           path: dist/
@@ -197,7 +197,7 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact-name }}
           path: target/${{ matrix.target }}/release/msvc-kit.exe
@@ -285,7 +285,7 @@ jobs:
             {{__unknown__}}
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: msvc-kit-*
           path: release-artifacts
