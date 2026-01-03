@@ -25,22 +25,22 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup vx
-        uses: loonghao/vx@main
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          tools: "node"
-          cache: "true"
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: docs/package-lock.json
 
       - name: Install dependencies
         run: |
           cd docs
-          vx npm ci
+          npm ci
 
       - name: Build documentation
         run: |
           cd docs
-          vx npm run build
+          npm run build
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
