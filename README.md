@@ -1,8 +1,12 @@
 # msvc-kit
 
 [![Crates.io](https://img.shields.io/crates/v/msvc-kit.svg)](https://crates.io/crates/msvc-kit)
+[![Crates.io Downloads](https://img.shields.io/crates/d/msvc-kit.svg)](https://crates.io/crates/msvc-kit)
+[![GitHub Downloads](https://img.shields.io/github/downloads/loonghao/msvc-kit/total.svg)](https://github.com/loonghao/msvc-kit/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![CI](https://github.com/loonghao/msvc-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/loonghao/msvc-kit/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/loonghao/msvc-kit/graph/badge.svg)](https://codecov.io/gh/loonghao/msvc-kit)
+[![docs.rs](https://img.shields.io/docsrs/msvc-kit)](https://docs.rs/msvc-kit)
 
 [English](README.md) | [中文](README_zh.md)
 

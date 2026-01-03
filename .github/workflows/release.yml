@@ -206,7 +206,7 @@ jobs:
   # Publish to crates.io
   crates-publish:
     name: Publish to crates.io
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     needs: [release-please, check-tag]
     if: |
       always() &&
@@ -265,6 +265,12 @@ jobs:
             echo "TAG_NAME=${{ needs.check-tag.outputs.tag_name }}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Determine version
+        id: version
+        run: |
+          TAG="${{ steps.tag.outputs.TAG_NAME }}"
+          echo "VERSION=${TAG#v}" >> $GITHUB_OUTPUT
+
       - name: Generate changelog
         id: changelog
         uses: jaywcjlove/changelog-generator@main
@@ -294,10 +300,14 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release-files
+          TAG="${{ steps.tag.outputs.TAG_NAME }}"
+          VERSION="${TAG#v}"
           for dir in release-artifacts/*/; do
             artifact_name=$(basename "$dir")
             if [ -f "${dir}msvc-kit.exe" ]; then
-              cp "${dir}msvc-kit.exe" "release-files/${artifact_name}.exe"
+              # Extract architecture from artifact name (e.g., msvc-kit-x86_64-windows -> x86_64-windows)
+              arch_suffix="${artifact_name#msvc-kit-}"
+              cp "${dir}msvc-kit.exe" "release-files/msvc-kit-${VERSION}-${arch_suffix}.exe"
             fi
           done
           echo "Release files:"
@@ -339,9 +349,9 @@ jobs:
             ```
 
             **Direct Download:**
-            - [msvc-kit-x86_64-windows.exe](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.TAG_NAME }}/msvc-kit-x86_64-windows.exe) - 64-bit x86
-            - [msvc-kit-i686-windows.exe](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.TAG_NAME }}/msvc-kit-i686-windows.exe) - 32-bit x86
-            - [msvc-kit-aarch64-windows.exe](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.TAG_NAME }}/msvc-kit-aarch64-windows.exe) - ARM64
+            - [msvc-kit-${{ steps.version.outputs.VERSION }}-x86_64-windows.exe](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.TAG_NAME }}/msvc-kit-${{ steps.version.outputs.VERSION }}-x86_64-windows.exe) - 64-bit x86
+            - [msvc-kit-${{ steps.version.outputs.VERSION }}-i686-windows.exe](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.TAG_NAME }}/msvc-kit-${{ steps.version.outputs.VERSION }}-i686-windows.exe) - 32-bit x86
+            - [msvc-kit-${{ steps.version.outputs.VERSION }}-aarch64-windows.exe](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.TAG_NAME }}/msvc-kit-${{ steps.version.outputs.VERSION }}-aarch64-windows.exe) - ARM64
 
             ---
 

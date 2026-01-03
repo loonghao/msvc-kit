@@ -29,13 +29,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: "npm"
-          cache-dependency-path: docs/package-lock.json
 
       - name: Install dependencies
         run: |
           cd docs
-          npm ci
+          npm install
 
       - name: Build documentation
         run: |
