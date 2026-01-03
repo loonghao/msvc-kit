@@ -39,8 +39,14 @@ features:
 
 ## Quick Start
 
-```bash
-# Install
+```powershell
+# Install via Winget (recommended)
+winget install loonghao.msvc-kit
+
+# Or via PowerShell script
+irm https://github.com/loonghao/msvc-kit/releases/latest/download/install.ps1 | iex
+
+# Or via Cargo
 cargo install msvc-kit
 
 # Download latest MSVC + Windows SDK

@@ -5,12 +5,29 @@ This guide will help you install msvc-kit and set up your first MSVC environment
 ## Prerequisites
 
 - Windows 10/11 (x64 or ARM64)
-- Rust toolchain (for installation via cargo)
 - ~2-5 GB disk space for MSVC + SDK
 
 ## Installation
 
-### From crates.io (Recommended)
+### Via Winget (Recommended)
+
+The easiest way to install on Windows:
+
+```powershell
+winget install loonghao.msvc-kit
+```
+
+### Via PowerShell Script
+
+One-liner installation:
+
+```powershell
+irm https://github.com/loonghao/msvc-kit/releases/latest/download/install.ps1 | iex
+```
+
+### Via Cargo
+
+If you have Rust installed:
 
 ```bash
 cargo install msvc-kit
