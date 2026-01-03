@@ -68,7 +68,7 @@ sha2 = "0.10"
 hex = "0.4"
 
 # Self-update
-self_update = { version = "0.41", features = ["archive-zip"] }
+self_update = { version = "0.42", features = ["archive-zip"] }
 
 # Embedded KV database
 redb = "1.5"
