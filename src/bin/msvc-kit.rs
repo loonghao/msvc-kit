@@ -156,6 +156,7 @@ enum Commands {
         format: String,
     },
 
+    #[cfg(feature = "self-update")]
     /// Update msvc-kit to the latest version
     Update {
         /// Check for updates without installing
@@ -527,6 +528,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
+        #[cfg(feature = "self-update")]
         Commands::Update { check, version } => {
             let current_version = env!("CARGO_PKG_VERSION");
 

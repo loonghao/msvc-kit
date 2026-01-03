@@ -17,6 +17,11 @@ path = "src/lib.rs"
 [[bin]]
 name = "msvc-kit"
 path = "src/bin/msvc-kit.rs"
+required-features = ["self-update"]
+
+[features]
+default = ["self-update"]
+self-update = ["dep:self_update"]
 
 [dependencies]
 # CLI framework
@@ -67,8 +72,8 @@ futures = "0.3"
 sha2 = "0.10"
 hex = "0.4"
 
-# Self-update
-self_update = { version = "0.42", features = ["archive-zip"] }
+# Self-update (optional)
+self_update = { version = "0.42", features = ["archive-zip"], optional = true }
 
 # Embedded KV database
 redb = "1.5"

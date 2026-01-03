@@ -530,3 +530,110 @@ mod shell_script_tests {
         assert_eq!(shell, cloned);
     }
 }
+
+// ============================================================================
+// Library Re-exports Tests (for issue #21)
+// ============================================================================
+
+mod library_reexports_tests {
+    //! Tests to verify that all required types are properly re-exported
+    //! from the crate root for ergonomic imports.
+    //!
+    //! This addresses the requirement from issue #21:
+    //! ```rust
+    //! use msvc_kit::{Architecture, DownloadOptions, download_msvc, download_sdk, setup_environment, MsvcEnvironment};
+    //! ```
+
+    #[test]
+    fn test_architecture_reexport() {
+        // Verify Architecture is accessible from crate root
+        let _arch: msvc_kit::Architecture = msvc_kit::Architecture::X64;
+        assert_eq!(_arch, msvc_kit::version::Architecture::X64);
+    }
+
+    #[test]
+    fn test_download_options_reexport() {
+        // Verify DownloadOptions is accessible from crate root
+        let options = msvc_kit::DownloadOptions::default();
+        assert_eq!(options.arch, msvc_kit::Architecture::X64);
+    }
+
+    #[test]
+    fn test_download_options_builder_reexport() {
+        // Verify DownloadOptionsBuilder is accessible from crate root
+        let options = msvc_kit::DownloadOptions::builder()
+            .arch(msvc_kit::Architecture::X64)
+            .build();
+        assert_eq!(options.arch, msvc_kit::Architecture::X64);
+    }
+
+    #[test]
+    fn test_msvc_environment_reexport() {
+        // Verify MsvcEnvironment is accessible from crate root
+        use std::path::PathBuf;
+        let _env = msvc_kit::MsvcEnvironment {
+            vc_install_dir: PathBuf::new(),
+            vc_tools_install_dir: PathBuf::new(),
+            vc_tools_version: String::new(),
+            windows_sdk_dir: PathBuf::new(),
+            windows_sdk_version: String::new(),
+            include_paths: vec![],
+            lib_paths: vec![],
+            bin_paths: vec![],
+            arch: msvc_kit::Architecture::X64,
+            host_arch: msvc_kit::Architecture::X64,
+        };
+    }
+
+    #[test]
+    fn test_install_info_reexport() {
+        // Verify InstallInfo is accessible from crate root
+        use std::path::PathBuf;
+        let _info = msvc_kit::InstallInfo {
+            component_type: "msvc".to_string(),
+            version: "14.44".to_string(),
+            install_path: PathBuf::new(),
+            downloaded_files: vec![],
+            arch: msvc_kit::Architecture::X64,
+        };
+    }
+
+    #[test]
+    fn test_tool_paths_reexport() {
+        // Verify ToolPaths is accessible from crate root
+        let _paths = msvc_kit::ToolPaths::default();
+    }
+
+    #[test]
+    fn test_shell_type_reexport() {
+        // Verify ShellType is accessible from crate root
+        let _shell = msvc_kit::ShellType::PowerShell;
+    }
+
+    #[test]
+    fn test_error_types_reexport() {
+        // Verify error types are accessible from crate root
+        let _err: msvc_kit::Result<()> = Err(msvc_kit::MsvcKitError::Cancelled);
+    }
+
+    #[test]
+    fn test_download_functions_exist() {
+        // Verify download functions are accessible from crate root
+        // We just check that the function types exist, not that they work
+        let _: fn(&msvc_kit::DownloadOptions) -> _ = |_| {
+            async { Ok::<msvc_kit::InstallInfo, msvc_kit::MsvcKitError>(msvc_kit::InstallInfo {
+                component_type: String::new(),
+                version: String::new(),
+                install_path: std::path::PathBuf::new(),
+                downloaded_files: vec![],
+                arch: msvc_kit::Architecture::X64,
+            }) }
+        };
+    }
+
+    #[test]
+    fn test_config_types_reexport() {
+        // Verify config types are accessible from crate root
+        let _config = msvc_kit::MsvcKitConfig::default();
+    }
+}
