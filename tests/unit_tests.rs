@@ -145,8 +145,9 @@ mod config_tests {
             cache_dir: Some(PathBuf::from("C:/cache")),
         };
 
-        let json = serde_json::to_string(&config).unwrap();
-        let parsed: MsvcKitConfig = serde_json::from_str(&json).unwrap();
+        // Test TOML serialization (production format)
+        let toml_str = toml::to_string(&config).unwrap();
+        let parsed: MsvcKitConfig = toml::from_str(&toml_str).unwrap();
 
         assert_eq!(parsed.install_dir, config.install_dir);
         assert_eq!(parsed.default_msvc_version, config.default_msvc_version);

@@ -73,8 +73,8 @@ fn dirs_fallback() -> PathBuf {
     }
 }
 
-/// Get the configuration file path (TOML format)
-fn get_config_path() -> PathBuf {
+/// Get the configuration file path
+pub fn get_config_path() -> PathBuf {
     if let Some(proj_dirs) = directories::ProjectDirs::from("com", "loonghao", "msvc-kit") {
         proj_dirs.config_dir().join("config.toml")
     } else {
@@ -82,47 +82,15 @@ fn get_config_path() -> PathBuf {
     }
 }
 
-/// Get the legacy JSON configuration file path (for migration)
-fn get_legacy_config_path() -> PathBuf {
-    if let Some(proj_dirs) = directories::ProjectDirs::from("com", "loonghao", "msvc-kit") {
-        proj_dirs.config_dir().join("config.json")
-    } else {
-        get_default_install_dir().join("config.json")
-    }
-}
-
 /// Load configuration from disk
 ///
 /// If the configuration file doesn't exist, returns default configuration.
-/// Supports automatic migration from legacy JSON format to TOML.
 pub fn load_config() -> Result<MsvcKitConfig> {
     let config_path = get_config_path();
 
-    // Try to load TOML config first
     if config_path.exists() {
         let content = std::fs::read_to_string(&config_path)?;
         let config: MsvcKitConfig = toml::from_str(&content)?;
-        return Ok(config);
-    }
-
-    // Try to migrate from legacy JSON config
-    let legacy_path = get_legacy_config_path();
-    if legacy_path.exists() {
-        let content = std::fs::read_to_string(&legacy_path)?;
-        let config: MsvcKitConfig = serde_json::from_str(&content)?;
-
-        // Save as TOML for future use
-        let _ = save_config(&config);
-
-        // Remove legacy JSON file after successful migration
-        let _ = std::fs::remove_file(&legacy_path);
-
-        tracing::info!(
-            "Migrated configuration from {} to {}",
-            legacy_path.display(),
-            config_path.display()
-        );
-
         return Ok(config);
     }
 

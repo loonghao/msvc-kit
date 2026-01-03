@@ -264,7 +264,7 @@ mod config_persistence_tests {
     #[test]
     fn test_config_roundtrip() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let config_path = temp_dir.path().join("config.json");
+        let config_path = temp_dir.path().join("config.toml");
 
         let config = MsvcKitConfig {
             install_dir: PathBuf::from("C:/custom/path"),
@@ -276,13 +276,13 @@ mod config_persistence_tests {
             cache_dir: Some(PathBuf::from("C:/cache")),
         };
 
-        // Serialize
-        let json = serde_json::to_string_pretty(&config).unwrap();
-        std::fs::write(&config_path, &json).unwrap();
+        // Serialize to TOML
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        std::fs::write(&config_path, &toml_str).unwrap();
 
-        // Deserialize
-        let loaded_json = std::fs::read_to_string(&config_path).unwrap();
-        let loaded: MsvcKitConfig = serde_json::from_str(&loaded_json).unwrap();
+        // Deserialize from TOML
+        let loaded_toml = std::fs::read_to_string(&config_path).unwrap();
+        let loaded: MsvcKitConfig = toml::from_str(&loaded_toml).unwrap();
 
         assert_eq!(loaded.install_dir, config.install_dir);
         assert_eq!(loaded.default_msvc_version, config.default_msvc_version);
