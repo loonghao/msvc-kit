@@ -15,8 +15,8 @@ use crate::installer::InstallInfo;
 use crate::version::Architecture;
 
 pub use setup::{
-    apply_environment, generate_activation_script, save_activation_script, setup_environment,
-    ShellType,
+    apply_environment, generate_activation_script, generate_activation_script_with_vars,
+    save_activation_script, setup_environment, ShellType,
 };
 
 #[cfg(windows)]

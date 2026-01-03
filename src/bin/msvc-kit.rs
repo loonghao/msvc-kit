@@ -9,8 +9,8 @@ use msvc_kit::env::ShellType;
 use msvc_kit::installer::{install_msvc, install_sdk};
 use msvc_kit::version::{list_installed_msvc, list_installed_sdk, Architecture};
 use msvc_kit::{
-    download_msvc, download_sdk, generate_activation_script, get_env_vars, load_config,
-    save_config, setup_environment, DownloadOptions, MsvcKitConfig,
+    download_msvc, download_sdk, generate_activation_script, generate_activation_script_with_vars,
+    get_env_vars, load_config, save_config, setup_environment, DownloadOptions, MsvcKitConfig,
 };
 
 /// Portable MSVC Build Tools installer and manager
@@ -87,6 +87,10 @@ enum Commands {
         #[arg(long, default_value = "powershell")]
         shell: String,
 
+        /// Replace install root with a portable placeholder when generating scripts (requires --script)
+        #[arg(long, requires = "script", value_name = "PORTABLE_ROOT")]
+        portable_root: Option<String>,
+
         /// Write to Windows registry (persistent)
         #[arg(long)]
         persistent: bool,
@@ -154,6 +158,33 @@ enum Commands {
         /// Output format (shell, json)
         #[arg(short, long, default_value = "shell")]
         format: String,
+    },
+
+    /// Create a portable bundle with MSVC toolchain (downloads components locally)
+    Bundle {
+        /// Output directory for the bundle
+        #[arg(short, long, default_value = "./msvc-bundle")]
+        output: PathBuf,
+
+        /// Target architecture (x64, x86, arm64)
+        #[arg(short, long, default_value = "x64")]
+        arch: String,
+
+        /// MSVC version to download (default: latest)
+        #[arg(long)]
+        msvc_version: Option<String>,
+
+        /// Windows SDK version to download (default: latest)
+        #[arg(long)]
+        sdk_version: Option<String>,
+
+        /// Accept Microsoft license terms (required)
+        #[arg(long)]
+        accept_license: bool,
+
+        /// Create a zip archive of the bundle
+        #[arg(long)]
+        zip: bool,
     },
 
     #[cfg(feature = "self-update")]
@@ -296,7 +327,15 @@ async fn main() -> anyhow::Result<()> {
                     _ => ShellType::detect(),
                 };
 
-                let script_content = generate_activation_script(&env, shell_type);
+                let mut vars = get_env_vars(&env);
+                if let Some(portable_root) = portable_root {
+                    let install_root = install_dir.display().to_string();
+                    for value in vars.values_mut() {
+                        *value = value.replace(&install_root, &portable_root);
+                    }
+                }
+
+                let script_content = generate_activation_script_with_vars(&vars, shell_type);
                 println!("{}", script_content);
             } else if persistent {
                 #[cfg(windows)]
@@ -483,6 +522,199 @@ async fn main() -> anyhow::Result<()> {
             println!("  Default architecture: {}", config.default_arch);
             println!("  Verify hashes: {}", config.verify_hashes);
             println!("  Parallel downloads: {}", config.parallel_downloads);
+        }
+
+        Commands::Bundle {
+            output,
+            arch,
+            msvc_version,
+            sdk_version,
+            accept_license,
+            zip,
+        } => {
+            if !accept_license {
+                println!("⚠️  License Agreement Required\n");
+                println!("The MSVC compiler and Windows SDK are subject to Microsoft's license terms:");
+                println!("  https://visualstudio.microsoft.com/license-terms/\n");
+                println!("By using --accept-license, you confirm that you have read and accepted");
+                println!("Microsoft's Visual Studio License Terms.\n");
+                println!("Usage:");
+                println!("  msvc-kit bundle --accept-license [--output <dir>] [--arch <arch>]\n");
+                anyhow::bail!("You must accept the license terms with --accept-license to proceed.");
+            }
+
+            let arch: Architecture = arch.parse().map_err(|e: String| anyhow::anyhow!(e))?;
+            let runtime_dir = output.join("runtime");
+
+            println!("📦 msvc-kit - Creating Portable MSVC Bundle\n");
+            println!("Output directory: {}", output.display());
+            println!("Architecture: {}", arch);
+            println!();
+
+            // Create directories
+            tokio::fs::create_dir_all(&runtime_dir).await?;
+
+            let options = DownloadOptions {
+                msvc_version: msvc_version.clone(),
+                sdk_version: sdk_version.clone(),
+                target_dir: runtime_dir.clone(),
+                arch,
+                host_arch: Some(Architecture::host()),
+                verify_hashes: true,
+                parallel_downloads: config.parallel_downloads,
+                http_client: None,
+                progress_handler: None,
+                dry_run: false,
+            };
+
+            // Download MSVC
+            println!("⬇️  Downloading MSVC compiler...");
+            let msvc_info = download_msvc(&options).await?;
+            println!("📁 Installing MSVC...");
+            install_msvc(&msvc_info).await?;
+            let msvc_ver = msvc_info.version.clone();
+            println!("✅ MSVC {} installed", msvc_ver);
+
+            // Download SDK
+            println!("\n⬇️  Downloading Windows SDK...");
+            let sdk_info = download_sdk(&options).await?;
+            println!("📁 Installing Windows SDK...");
+            install_sdk(&sdk_info).await?;
+            let sdk_ver = sdk_info.version.clone();
+            println!("✅ Windows SDK {} installed", sdk_ver);
+
+            // Setup environment to generate scripts
+            let env = setup_environment(&msvc_info, Some(&sdk_info))?;
+            let vars = get_env_vars(&env);
+
+            // Generate portable scripts with relative paths
+            let runtime_path = runtime_dir.canonicalize()?.display().to_string();
+            let runtime_path_normalized = runtime_path.replace('\\', "/");
+
+            // CMD script
+            let mut cmd_vars = vars.clone();
+            for value in cmd_vars.values_mut() {
+                *value = value
+                    .replace(&runtime_path_normalized, "%~dp0runtime")
+                    .replace(&runtime_path, "%~dp0runtime");
+            }
+            let cmd_script = generate_activation_script_with_vars(&cmd_vars, ShellType::Cmd);
+            let cmd_script_path = output.join("setup.bat");
+            tokio::fs::write(&cmd_script_path, &cmd_script).await?;
+
+            // PowerShell script
+            let mut ps_vars = vars.clone();
+            for value in ps_vars.values_mut() {
+                *value = value
+                    .replace(&runtime_path_normalized, "$PSScriptRoot\\runtime")
+                    .replace(&runtime_path, "$PSScriptRoot\\runtime");
+            }
+            let ps_script = generate_activation_script_with_vars(&ps_vars, ShellType::PowerShell);
+            let ps_script_path = output.join("setup.ps1");
+            tokio::fs::write(&ps_script_path, &ps_script).await?;
+
+            // Bash script
+            let mut bash_vars = vars;
+            for value in bash_vars.values_mut() {
+                *value = value
+                    .replace(&runtime_path_normalized, "$(dirname \"$0\")/runtime")
+                    .replace(&runtime_path, "$(dirname \"$0\")/runtime");
+            }
+            let bash_script = generate_activation_script_with_vars(&bash_vars, ShellType::Bash);
+            let bash_script_path = output.join("setup.sh");
+            tokio::fs::write(&bash_script_path, &bash_script).await?;
+
+            // Copy msvc-kit executable
+            let exe_name = if cfg!(windows) { "msvc-kit.exe" } else { "msvc-kit" };
+            let current_exe = std::env::current_exe()?;
+            let target_exe = output.join(exe_name);
+            tokio::fs::copy(&current_exe, &target_exe).await?;
+
+            // Generate README
+            let readme_content = format!(
+r#"Portable MSVC Toolchain Bundle
+==============================
+
+MSVC Version:       {}
+Windows SDK Version: {}
+Architecture:       {}
+
+Contents:
+- msvc-kit.exe     : CLI for managing MSVC/SDK payloads
+- runtime/         : Downloaded MSVC + Windows SDK components
+- setup.bat        : CMD activation script
+- setup.ps1        : PowerShell activation script
+- setup.sh         : Bash/WSL activation script
+
+Usage:
+1. Extract this bundle to your desired location
+2. Run the appropriate setup script for your shell:
+   - CMD:        setup.bat
+   - PowerShell: .\setup.ps1
+   - Bash/WSL:   source setup.sh
+3. cl, link, nmake, and other MSVC tools become available
+
+License Notice:
+The MSVC compiler and Windows SDK included in this bundle are
+property of Microsoft and subject to Microsoft Visual Studio
+License Terms: https://visualstudio.microsoft.com/license-terms/
+
+This bundle was created for personal/development use. Microsoft
+software components are NOT covered by msvc-kit's MIT license.
+"#,
+                msvc_ver, sdk_ver, arch
+            );
+            tokio::fs::write(output.join("README.txt"), &readme_content).await?;
+
+            println!("\n✅ Bundle created successfully!");
+            println!("\nContents:");
+            println!("  {}/", output.display());
+            println!("  ├── {}", exe_name);
+            println!("  ├── setup.bat");
+            println!("  ├── setup.ps1");
+            println!("  ├── setup.sh");
+            println!("  ├── README.txt");
+            println!("  └── runtime/");
+            println!("      ├── VC/Tools/MSVC/{}/", msvc_ver);
+            println!("      └── Windows Kits/10/{}/", sdk_ver);
+
+            if zip {
+                println!("\n📦 Creating zip archive...");
+                let zip_name = format!(
+                    "msvc-kit-bundle-{}-{}-{}.zip",
+                    msvc_ver.replace('.', "_"),
+                    sdk_ver.replace('.', "_"),
+                    arch
+                );
+                let zip_path = output.parent().unwrap_or(&output).join(&zip_name);
+
+                #[cfg(windows)]
+                {
+                    let output_str = output.display().to_string();
+                    let zip_str = zip_path.display().to_string();
+                    let status = std::process::Command::new("powershell")
+                        .args([
+                            "-NoProfile",
+                            "-Command",
+                            &format!(
+                                "Compress-Archive -Path '{}\\*' -DestinationPath '{}' -Force",
+                                output_str, zip_str
+                            ),
+                        ])
+                        .status()?;
+                    if status.success() {
+                        println!("✅ Created: {}", zip_path.display());
+                    } else {
+                        println!("⚠️  Failed to create zip archive");
+                    }
+                }
+                #[cfg(not(windows))]
+                {
+                    println!("⚠️  Zip creation is only supported on Windows");
+                }
+            }
+
+            println!("\n🎉 Done! Run setup.bat (cmd) or .\\setup.ps1 (PowerShell) to activate.");
         }
 
         Commands::Env { dir, format } => {

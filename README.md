@@ -104,12 +104,53 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 # Or for CMD
 msvc-kit setup --script --shell cmd > setup.bat && setup.bat
 
+# Portable script (rewrites install root to %~dp0runtime)
+msvc-kit setup --script --shell cmd --portable-root "%~dp0runtime" > setup.bat
+
 # Or for Bash/WSL
 eval "$(msvc-kit setup --script --shell bash)"
 
 # Persist to Windows registry (requires admin)
 msvc-kit setup --persistent
 ```
+
+#### Create Portable Bundle
+
+Create a self-contained bundle with MSVC toolchain that can be used anywhere:
+
+```bash
+# Create bundle (requires accepting Microsoft license)
+msvc-kit bundle --accept-license
+
+# Specify output directory and architecture
+msvc-kit bundle --accept-license --output ./my-msvc-bundle --arch x64
+
+# Also create a zip archive
+msvc-kit bundle --accept-license --zip
+
+# Specify versions
+msvc-kit bundle --accept-license --msvc-version 14.44 --sdk-version 10.0.26100.0
+```
+
+The bundle contains:
+- `msvc-kit.exe` - CLI tool
+- `runtime/` - Downloaded MSVC + Windows SDK
+- `setup.bat` - CMD activation script
+- `setup.ps1` - PowerShell activation script
+- `setup.sh` - Bash/WSL activation script
+
+Usage:
+```bash
+# Extract and run setup script
+cd msvc-bundle
+setup.bat          # CMD
+.\setup.ps1        # PowerShell
+source setup.sh    # Bash/WSL
+
+# Now cl, link, nmake are available
+cl /nologo test.c
+```
+
 
 #### List Versions
 
@@ -240,3 +281,13 @@ After `setup_environment()` or `msvc-kit setup`:
 ### License
 
 MIT License - see `LICENSE`.
+
+**Important: Microsoft Software License Notice**
+
+The MSVC compiler and Windows SDK downloaded by this tool are property of Microsoft
+and subject to [Microsoft Visual Studio License Terms](https://visualstudio.microsoft.com/license-terms/).
+
+- **msvc-kit** itself is MIT licensed
+- MSVC Build Tools and Windows SDK are **NOT redistributable** - users must download them directly
+- By using `msvc-kit download` or `msvc-kit bundle --accept-license`, you agree to Microsoft's license terms
+- This tool automates the download process; it does not redistribute Microsoft software

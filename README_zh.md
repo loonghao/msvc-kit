@@ -68,6 +68,7 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 
 ## 快速开始 (CLI)
 
+
 ### 下载
 
 ```bash
@@ -104,12 +105,53 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 # 或者 CMD
 msvc-kit setup --script --shell cmd > setup.bat && setup.bat
 
+# 生成可移植脚本（将安装根替换为 %~dp0runtime）
+msvc-kit setup --script --shell cmd --portable-root "%~dp0runtime" > setup.bat
+
 # 或者 Bash/WSL
 eval "$(msvc-kit setup --script --shell bash)"
 
 # 持久化到 Windows 注册表（需要管理员权限）
 msvc-kit setup --persistent
 ```
+
+### 创建可移植 Bundle
+
+创建包含 MSVC 工具链的独立 bundle，可在任何地方使用：
+
+```bash
+# 创建 bundle（需要接受微软许可证）
+msvc-kit bundle --accept-license
+
+# 指定输出目录和架构
+msvc-kit bundle --accept-license --output ./my-msvc-bundle --arch x64
+
+# 同时创建 zip 压缩包
+msvc-kit bundle --accept-license --zip
+
+# 指定版本
+msvc-kit bundle --accept-license --msvc-version 14.44 --sdk-version 10.0.26100.0
+```
+
+Bundle 包含：
+- `msvc-kit.exe` - CLI 工具
+- `runtime/` - 已下载的 MSVC + Windows SDK
+- `setup.bat` - CMD 激活脚本
+- `setup.ps1` - PowerShell 激活脚本
+- `setup.sh` - Bash/WSL 激活脚本
+
+使用方法：
+```bash
+# 解压并运行 setup 脚本
+cd msvc-bundle
+setup.bat          # CMD
+.\setup.ps1        # PowerShell
+source setup.sh    # Bash/WSL
+
+# 现在 cl, link, nmake 可用了
+cl /nologo test.c
+```
+
 
 ### 查看版本
 
@@ -240,3 +282,13 @@ async fn main() -> msvc_kit::Result<()> {
 ## 许可证
 
 MIT 许可证 - 参见 `LICENSE`。
+
+**重要：微软软件许可声明**
+
+本工具下载的 MSVC 编译器和 Windows SDK 是微软的财产，
+受 [Microsoft Visual Studio 许可条款](https://visualstudio.microsoft.com/license-terms/) 约束。
+
+- **msvc-kit** 本身采用 MIT 许可证
+- MSVC Build Tools 和 Windows SDK **不可再分发** - 用户必须自行下载
+- 使用 `msvc-kit download` 或 `msvc-kit bundle --accept-license` 即表示您同意微软的许可条款
+- 本工具仅自动化下载过程，不分发微软软件
