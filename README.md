@@ -111,7 +111,7 @@ msvc-kit clean --all --cache          # Also clear download cache
 
 #### Configuration
 
-Config file: `%LOCALAPPDATA%\loonghao\msvc-kit\config\config.json`
+Config file: `%LOCALAPPDATA%\loonghao\msvc-kit\config\config.toml`
 
 ```bash
 msvc-kit config                        # Show current config
