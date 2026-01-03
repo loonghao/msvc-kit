@@ -601,7 +601,14 @@ mod library_reexports_tests {
     #[test]
     fn test_tool_paths_reexport() {
         // Verify ToolPaths is accessible from crate root
-        let _paths = msvc_kit::ToolPaths::default();
+        let _paths = msvc_kit::ToolPaths {
+            cl: None,
+            link: None,
+            lib: None,
+            ml64: None,
+            nmake: None,
+            rc: None,
+        };
     }
 
     #[test]
