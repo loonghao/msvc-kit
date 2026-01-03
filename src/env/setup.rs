@@ -48,11 +48,22 @@ pub fn apply_environment(env: &MsvcEnvironment) -> Result<()> {
 /// MSVC environment in a new shell session.
 pub fn generate_activation_script(env: &MsvcEnvironment, shell: ShellType) -> String {
     let vars = get_env_vars(env);
+    generate_activation_script_with_vars(&vars, shell)
+}
 
+/// Generate an activation script from pre-built environment variables
+///
+/// This is useful when callers need to rewrite variable values (e.g.
+/// replace absolute install roots with portable placeholders) before
+/// emitting a script.
+pub fn generate_activation_script_with_vars(
+    vars: &HashMap<String, String>,
+    shell: ShellType,
+) -> String {
     match shell {
-        ShellType::Cmd => generate_cmd_script(&vars),
-        ShellType::PowerShell => generate_powershell_script(&vars),
-        ShellType::Bash => generate_bash_script(&vars),
+        ShellType::Cmd => generate_cmd_script(vars),
+        ShellType::PowerShell => generate_powershell_script(vars),
+        ShellType::Bash => generate_bash_script(vars),
     }
 }
 
@@ -247,6 +258,8 @@ pub fn write_to_registry(_env: &MsvcEnvironment) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::version::Architecture;
+    use std::path::PathBuf;
 
     #[test]
     fn test_shell_type_detect() {
@@ -277,5 +290,35 @@ mod tests {
 
         let script = generate_powershell_script(&vars);
         assert!(script.contains("$env:TEST"));
+    }
+
+    fn sample_env() -> MsvcEnvironment {
+        MsvcEnvironment {
+            vc_install_dir: PathBuf::from("C:/toolchain/VC"),
+            vc_tools_install_dir: PathBuf::from("C:/toolchain/VC/Tools/MSVC/14.40.0"),
+            vc_tools_version: "14.40.0".to_string(),
+            windows_sdk_dir: PathBuf::from("C:/toolchain/Windows Kits/10"),
+            windows_sdk_version: "10.0.22621.0".to_string(),
+            include_paths: vec![PathBuf::from("C:/toolchain/include")],
+            lib_paths: vec![PathBuf::from("C:/toolchain/lib")],
+            bin_paths: vec![PathBuf::from("C:/toolchain/bin1"), PathBuf::from("C:/toolchain/bin2")],
+            arch: Architecture::X64,
+            host_arch: Architecture::X64,
+        }
+    }
+
+    #[test]
+    fn test_generate_cmd_script_with_vars() {
+        let env = sample_env();
+        let mut vars = get_env_vars(&env);
+
+        // Rewrite absolute root to portable token
+        for value in vars.values_mut() {
+            *value = value.replace("C:/toolchain", "%~dp0runtime");
+        }
+
+        let script = generate_activation_script_with_vars(&vars, ShellType::Cmd);
+        assert!(script.contains("set \"PATH=%~dp0runtime/bin1;%~dp0runtime/bin2;%PATH%\""));
+        assert!(script.contains("set \"INCLUDE=%~dp0runtime/include\""));
     }
 }

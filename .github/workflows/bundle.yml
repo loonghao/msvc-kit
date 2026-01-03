@@ -1,0 +1,116 @@
+name: Bundle Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "Target architecture (x64|x86|arm64)"
+        required: false
+        default: x64
+  # Also run on PRs that modify bundle-related code
+  pull_request:
+    paths:
+      - "src/bin/msvc-kit.rs"
+      - "src/env/**"
+      - ".github/workflows/bundle.yml"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_HTTP_TIMEOUT: "600"
+  CARGO_NET_RETRY: "10"
+
+jobs:
+  validate-bundle:
+    name: Validate bundle (${{ inputs.arch || 'x64' }})
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      BUNDLE_ARCH: ${{ inputs.arch || 'x64' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ inputs.arch == 'x86' && 'x86' || inputs.arch == 'arm64' && 'amd64_arm64' || 'amd64' }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: bundle-${{ inputs.arch || 'x64' }}
+
+      - name: Build msvc-kit (release)
+        run: cargo build --release --locked
+
+      - name: Create bundle with msvc-kit
+        shell: pwsh
+        run: |
+          $bundleDir = Join-Path $env:GITHUB_WORKSPACE "test-bundle"
+          & ".\target\release\msvc-kit.exe" bundle `
+            --accept-license `
+            --arch $env:BUNDLE_ARCH `
+            --output $bundleDir
+          
+          # Verify bundle structure
+          if (-not (Test-Path "$bundleDir\setup.bat")) {
+            throw "setup.bat not found in bundle"
+          }
+          if (-not (Test-Path "$bundleDir\setup.ps1")) {
+            throw "setup.ps1 not found in bundle"
+          }
+          if (-not (Test-Path "$bundleDir\runtime\VC\Tools\MSVC")) {
+            throw "MSVC tools not found in bundle"
+          }
+          
+          Write-Host "✅ Bundle structure validated"
+
+      - name: Validate setup.bat activates environment
+        shell: cmd
+        run: |
+          cd test-bundle
+          call setup.bat
+          where cl
+          cl /?
+
+      - name: Validate setup.ps1 activates environment
+        shell: pwsh
+        run: |
+          Set-Location test-bundle
+          . .\setup.ps1
+          Get-Command cl
+          cl /?
+
+      - name: Test simple compilation
+        shell: cmd
+        run: |
+          cd test-bundle
+          call setup.bat
+          echo int main() { return 0; } > test.c
+          cl /nologo test.c
+          test.exe
+          echo ✅ Compilation test passed
+
+      # Note: Bundle is NOT uploaded to releases due to Microsoft license restrictions.
+      # Users should run `msvc-kit bundle --accept-license` locally to create their own bundle.
+      - name: Summary
+        shell: pwsh
+        run: |
+          Write-Host ""
+          Write-Host "========================================" -ForegroundColor Green
+          Write-Host "  Bundle Validation Successful!" -ForegroundColor Green
+          Write-Host "========================================" -ForegroundColor Green
+          Write-Host ""
+          Write-Host "The bundle command works correctly."
+          Write-Host "Users can create their own bundle locally with:"
+          Write-Host ""
+          Write-Host "  msvc-kit bundle --accept-license" -ForegroundColor Cyan
+          Write-Host ""
+          Write-Host "Note: Pre-built bundles are NOT distributed due to"
+          Write-Host "Microsoft Visual Studio license restrictions."
+          Write-Host ""
