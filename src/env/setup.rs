@@ -301,7 +301,10 @@ mod tests {
             windows_sdk_version: "10.0.22621.0".to_string(),
             include_paths: vec![PathBuf::from("C:/toolchain/include")],
             lib_paths: vec![PathBuf::from("C:/toolchain/lib")],
-            bin_paths: vec![PathBuf::from("C:/toolchain/bin1"), PathBuf::from("C:/toolchain/bin2")],
+            bin_paths: vec![
+                PathBuf::from("C:/toolchain/bin1"),
+                PathBuf::from("C:/toolchain/bin2"),
+            ],
             arch: Architecture::X64,
             host_arch: Architecture::X64,
         }
