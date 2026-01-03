@@ -111,7 +111,7 @@ msvc-kit clean --all --cache          # 同时清理下载缓存
 
 ### 配置
 
-配置文件位置：`%LOCALAPPDATA%\loonghao\msvc-kit\config\config.json`
+配置文件位置：`%LOCALAPPDATA%\loonghao\msvc-kit\config\config.toml`
 
 ```bash
 msvc-kit config                        # 显示当前配置
