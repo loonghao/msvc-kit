@@ -1,111 +1,384 @@
 name: Release
 
+# This workflow handles:
+# 1. Regular commits to main: Only runs release-please to check if a release PR should be created/updated
+# 2. release-please PR merge: Creates a release tag and triggers the full release process
+# 3. Tag push (v*): Publishes to crates.io and creates GitHub Release
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
-
-env:
-  CARGO_TERM_COLOR: always
+  workflow_dispatch:
+    inputs:
+      force-rebuild:
+        description: "Force rebuild binaries instead of reusing PR artifacts"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  attestations: write
+  actions: read
 
 jobs:
-  build:
-    name: Build (${{ matrix.target }})
-    runs-on: windows-latest
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-pc-windows-msvc
-            asset_name: msvc-kit-x86_64-windows.exe
-          - target: i686-pc-windows-msvc
-            asset_name: msvc-kit-i686-windows.exe
-          - target: aarch64-pc-windows-msvc
-            asset_name: msvc-kit-aarch64-windows.exe
+  # Run release-please to create releases and tags
+  release-please:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
 
+  # Determine if this is a tag push (for publishing)
+  check-tag:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    outputs:
+      is_tag: "true"
+      tag_name: ${{ github.ref_name }}
+    steps:
+      - name: Tag detected
+        run: |
+          echo "Tag push detected: ${{ github.ref_name }}"
+          echo "This will trigger the full release process"
+
+  # Try to find and download pre-built binaries from PR checks
+  check-pr-artifacts:
+    name: Check PR Artifacts
+    runs-on: ubuntu-latest
+    needs: [release-please, check-tag]
+    if: |
+      always() &&
+      ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') ||
+       (needs.check-tag.result == 'success' && needs.check-tag.outputs.is_tag == 'true')) &&
+      !inputs.force-rebuild
+    outputs:
+      artifacts-available: ${{ steps.check.outputs.available }}
+      pr-run-id: ${{ steps.check.outputs.run_id }}
+      source-sha: ${{ steps.check.outputs.source_sha }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: loonghao/rust-actions-toolkit@v4
+      - name: Find PR workflow run for this commit
+        id: check
+        uses: actions/github-script@v7
         with:
-          command: release
-          target: ${{ matrix.target }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const targetSha = context.sha;
+            console.log(`Looking for artifacts built from commit: ${targetSha}`);
 
-      - name: Rename artifact
-        shell: bash
-        run: |
-          mkdir -p dist
-          cp target/${{ matrix.target }}/release/msvc-kit.exe dist/${{ matrix.asset_name }}
+            const { data: runs } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'pr-checks.yml',
+              status: 'success',
+              head_sha: targetSha,
+              per_page: 10
+            });
+
+            if (runs.workflow_runs.length === 0) {
+              console.log(`No PR workflow found for commit ${targetSha}`);
+              core.setOutput('available', 'false');
+              core.setOutput('run_id', '');
+              core.setOutput('source_sha', '');
+              return;
+            }
+
+            for (const run of runs.workflow_runs) {
+              console.log(`Checking run ${run.id} (commit: ${run.head_sha})`);
+
+              const { data: artifacts } = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id
+              });
+
+              const hasX64 = artifacts.artifacts.some(a => a.name === 'msvc-kit-x86_64-windows');
+              const hasI686 = artifacts.artifacts.some(a => a.name === 'msvc-kit-i686-windows');
+              const hasArm64 = artifacts.artifacts.some(a => a.name === 'msvc-kit-aarch64-windows');
+
+              if (hasX64 && hasI686 && hasArm64) {
+                console.log(`Found matching artifacts from run ${run.id} (commit: ${targetSha})`);
+                core.setOutput('available', 'true');
+                core.setOutput('run_id', run.id.toString());
+                core.setOutput('source_sha', targetSha);
+                return;
+              }
+            }
+
+            console.log(`No suitable artifacts found for commit ${targetSha}, will rebuild`);
+            core.setOutput('available', 'false');
+            core.setOutput('run_id', '');
+            core.setOutput('source_sha', '');
+
+  # Download and re-upload artifacts from PR workflow (if available)
+  reuse-pr-artifacts:
+    name: Reuse PR Artifacts
+    runs-on: ubuntu-latest
+    needs: [release-please, check-tag, check-pr-artifacts]
+    if: |
+      always() &&
+      needs.check-pr-artifacts.result == 'success' &&
+      needs.check-pr-artifacts.outputs.artifacts-available == 'true'
+    strategy:
+      matrix:
+        artifact:
+          - msvc-kit-x86_64-windows
+          - msvc-kit-i686-windows
+          - msvc-kit-aarch64-windows
+    steps:
+      - name: Download artifact from PR workflow
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ needs.check-pr-artifacts.outputs.pr-run-id }}
+        continue-on-error: true
+
+      - name: Re-upload artifact for release
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Build binaries if PR artifacts not available
+  build-binaries:
+    name: Build (${{ matrix.target }})
+    needs: [release-please, check-tag, check-pr-artifacts]
+    if: |
+      always() &&
+      ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') ||
+       (needs.check-tag.result == 'success' && needs.check-tag.outputs.is_tag == 'true')) &&
+      (needs.check-pr-artifacts.result != 'success' ||
+       needs.check-pr-artifacts.outputs.artifacts-available != 'true' ||
+       inputs.force-rebuild)
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            artifact-name: msvc-kit-x86_64-windows
+          - target: i686-pc-windows-msvc
+            artifact-name: msvc-kit-i686-windows
+          - target: aarch64-pc-windows-msvc
+            artifact-name: msvc-kit-aarch64-windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset_name }}
-          path: dist/${{ matrix.asset_name }}
+          name: ${{ matrix.artifact-name }}
+          path: target/${{ matrix.target }}/release/msvc-kit.exe
+          retention-days: 7
 
-  release:
-    name: Create Release
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Display structure of downloaded files
-        run: ls -R artifacts
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            artifacts/msvc-kit-x86_64-windows.exe/msvc-kit-x86_64-windows.exe
-            artifacts/msvc-kit-i686-windows.exe/msvc-kit-i686-windows.exe
-            artifacts/msvc-kit-aarch64-windows.exe/msvc-kit-aarch64-windows.exe
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  publish-crate:
+  # Publish to crates.io
+  crates-publish:
     name: Publish to crates.io
-    needs: release
     runs-on: ubuntu-latest
-
+    needs: [release-please, check-tag]
+    if: |
+      always() &&
+      ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') ||
+       (needs.check-tag.result == 'success' && needs.check-tag.outputs.is_tag == 'true'))
     steps:
       - uses: actions/checkout@v4
 
-      - uses: loonghao/rust-actions-toolkit@v4
-        with:
-          command: setup
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
 
       - name: Publish to crates.io
-        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish --allow-dirty || echo "Package may already exist"
 
+  # Create GitHub Release
+  github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      [
+        release-please,
+        check-tag,
+        check-pr-artifacts,
+        crates-publish,
+        reuse-pr-artifacts,
+        build-binaries,
+      ]
+    if: |
+      always() &&
+      ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') ||
+       (needs.check-tag.result == 'success' && needs.check-tag.outputs.is_tag == 'true')) &&
+      (needs.reuse-pr-artifacts.result == 'success' ||
+       needs.build-binaries.result == 'success' ||
+       needs.reuse-pr-artifacts.result == 'skipped')
+    permissions:
+      contents: write
+      actions: read
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag name
+        id: tag
+        run: |
+          if [ "${{ needs.release-please.outputs.tag_name }}" != "" ]; then
+            echo "TAG_NAME=${{ needs.release-please.outputs.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "TAG_NAME=${{ needs.check-tag.outputs.tag_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate changelog
+        id: changelog
+        uses: jaywcjlove/changelog-generator@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          filter-author: (loonghao|renovate\[bot\]|dependabot\[bot\]|Renovate Bot)
+          filter: ""
+          template: |
+            ## Bugs
+            {{fix}}
+            ## Feature
+            {{feat}}
+            ## Improve
+            {{refactor,perf,clean}}
+            ## Misc
+            {{chore,style,ci,build||🔧 Nothing changed}}
+            ## Unknown
+            {{__unknown__}}
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: msvc-kit-*
+          path: release-artifacts
+          merge-multiple: false
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release-files
+          for dir in release-artifacts/*/; do
+            artifact_name=$(basename "$dir")
+            if [ -f "${dir}msvc-kit.exe" ]; then
+              cp "${dir}msvc-kit.exe" "release-files/${artifact_name}.exe"
+            fi
+          done
+          echo "Release files:"
+          ls -la release-files/
+
+      - name: Document artifact source
+        id: artifact-source
+        run: |
+          if [ "${{ needs.check-pr-artifacts.outputs.artifacts-available }}" == "true" ]; then
+            echo "ARTIFACT_SOURCE=✅ **Reused from PR workflow** (Run: [${{ needs.check-pr-artifacts.outputs.pr-run-id }}](https://github.com/${{ github.repository }}/actions/runs/${{ needs.check-pr-artifacts.outputs.pr-run-id }}), SHA: \`${{ needs.check-pr-artifacts.outputs.source-sha }}\`)" >> $GITHUB_OUTPUT
+          else
+            echo "ARTIFACT_SOURCE=🔨 **Built fresh in release workflow** (SHA: \`${{ github.sha }}\`)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "release-files/*"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ steps.tag.outputs.TAG_NAME }}
+          name: ${{ steps.tag.outputs.TAG_NAME }}
+          body: |
+            Comparing Changes: ${{ steps.changelog.outputs.compareurl }}
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ---
+
+            ### Installation
+
+            **Cargo:**
+            ```bash
+            cargo install msvc-kit
+            ```
+
+            **WinGet:**
+            ```bash
+            winget install loonghao.msvc-kit
+            ```
+
+            **Direct Download:**
+            - [msvc-kit-x86_64-windows.exe](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.TAG_NAME }}/msvc-kit-x86_64-windows.exe) - 64-bit x86
+            - [msvc-kit-i686-windows.exe](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.TAG_NAME }}/msvc-kit-i686-windows.exe) - 32-bit x86
+            - [msvc-kit-aarch64-windows.exe](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.TAG_NAME }}/msvc-kit-aarch64-windows.exe) - ARM64
+
+            ---
+
+            ### Build Artifacts Source
+            ${{ steps.artifact-source.outputs.ARTIFACT_SOURCE }}
+          draft: false
+          prerelease: false
+          allowUpdates: true
+          skipIfReleaseExists: false
+          updateOnlyUnreleased: false
+          makeLatest: true
+
+  # Update WinGet manifest
   update-winget:
     name: Update WinGet
-    needs: release
     runs-on: ubuntu-latest
-
+    needs: [release-please, check-tag, github-release]
+    if: |
+      always() &&
+      needs.github-release.result == 'success'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Get version
+      - name: Determine version
         id: version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        run: |
+          if [ "${{ needs.release-please.outputs.version }}" != "" ]; then
+            echo "VERSION=${{ needs.release-please.outputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Update WinGet manifest
         uses: vedantmgoyal2009/winget-releaser@v2
         with:
           identifier: loonghao.msvc-kit
-          installers-regex: 'msvc-kit-x86_64-windows\.exe$'
-          version: ${{ steps.version.outputs.version }}
+          installers-regex: "msvc-kit-x86_64-windows\\.exe$"
+          version: ${{ steps.version.outputs.VERSION }}
           token: ${{ secrets.WINGET_TOKEN }}
         continue-on-error: true
