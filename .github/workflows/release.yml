@@ -28,12 +28,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: loonghao/rust-actions-toolkit@v2
+      - uses: loonghao/rust-actions-toolkit@v4
         with:
-          command: build
-          rust-toolchain: stable
+          command: release
           target: ${{ matrix.target }}
-          args: --release
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Rename artifact
         shell: bash
@@ -82,11 +81,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: loonghao/rust-actions-toolkit@v2
+      - uses: loonghao/rust-actions-toolkit@v4
         with:
-          command: publish
-          rust-toolchain: stable
-          args: --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          command: setup
+
+      - name: Publish to crates.io
+        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
         continue-on-error: true
 
   update-winget:
