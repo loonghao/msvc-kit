@@ -1,32 +1,47 @@
-name: Release
+name: Release Please
 
 on:
   push:
-    tags:
-      - "v*"
-
-env:
-  CARGO_TERM_COLOR: always
+    branches:
+      - main
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
-  build:
-    name: Build for ${{ matrix.target }}
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          release-type: rust
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  build-and-release:
+    name: Build and Release
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
     runs-on: windows-latest
     strategy:
       matrix:
         include:
           - target: x86_64-pc-windows-msvc
-            artifact_name: msvc-kit.exe
             asset_name: msvc-kit-x86_64-windows.exe
           - target: i686-pc-windows-msvc
-            artifact_name: msvc-kit.exe
             asset_name: msvc-kit-i686-windows.exe
           - target: aarch64-pc-windows-msvc
-            artifact_name: msvc-kit.exe
             asset_name: msvc-kit-aarch64-windows.exe
+
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -47,44 +62,20 @@ jobs:
       - name: Rename artifact
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} dist/${{ matrix.asset_name }}
+          cp target/${{ matrix.target }}/release/msvc-kit.exe dist/${{ matrix.asset_name }}
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.asset_name }}
-          path: dist/${{ matrix.asset_name }}
-
-  release:
-    name: Create Release
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Display structure of downloaded files
-        run: ls -R artifacts
-
-      - name: Create Release
+      - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/msvc-kit-x86_64-windows.exe/msvc-kit-x86_64-windows.exe
-            artifacts/msvc-kit-i686-windows.exe/msvc-kit-i686-windows.exe
-            artifacts/msvc-kit-aarch64-windows.exe/msvc-kit-aarch64-windows.exe
-          generate_release_notes: true
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          files: dist/${{ matrix.asset_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish-crate:
     name: Publish to crates.io
-    needs: release
+    needs: [release-please, build-and-release]
+    if: ${{ needs.release-please.outputs.release_created }}
     runs-on: ubuntu-latest
 
     steps:
@@ -102,21 +93,18 @@ jobs:
 
   update-winget:
     name: Update WinGet
-    needs: release
+    needs: [release-please, build-and-release]
+    if: ${{ needs.release-please.outputs.release_created }}
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Get version
-        id: version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
       - name: Update WinGet manifest
         uses: vedantmgoyal2009/winget-releaser@v2
         with:
           identifier: loonghao.msvc-kit
           installers-regex: 'msvc-kit-x86_64-windows\.exe$'
-          version: ${{ steps.version.outputs.version }}
+          version: ${{ needs.release-please.outputs.version }}
           token: ${{ secrets.WINGET_TOKEN }}
         continue-on-error: true

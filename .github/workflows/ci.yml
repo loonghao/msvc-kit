@@ -2,31 +2,31 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   test:
-    name: Test
-    runs-on: ${{ matrix.os }}
+    name: Test (${{ matrix.rust }})
+    runs-on: windows-latest
     strategy:
       matrix:
-        os: [windows-latest]
         rust: [stable, beta]
-    
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Install Rust
-        uses: dtolnay/rust-action@stable
+
+      - name: Setup vx
+        uses: loonghao/vx@main
         with:
-          toolchain: ${{ matrix.rust }}
-          components: rustfmt, clippy
-      
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          tools: "rust just"
+          cache: "true"
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -37,64 +37,45 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
-      
+
+      - name: Install Rust ${{ matrix.rust }}
+        run: |
+          vx rustup default ${{ matrix.rust }}
+          vx rustup component add rustfmt clippy
+
       - name: Check formatting
-        run: cargo fmt --all -- --check
-      
+        run: vx just fmt-check
+
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-      
+        run: vx just lint
+
       - name: Build
-        run: cargo build --verbose
-      
+        run: vx just build
+
       - name: Run tests
-        run: cargo test --verbose
+        run: vx just test
 
   build-release:
     name: Build Release
     runs-on: windows-latest
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Install Rust
-        uses: dtolnay/rust-action@stable
+
+      - name: Setup vx
+        uses: loonghao/vx@main
         with:
-          toolchain: stable
-      
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          tools: "rust just"
+          cache: "true"
+
       - name: Build release
-        run: cargo build --release
-      
+        run: vx just build-release
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: msvc-kit-windows
           path: target/release/msvc-kit.exe
-
-  # Release job for tagged versions
-  release:
-    name: Release
-    runs-on: windows-latest
-    needs: test
-    if: startsWith(github.ref, 'refs/tags/v')
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install Rust
-        uses: dtolnay/rust-action@stable
-        with:
-          toolchain: stable
-      
-      - name: Build release
-        run: cargo build --release
-      
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: target/release/msvc-kit.exe
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
