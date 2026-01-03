@@ -555,7 +555,7 @@ async fn main() -> anyhow::Result<()> {
 
                 match status.get_latest_release() {
                     Ok(release) => {
-                        let latest = release.version();
+                        let latest = &release.version;
                         if latest != current_version {
                             println!("Latest version:  v{}", latest);
                             println!("\n📦 A new version is available!");
@@ -589,12 +589,15 @@ async fn main() -> anyhow::Result<()> {
                 };
 
                 match update_result {
-                    Ok(status) => {
-                        if status.updated() {
-                            println!("\n✅ Updated to v{}!", status.version());
+                    Ok(update_status) => {
+                        if update_status.updated() {
+                            println!("\n✅ Updated to v{}!", update_status.version());
                             println!("Please restart msvc-kit to use the new version.");
                         } else {
-                            println!("\n✅ Already running the latest version (v{}).", current_version);
+                            println!(
+                                "\n✅ Already running the latest version (v{}).",
+                                current_version
+                            );
                         }
                     }
                     Err(e) => {
