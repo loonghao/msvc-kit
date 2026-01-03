@@ -14,6 +14,87 @@ export default defineConfig({
       label: '中文',
       lang: 'zh-CN',
       link: '/zh/',
+      themeConfig: {
+        nav: [
+          { text: '指南', link: '/zh/guide/getting-started' },
+          { text: 'API', link: '/zh/api/library' },
+          { text: '示例', link: '/zh/examples/basic' },
+          {
+            text: 'DCC 集成',
+            items: [
+              { text: 'Unreal Engine 5', link: '/zh/dcc/unreal-engine' },
+              { text: 'Maya', link: '/zh/dcc/maya' },
+              { text: 'Houdini', link: '/zh/dcc/houdini' },
+              { text: '3ds Max', link: '/zh/dcc/3dsmax' },
+            ],
+          },
+        ],
+        sidebar: {
+          '/zh/guide/': [
+            {
+              text: '介绍',
+              items: [
+                { text: '什么是 msvc-kit?', link: '/zh/guide/what-is-msvc-kit' },
+                { text: '快速开始', link: '/zh/guide/getting-started' },
+                { text: '安装', link: '/zh/guide/installation' },
+              ],
+            },
+            {
+              text: 'CLI 使用',
+              items: [
+                { text: '下载', link: '/zh/guide/cli-download' },
+                { text: '设置环境', link: '/zh/guide/cli-setup' },
+                { text: '配置', link: '/zh/guide/cli-config' },
+                { text: '列表和清理', link: '/zh/guide/cli-list-clean' },
+              ],
+            },
+            {
+              text: '高级',
+              items: [
+                { text: '缓存机制', link: '/zh/guide/caching' },
+                { text: '架构支持', link: '/zh/guide/architecture' },
+                { text: 'CI/CD 集成', link: '/zh/guide/ci-cd' },
+              ],
+            },
+          ],
+          '/zh/api/': [
+            {
+              text: '库 API',
+              items: [
+                { text: '概述', link: '/zh/api/library' },
+                { text: 'DownloadOptions', link: '/zh/api/download-options' },
+                { text: 'InstallInfo', link: '/zh/api/install-info' },
+                { text: 'MsvcEnvironment', link: '/zh/api/msvc-environment' },
+                { text: 'ToolPaths', link: '/zh/api/tool-paths' },
+              ],
+            },
+          ],
+          '/zh/examples/': [
+            {
+              text: '示例',
+              items: [
+                { text: '基本用法', link: '/zh/examples/basic' },
+                { text: '自定义路径', link: '/zh/examples/custom-paths' },
+                { text: '构建脚本', link: '/zh/examples/build-script' },
+                { text: '快速编译', link: '/zh/examples/quick-compile' },
+              ],
+            },
+          ],
+          '/zh/dcc/': [
+            {
+              text: 'DCC 集成',
+              items: [
+                { text: '概述', link: '/zh/dcc/overview' },
+                { text: 'Unreal Engine 5', link: '/zh/dcc/unreal-engine' },
+                { text: 'Maya', link: '/zh/dcc/maya' },
+                { text: 'Houdini', link: '/zh/dcc/houdini' },
+                { text: '3ds Max', link: '/zh/dcc/3dsmax' },
+                { text: 'Blender', link: '/zh/dcc/blender' },
+              ],
+            },
+          ],
+        },
+      },
     },
   },
 
