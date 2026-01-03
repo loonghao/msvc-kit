@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.1.2](https://github.com/loonghao/msvc-kit/compare/v0.1.1...v0.1.2) (2026-01-03)
+
+
+### Features
+
+* add self-update, coverage CI, fix crates.io publish ([c318f06](https://github.com/loonghao/msvc-kit/commit/c318f06e4a3247ba8962c1a5db616ca9d9d091ad))
+
+
+### Bug Fixes
+
+* **deps:** update rust crate indicatif to 0.18 ([a3ce8c5](https://github.com/loonghao/msvc-kit/commit/a3ce8c58e8e1be3ddf9380fa9e10ed706afbec29))
+* **deps:** update rust crate reqwest to 0.13 ([b479007](https://github.com/loonghao/msvc-kit/commit/b47900703e785c4ff1a2c0e771b05d1a3ae50afc))
+* **deps:** update rust crate self_update to 0.42 ([c4f75a5](https://github.com/loonghao/msvc-kit/commit/c4f75a576a84b76c50196c4ae53c4b0152b61aa7))
+* **deps:** update rust crate simd-json to 0.17 ([bb77b37](https://github.com/loonghao/msvc-kit/commit/bb77b37117df5ebec43a89efeec4cb041940d94f))
+* **deps:** update rust crate toml to 0.9 ([0036fa8](https://github.com/loonghao/msvc-kit/commit/0036fa8c408f3783b677b98e1b01dc272126da33))
+* use Release.version field instead of method ([0025c53](https://github.com/loonghao/msvc-kit/commit/0025c53af757162cdbd4340999d09206d00c0731))
+
 ## [0.1.1](https://github.com/loonghao/msvc-kit/compare/v0.1.0...v0.1.1) (2026-01-03)
 
 
