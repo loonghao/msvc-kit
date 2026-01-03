@@ -33,8 +33,21 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! ## Builder Pattern (Recommended for vx integration)
+//!
+//! ```rust,no_run
+//! use msvc_kit::{DownloadOptions, Architecture};
+//!
+//! let options = DownloadOptions::builder()
+//!     .target_dir("C:/msvc-kit")
+//!     .arch(Architecture::X64)
+//!     .parallel_downloads(8)
+//!     .build();
+//! ```
 
 pub mod config;
+pub mod constants;
 pub mod downloader;
 pub mod env;
 pub mod error;
@@ -43,7 +56,11 @@ pub mod version;
 
 // Re-export main types and functions
 pub use config::{load_config, save_config, MsvcKitConfig};
-pub use downloader::{download_msvc, download_sdk, DownloadOptions};
+pub use downloader::{
+    download_msvc, download_sdk, BoxedCacheManager, BoxedProgressHandler, CacheManager,
+    ComponentDownloader, ComponentType, DownloadOptions, DownloadOptionsBuilder,
+    FileSystemCacheManager, ProgressHandler,
+};
 pub use env::{
     generate_activation_script, get_env_vars, setup_environment, MsvcEnvironment, ShellType,
     ToolPaths,

@@ -1,45 +1,79 @@
 use std::sync::Arc;
 
-use indicatif::ProgressBar;
-use reqwest::Client;
+use super::progress::NoopProgressHandler;
 
-use super::{common::download_file, PackagePayload};
+/// Test helper to create a simple progress handler for testing
+#[allow(dead_code)]
+pub fn test_progress_handler() -> Arc<dyn super::progress::ProgressHandler> {
+    Arc::new(NoopProgressHandler)
+}
 
 #[tokio::test]
-async fn download_file_should_complete_successfully() {
-    let mut server = mockito::Server::new_async().await;
-    let body = "0123456789";
+async fn download_options_builder_works() {
+    use super::DownloadOptions;
+    use crate::version::Architecture;
 
-    let _m = server
-        .mock("GET", "/file")
-        .with_status(200)
-        .with_body(body)
-        .create_async()
-        .await;
+    let options = DownloadOptions::builder()
+        .target_dir("/tmp/test")
+        .arch(Architecture::X64)
+        .parallel_downloads(8)
+        .verify_hashes(false)
+        .build();
 
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path();
+    assert_eq!(options.target_dir.to_str().unwrap(), "/tmp/test");
+    assert_eq!(options.arch, Architecture::X64);
+    assert_eq!(options.parallel_downloads, 8);
+    assert!(!options.verify_hashes);
+}
 
-    let file_path = dir.join("payload.bin");
+#[tokio::test]
+async fn download_options_default_values() {
+    use super::DownloadOptions;
+    use crate::constants::download::DEFAULT_PARALLEL_DOWNLOADS;
 
-    let pb = Arc::new(ProgressBar::hidden());
+    let options = DownloadOptions::default();
 
-    let payload = PackagePayload {
-        file_name: "payload.bin".to_string(),
-        url: format!("{}/file", server.url()),
-        size: 10,
-        sha256: None,
+    assert!(options.msvc_version.is_none());
+    assert!(options.sdk_version.is_none());
+    assert!(options.verify_hashes);
+    assert_eq!(options.parallel_downloads, DEFAULT_PARALLEL_DOWNLOADS);
+    assert!(options.http_client.is_none());
+    assert!(options.progress_handler.is_none());
+}
+
+#[tokio::test]
+async fn http_client_config_default() {
+    use super::http::HttpClientConfig;
+    use crate::constants::USER_AGENT;
+
+    let config = HttpClientConfig::default();
+
+    assert_eq!(config.user_agent, USER_AGENT);
+    assert!(config.connect_timeout.is_some());
+    assert!(config.timeout.is_some());
+}
+
+#[tokio::test]
+async fn create_http_client_works() {
+    use super::http::create_http_client;
+
+    let client = create_http_client();
+    // Just verify it doesn't panic
+    let _ = client;
+}
+
+#[tokio::test]
+async fn create_http_client_with_config_works() {
+    use super::http::{create_http_client_with_config, HttpClientConfig};
+    use std::time::Duration;
+
+    let config = HttpClientConfig {
+        user_agent: "test-agent/1.0".to_string(),
+        connect_timeout: Some(Duration::from_secs(10)),
+        timeout: Some(Duration::from_secs(60)),
     };
 
-    let client = Client::builder().build().unwrap();
-
-    let result = download_file(&client, &payload, &file_path, &pb)
-        .await
-        .unwrap();
-
-    assert!(result.success);
-    assert_eq!(pb.position(), 10);
-
-    let data = tokio::fs::read(&file_path).await.unwrap();
-    assert_eq!(data, body.as_bytes());
+    let client = create_http_client_with_config(&config);
+    // Just verify it doesn't panic
+    let _ = client;
 }

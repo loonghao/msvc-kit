@@ -8,13 +8,16 @@ mod setup;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::installer::InstallInfo;
 use crate::version::Architecture;
 
-pub use setup::{apply_environment, generate_activation_script, setup_environment, ShellType};
+pub use setup::{
+    apply_environment, generate_activation_script, save_activation_script, setup_environment,
+    ShellType,
+};
 
 #[cfg(windows)]
 pub use setup::write_to_registry;
@@ -127,11 +130,7 @@ impl MsvcEnvironment {
     }
 
     /// Build include paths
-    fn build_include_paths(
-        vc_tools_dir: &PathBuf,
-        sdk_dir: &PathBuf,
-        sdk_version: &str,
-    ) -> Vec<PathBuf> {
+    fn build_include_paths(vc_tools_dir: &Path, sdk_dir: &Path, sdk_version: &str) -> Vec<PathBuf> {
         vec![
             // MSVC includes
             vc_tools_dir.join("include"),
@@ -146,8 +145,8 @@ impl MsvcEnvironment {
 
     /// Build library paths
     fn build_lib_paths(
-        vc_tools_dir: &PathBuf,
-        sdk_dir: &PathBuf,
+        vc_tools_dir: &Path,
+        sdk_dir: &Path,
         sdk_version: &str,
         arch: Architecture,
     ) -> Vec<PathBuf> {
@@ -171,8 +170,8 @@ impl MsvcEnvironment {
 
     /// Build binary paths
     fn build_bin_paths(
-        vc_tools_dir: &PathBuf,
-        sdk_dir: &PathBuf,
+        vc_tools_dir: &Path,
+        sdk_dir: &Path,
         sdk_version: &str,
         host_arch: Architecture,
         target_arch: Architecture,

@@ -198,6 +198,9 @@ async fn main() -> anyhow::Result<()> {
                 host_arch: Some(Architecture::host()),
                 verify_hashes: !no_verify,
                 parallel_downloads: parallel_downloads.unwrap_or(config.parallel_downloads),
+                http_client: None,
+                progress_handler: None,
+                dry_run: false,
             };
 
             println!("📦 msvc-kit - Downloading MSVC Build Tools\n");

@@ -73,8 +73,17 @@ fn dirs_fallback() -> PathBuf {
     }
 }
 
-/// Get the configuration file path
+/// Get the configuration file path (TOML format)
 fn get_config_path() -> PathBuf {
+    if let Some(proj_dirs) = directories::ProjectDirs::from("com", "loonghao", "msvc-kit") {
+        proj_dirs.config_dir().join("config.toml")
+    } else {
+        get_default_install_dir().join("config.toml")
+    }
+}
+
+/// Get the legacy JSON configuration file path (for migration)
+fn get_legacy_config_path() -> PathBuf {
     if let Some(proj_dirs) = directories::ProjectDirs::from("com", "loonghao", "msvc-kit") {
         proj_dirs.config_dir().join("config.json")
     } else {
@@ -85,19 +94,42 @@ fn get_config_path() -> PathBuf {
 /// Load configuration from disk
 ///
 /// If the configuration file doesn't exist, returns default configuration.
+/// Supports automatic migration from legacy JSON format to TOML.
 pub fn load_config() -> Result<MsvcKitConfig> {
     let config_path = get_config_path();
 
-    if !config_path.exists() {
-        return Ok(MsvcKitConfig::default());
+    // Try to load TOML config first
+    if config_path.exists() {
+        let content = std::fs::read_to_string(&config_path)?;
+        let config: MsvcKitConfig = toml::from_str(&content)?;
+        return Ok(config);
     }
 
-    let content = std::fs::read_to_string(&config_path)?;
-    let config: MsvcKitConfig = serde_json::from_str(&content)?;
-    Ok(config)
+    // Try to migrate from legacy JSON config
+    let legacy_path = get_legacy_config_path();
+    if legacy_path.exists() {
+        let content = std::fs::read_to_string(&legacy_path)?;
+        let config: MsvcKitConfig = serde_json::from_str(&content)?;
+
+        // Save as TOML for future use
+        let _ = save_config(&config);
+
+        // Remove legacy JSON file after successful migration
+        let _ = std::fs::remove_file(&legacy_path);
+
+        tracing::info!(
+            "Migrated configuration from {} to {}",
+            legacy_path.display(),
+            config_path.display()
+        );
+
+        return Ok(config);
+    }
+
+    Ok(MsvcKitConfig::default())
 }
 
-/// Save configuration to disk
+/// Save configuration to disk (TOML format)
 pub fn save_config(config: &MsvcKitConfig) -> Result<()> {
     let config_path = get_config_path();
 
@@ -106,7 +138,7 @@ pub fn save_config(config: &MsvcKitConfig) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
 
-    let content = serde_json::to_string_pretty(config)?;
+    let content = toml::to_string_pretty(config)?;
     std::fs::write(&config_path, content)?;
     Ok(())
 }
@@ -140,5 +172,21 @@ mod tests {
         assert!(config.verify_hashes);
         assert_eq!(config.parallel_downloads, 4);
         assert_eq!(config.default_arch, Architecture::X64);
+    }
+
+    #[test]
+    fn test_config_toml_serialization() {
+        let config = MsvcKitConfig::default();
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+
+        // Verify it contains expected TOML keys
+        assert!(toml_str.contains("install_dir"));
+        assert!(toml_str.contains("verify_hashes"));
+        assert!(toml_str.contains("parallel_downloads"));
+
+        // Verify round-trip
+        let parsed: MsvcKitConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.verify_hashes, config.verify_hashes);
+        assert_eq!(parsed.parallel_downloads, config.parallel_downloads);
     }
 }

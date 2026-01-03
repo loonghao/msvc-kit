@@ -177,7 +177,6 @@ fn generate_bash_script(vars: &HashMap<String, String>) -> String {
 }
 
 /// Save activation script to a file
-#[allow(dead_code)]
 pub async fn save_activation_script(
     env: &MsvcEnvironment,
     shell: ShellType,

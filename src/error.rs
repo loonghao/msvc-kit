@@ -30,6 +30,14 @@ pub enum MsvcKitError {
     #[error("JSON parsing error: {0}")]
     SimdJson(#[from] simd_json::Error),
 
+    /// TOML deserialization errors
+    #[error("TOML parsing error: {0}")]
+    TomlDe(#[from] toml::de::Error),
+
+    /// TOML serialization errors
+    #[error("TOML serialization error: {0}")]
+    TomlSer(#[from] toml::ser::Error),
+
     /// Database errors
     #[error("Database error: {0}")]
     Database(String),
