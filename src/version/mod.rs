@@ -293,7 +293,10 @@ mod tests {
         assert_eq!("x64".parse::<Architecture>().unwrap(), Architecture::X64);
         assert_eq!("amd64".parse::<Architecture>().unwrap(), Architecture::X64);
         assert_eq!("x86".parse::<Architecture>().unwrap(), Architecture::X86);
-        assert_eq!("arm64".parse::<Architecture>().unwrap(), Architecture::Arm64);
+        assert_eq!(
+            "arm64".parse::<Architecture>().unwrap(),
+            Architecture::Arm64
+        );
     }
 
     #[test]

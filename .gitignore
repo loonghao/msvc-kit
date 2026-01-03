@@ -33,3 +33,6 @@ Thumbs.db
 
 # Downloaded packages (for development)
 /downloads/
+
+# CodeBuddy metadata
+/.codebuddy/

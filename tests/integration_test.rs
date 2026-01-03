@@ -1,7 +1,7 @@
 //! Integration tests for msvc-kit
 
-use msvc_kit::version::Architecture;
 use msvc_kit::config::MsvcKitConfig;
+use msvc_kit::version::Architecture;
 use msvc_kit::DownloadOptions;
 
 #[test]
@@ -9,7 +9,10 @@ fn test_architecture_parsing() {
     assert_eq!("x64".parse::<Architecture>().unwrap(), Architecture::X64);
     assert_eq!("amd64".parse::<Architecture>().unwrap(), Architecture::X64);
     assert_eq!("x86".parse::<Architecture>().unwrap(), Architecture::X86);
-    assert_eq!("arm64".parse::<Architecture>().unwrap(), Architecture::Arm64);
+    assert_eq!(
+        "arm64".parse::<Architecture>().unwrap(),
+        Architecture::Arm64
+    );
 }
 
 #[test]
@@ -47,7 +50,7 @@ fn test_architecture_msvc_dirs() {
 #[cfg(windows)]
 mod windows_tests {
     use super::*;
-    use msvc_kit::env::{MsvcEnvironment, get_env_vars};
+    use msvc_kit::env::{get_env_vars, MsvcEnvironment};
     use std::path::PathBuf;
 
     #[test]
@@ -66,7 +69,7 @@ mod windows_tests {
         };
 
         let vars = get_env_vars(&env);
-        
+
         assert!(vars.contains_key("VCINSTALLDIR"));
         assert!(vars.contains_key("VCToolsInstallDir"));
         assert!(vars.contains_key("VCToolsVersion"));
@@ -74,7 +77,7 @@ mod windows_tests {
         assert!(vars.contains_key("INCLUDE"));
         assert!(vars.contains_key("LIB"));
         assert!(vars.contains_key("PATH"));
-        
+
         assert_eq!(vars.get("VCToolsVersion").unwrap(), "14.40.33807");
     }
 }

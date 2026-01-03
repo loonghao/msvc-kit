@@ -2,13 +2,101 @@
 
 mod extractor;
 
-use std::path::PathBuf;
+use indicatif::{ProgressBar, ProgressStyle, ProgressDrawTarget};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::error::Result;
 use crate::version::Architecture;
 
-pub use extractor::{extract_vsix, extract_msi, extract_cab};
+pub use extractor::{extract_cab, extract_msi, extract_vsix};
+use extractor::{
+    extract_cab_with_progress,
+    extract_msi_with_progress,
+    extract_vsix_with_progress,
+    inner_progress_enabled,
+};
+
+/// Extract a package based on its file extension
+pub async fn extract_package(file: &Path, target_dir: &Path) -> Result<()> {
+    extract_package_with_progress(file, target_dir, inner_progress_enabled()).await
+}
+
+async fn extract_package_with_progress(
+    file: &Path,
+    target_dir: &Path,
+    show_progress: bool,
+) -> Result<()> {
+    let extension = file
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    match extension.as_str() {
+        "vsix" | "zip" => extract_vsix_with_progress(file, target_dir, show_progress).await,
+        "msi" => extract_msi_with_progress(file, target_dir, show_progress).await,
+        "cab" => extract_cab_with_progress(file, target_dir, show_progress).await,
+        _ => {
+            tracing::warn!("Unknown file type: {:?}, skipping extraction", file);
+            Ok(())
+        }
+    }
+}
+
+/// Extract multiple packages with a unified progress bar
+pub async fn extract_packages_with_progress(
+    files: &[PathBuf],
+    target_dir: &Path,
+    label: &str,
+) -> Result<()> {
+    let total = files.len() as u64;
+    let pb = ProgressBar::new_spinner();
+    pb.set_draw_target(ProgressDrawTarget::stderr_with_hz(4));
+    pb.set_style(
+        ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] {msg}")
+            .unwrap()
+            .tick_chars("⠁⠃⠇⠋⠙⠸⠴⠦"),
+    );
+    pb.enable_steady_tick(Duration::from_millis(120));
+    pb.set_message(format!("{} extracting 0/{} files", label, total));
+
+    // cache marker dir
+    let marker_dir = target_dir.join(".msvc-kit-extracted");
+    tokio::fs::create_dir_all(&marker_dir).await.ok();
+    // Migration: if target already has contents from a previous run (before markers), treat as cached
+    let has_existing_content = match tokio::fs::read_dir(target_dir).await {
+        Ok(mut rd) => matches!(rd.next_entry().await, Ok(Some(_))),
+        Err(_) => false,
+    };
+
+    for (idx, file) in files.iter().enumerate() {
+        let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
+        let marker = marker_dir.join(format!("{}.done", name));
+
+        if marker.exists() {
+            pb.set_message(format!("{} extracting {}/{} (cached)", label, idx + 1, total));
+            pb.inc(0);
+            continue;
+        }
+
+        if has_existing_content {
+            pb.set_message(format!("{} extracting {}/{} (cached-existing)", label, idx + 1, total));
+            let _ = std::fs::write(&marker, b"ok");
+            pb.inc(0);
+            continue;
+        }
+
+        pb.set_message(format!("{} extracting {}/{}: {}", label, idx + 1, total, name));
+        extract_package_with_progress(file, target_dir, false).await?;
+        // mark extracted
+        let _ = std::fs::write(&marker, b"ok");
+    }
+
+    pb.finish_with_message(format!("{} extraction done ({} files)", label, total));
+    Ok(())
+}
 
 /// Information about an installed component
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,60 +135,28 @@ impl InstallInfo {
 
 /// Install MSVC components from downloaded files
 pub async fn install_msvc(info: &InstallInfo) -> Result<PathBuf> {
-    tracing::info!("Installing MSVC {} to {:?}", info.version, info.install_path);
+    tracing::info!(
+        "Installing MSVC {} to {:?}",
+        info.version,
+        info.install_path
+    );
 
-    // Create installation directory
     tokio::fs::create_dir_all(&info.install_path).await?;
-
-    // Extract each downloaded file
-    for file in &info.downloaded_files {
-        let extension = file.extension().and_then(|e| e.to_str()).unwrap_or("");
-        
-        match extension.to_lowercase().as_str() {
-            "vsix" => {
-                extract_vsix(file, &info.install_path).await?;
-            }
-            "msi" => {
-                extract_msi(file, &info.install_path).await?;
-            }
-            "cab" => {
-                extract_cab(file, &info.install_path).await?;
-            }
-            _ => {
-                tracing::warn!("Unknown file type: {:?}", file);
-            }
-        }
-    }
+    extract_packages_with_progress(&info.downloaded_files, &info.install_path, "MSVC").await?;
 
     Ok(info.install_path.clone())
 }
 
 /// Install Windows SDK components from downloaded files
 pub async fn install_sdk(info: &InstallInfo) -> Result<PathBuf> {
-    tracing::info!("Installing Windows SDK {} to {:?}", info.version, info.install_path);
+    tracing::info!(
+        "Installing Windows SDK {} to {:?}",
+        info.version,
+        info.install_path
+    );
 
-    // Create installation directory
     tokio::fs::create_dir_all(&info.install_path).await?;
-
-    // Extract each downloaded file
-    for file in &info.downloaded_files {
-        let extension = file.extension().and_then(|e| e.to_str()).unwrap_or("");
-        
-        match extension.to_lowercase().as_str() {
-            "vsix" => {
-                extract_vsix(file, &info.install_path).await?;
-            }
-            "msi" => {
-                extract_msi(file, &info.install_path).await?;
-            }
-            "cab" => {
-                extract_cab(file, &info.install_path).await?;
-            }
-            _ => {
-                tracing::warn!("Unknown file type: {:?}", file);
-            }
-        }
-    }
+    extract_packages_with_progress(&info.downloaded_files, &info.install_path, "SDK").await?;
 
     Ok(info.install_path.clone())
 }

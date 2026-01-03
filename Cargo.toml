@@ -31,6 +31,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+simd-json = "0.14"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Compression
@@ -39,6 +40,8 @@ cab = "0.6"
 
 # Progress display
 indicatif = "0.17"
+humansize = "2.1"
+
 
 # Logging
 tracing = "0.1"
@@ -61,6 +64,10 @@ futures = "0.3"
 # SHA256 verification
 sha2 = "0.10"
 hex = "0.4"
+
+# Embedded KV database
+redb = "1.5"
+bincode = "1.3"
 
 [dev-dependencies]
 rstest = "0.24"

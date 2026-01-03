@@ -9,6 +9,15 @@ pub enum MsvcKitError {
     #[error("Network error: {0}")]
     Network(#[from] reqwest::Error),
 
+    /// Network error with download context
+    #[error("Download failed for {file} ({url}): {source}")]
+    DownloadNetwork {
+        file: String,
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+
     /// IO errors during file operations
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -16,6 +25,18 @@ pub enum MsvcKitError {
     /// JSON parsing errors
     #[error("JSON parsing error: {0}")]
     Json(#[from] serde_json::Error),
+
+    /// SIMD JSON parsing errors
+    #[error("JSON parsing error: {0}")]
+    SimdJson(#[from] simd_json::Error),
+
+    /// Database errors
+    #[error("Database error: {0}")]
+    Database(String),
+
+    /// Serialization errors
+    #[error("Serialization error: {0}")]
+    Serialization(#[from] bincode::Error),
 
     /// ZIP extraction errors
     #[error("ZIP extraction error: {0}")]
