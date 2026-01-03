@@ -113,12 +113,21 @@ pub fn save_config(config: &MsvcKitConfig) -> Result<()> {
 
 /// Get the installation directory for a specific MSVC version
 pub fn get_msvc_install_dir(config: &MsvcKitConfig, version: &str) -> PathBuf {
-    config.install_dir.join("VC").join("Tools").join("MSVC").join(version)
+    config
+        .install_dir
+        .join("VC")
+        .join("Tools")
+        .join("MSVC")
+        .join(version)
 }
 
 /// Get the installation directory for a specific Windows SDK version
 pub fn get_sdk_install_dir(config: &MsvcKitConfig, version: &str) -> PathBuf {
-    config.install_dir.join("Windows Kits").join("10").join(version)
+    config
+        .install_dir
+        .join("Windows Kits")
+        .join("10")
+        .join(version)
 }
 
 #[cfg(test)]

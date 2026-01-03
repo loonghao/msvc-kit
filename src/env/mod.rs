@@ -6,15 +6,15 @@
 
 mod setup;
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::installer::InstallInfo;
 use crate::version::Architecture;
 
-pub use setup::{setup_environment, apply_environment, generate_activation_script, ShellType};
+pub use setup::{apply_environment, generate_activation_script, setup_environment, ShellType};
 
 #[cfg(windows)]
 pub use setup::write_to_registry;
@@ -63,7 +63,9 @@ impl MsvcEnvironment {
         sdk_info: Option<&InstallInfo>,
         host_arch: Architecture,
     ) -> Result<Self> {
-        let base_dir = msvc_info.install_path.parent()
+        let base_dir = msvc_info
+            .install_path
+            .parent()
             .and_then(|p| p.parent())
             .and_then(|p| p.parent())
             .and_then(|p| p.parent())
@@ -78,7 +80,10 @@ impl MsvcEnvironment {
             (sdk.install_path.clone(), sdk.version.clone())
         } else {
             // Default SDK paths
-            (base_dir.join("Windows Kits").join("10"), "10.0.22621.0".to_string())
+            (
+                base_dir.join("Windows Kits").join("10"),
+                "10.0.22621.0".to_string(),
+            )
         };
 
         let arch = msvc_info.arch;
@@ -151,8 +156,16 @@ impl MsvcEnvironment {
             // MSVC libs
             vc_tools_dir.join("lib").join(&arch_str),
             // Windows SDK libs
-            sdk_dir.join("Lib").join(sdk_version).join("ucrt").join(&arch_str),
-            sdk_dir.join("Lib").join(sdk_version).join("um").join(&arch_str),
+            sdk_dir
+                .join("Lib")
+                .join(sdk_version)
+                .join("ucrt")
+                .join(&arch_str),
+            sdk_dir
+                .join("Lib")
+                .join(sdk_version)
+                .join("um")
+                .join(&arch_str),
         ]
     }
 
@@ -171,7 +184,10 @@ impl MsvcEnvironment {
             // MSVC binaries
             vc_tools_dir.join("bin").join(host_dir).join(target_dir),
             // Windows SDK binaries
-            sdk_dir.join("bin").join(sdk_version).join(target_arch.to_string()),
+            sdk_dir
+                .join("bin")
+                .join(sdk_version)
+                .join(target_arch.to_string()),
         ]
     }
 
@@ -205,18 +221,37 @@ pub fn get_env_vars(env: &MsvcEnvironment) -> HashMap<String, String> {
     let mut vars = HashMap::new();
 
     // Visual Studio environment variables
-    vars.insert("VCINSTALLDIR".to_string(), env.vc_install_dir.display().to_string());
-    vars.insert("VCToolsInstallDir".to_string(), env.vc_tools_install_dir.display().to_string());
+    vars.insert(
+        "VCINSTALLDIR".to_string(),
+        env.vc_install_dir.display().to_string(),
+    );
+    vars.insert(
+        "VCToolsInstallDir".to_string(),
+        env.vc_tools_install_dir.display().to_string(),
+    );
     vars.insert("VCToolsVersion".to_string(), env.vc_tools_version.clone());
 
     // Windows SDK environment variables
-    vars.insert("WindowsSdkDir".to_string(), env.windows_sdk_dir.display().to_string());
-    vars.insert("WindowsSDKVersion".to_string(), format!("{}\\", env.windows_sdk_version));
-    vars.insert("WindowsSdkBinPath".to_string(), 
-        env.windows_sdk_dir.join("bin").join(&env.windows_sdk_version).display().to_string());
+    vars.insert(
+        "WindowsSdkDir".to_string(),
+        env.windows_sdk_dir.display().to_string(),
+    );
+    vars.insert(
+        "WindowsSDKVersion".to_string(),
+        format!("{}\\", env.windows_sdk_version),
+    );
+    vars.insert(
+        "WindowsSdkBinPath".to_string(),
+        env.windows_sdk_dir
+            .join("bin")
+            .join(&env.windows_sdk_version)
+            .display()
+            .to_string(),
+    );
 
     // INCLUDE path
-    let include = env.include_paths
+    let include = env
+        .include_paths
         .iter()
         .map(|p| p.display().to_string())
         .collect::<Vec<_>>()
@@ -224,7 +259,8 @@ pub fn get_env_vars(env: &MsvcEnvironment) -> HashMap<String, String> {
     vars.insert("INCLUDE".to_string(), include);
 
     // LIB path
-    let lib = env.lib_paths
+    let lib = env
+        .lib_paths
         .iter()
         .map(|p| p.display().to_string())
         .collect::<Vec<_>>()
@@ -232,7 +268,8 @@ pub fn get_env_vars(env: &MsvcEnvironment) -> HashMap<String, String> {
     vars.insert("LIB".to_string(), lib);
 
     // PATH additions
-    let path = env.bin_paths
+    let path = env
+        .bin_paths
         .iter()
         .map(|p| p.display().to_string())
         .collect::<Vec<_>>()

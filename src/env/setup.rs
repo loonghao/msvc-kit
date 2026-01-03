@@ -7,7 +7,7 @@ use crate::error::{MsvcKitError, Result};
 use crate::installer::InstallInfo;
 use crate::version::Architecture;
 
-use super::{MsvcEnvironment, get_env_vars};
+use super::{get_env_vars, MsvcEnvironment};
 
 /// Setup MSVC environment from installation info
 ///
@@ -76,7 +76,11 @@ impl ShellType {
         }
 
         // Check for bash
-        if std::env::var("BASH").is_ok() || std::env::var("SHELL").map(|s| s.contains("bash")).unwrap_or(false) {
+        if std::env::var("BASH").is_ok()
+            || std::env::var("SHELL")
+                .map(|s| s.contains("bash"))
+                .unwrap_or(false)
+        {
             return ShellType::Bash;
         }
 
@@ -124,7 +128,7 @@ fn generate_powershell_script(vars: &HashMap<String, String>) -> String {
     for (key, value) in vars {
         // Escape backslashes for PowerShell
         let escaped_value = value.replace('\\', "\\\\");
-        
+
         if key == "PATH" {
             script.push_str(&format!(
                 "$env:PATH = \"{};$env:PATH\"\n",
@@ -139,7 +143,9 @@ fn generate_powershell_script(vars: &HashMap<String, String>) -> String {
         }
     }
 
-    script.push_str("\nWrite-Host \"MSVC environment configured successfully.\" -ForegroundColor Green\n");
+    script.push_str(
+        "\nWrite-Host \"MSVC environment configured successfully.\" -ForegroundColor Green\n",
+    );
     script.push_str("Write-Host \"cl.exe is now available in PATH.\" -ForegroundColor Green\n");
 
     script
@@ -152,8 +158,11 @@ fn generate_bash_script(vars: &HashMap<String, String>) -> String {
 
     for (key, value) in vars {
         // Convert Windows paths to Unix-style for Git Bash/WSL
-        let unix_value = value.replace('\\', "/").replace("C:", "/c").replace("D:", "/d");
-        
+        let unix_value = value
+            .replace('\\', "/")
+            .replace("C:", "/c")
+            .replace("D:", "/d");
+
         if key == "PATH" {
             script.push_str(&format!("export PATH=\"{}:$PATH\"\n", unix_value));
         } else {
@@ -168,6 +177,7 @@ fn generate_bash_script(vars: &HashMap<String, String>) -> String {
 }
 
 /// Save activation script to a file
+#[allow(dead_code)]
 pub async fn save_activation_script(
     env: &MsvcEnvironment,
     shell: ShellType,
@@ -190,7 +200,8 @@ pub fn write_to_registry(env: &MsvcEnvironment) -> Result<()> {
     use winreg::RegKey;
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (env_key, _) = hkcu.create_subkey("Environment")
+    let (env_key, _) = hkcu
+        .create_subkey("Environment")
         .map_err(|e| MsvcKitError::EnvSetup(format!("Failed to open registry: {}", e)))?;
 
     let vars = get_env_vars(env);
@@ -204,10 +215,12 @@ pub fn write_to_registry(env: &MsvcEnvironment) -> Result<()> {
             } else {
                 format!("{};{}", value, current)
             };
-            env_key.set_value("Path", &new_path)
+            env_key
+                .set_value("Path", &new_path)
                 .map_err(|e| MsvcKitError::EnvSetup(format!("Failed to set PATH: {}", e)))?;
         } else {
-            env_key.set_value(&key, &value)
+            env_key
+                .set_value(&key, &value)
                 .map_err(|e| MsvcKitError::EnvSetup(format!("Failed to set {}: {}", key, e)))?;
         }
     }
@@ -228,7 +241,7 @@ fn broadcast_environment_change() {
 #[cfg(not(windows))]
 pub fn write_to_registry(_env: &MsvcEnvironment) -> Result<()> {
     Err(MsvcKitError::UnsupportedPlatform(
-        "Registry operations are only supported on Windows".to_string()
+        "Registry operations are only supported on Windows".to_string(),
     ))
 }
 
@@ -253,7 +266,7 @@ mod tests {
     fn test_generate_cmd_script() {
         let mut vars = HashMap::new();
         vars.insert("TEST".to_string(), "value".to_string());
-        
+
         let script = generate_cmd_script(&vars);
         assert!(script.contains("set \"TEST=value\""));
     }
@@ -262,7 +275,7 @@ mod tests {
     fn test_generate_powershell_script() {
         let mut vars = HashMap::new();
         vars.insert("TEST".to_string(), "value".to_string());
-        
+
         let script = generate_powershell_script(&vars);
         assert!(script.contains("$env:TEST"));
     }

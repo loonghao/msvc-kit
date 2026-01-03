@@ -1,8 +1,13 @@
 //! Download functionality for MSVC and Windows SDK components
 
+mod common;
+mod index;
 mod manifest;
 mod msvc;
 mod sdk;
+
+#[cfg(test)]
+mod common_tests;
 
 use std::path::PathBuf;
 
@@ -10,7 +15,8 @@ use crate::error::Result;
 use crate::installer::InstallInfo;
 use crate::version::Architecture;
 
-pub use manifest::{VsManifest, Package, PackagePayload};
+pub use index::{DownloadIndex, DownloadStatus, IndexEntry};
+pub use manifest::{ChannelManifest, Package, PackagePayload, VsManifest};
 pub use msvc::MsvcDownloader;
 pub use sdk::SdkDownloader;
 
