@@ -10,69 +10,43 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: Test (${{ matrix.rust }})
+  ci:
+    name: CI
     runs-on: windows-latest
-    strategy:
-      matrix:
-        rust: [stable, beta]
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup vx
-        uses: loonghao/vx@main
+      - uses: loonghao/rust-actions-toolkit@v2
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          tools: "rust just"
-          cache: "true"
+          command: ci
+          rust-toolchain: stable
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+  ci-beta:
+    name: CI (beta)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: loonghao/rust-actions-toolkit@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Install Rust ${{ matrix.rust }}
-        run: |
-          vx rustup default ${{ matrix.rust }}
-          vx rustup component add rustfmt clippy
-
-      - name: Check formatting
-        run: vx just fmt-check
-
-      - name: Run clippy
-        run: vx just lint
-
-      - name: Build
-        run: vx just build
-
-      - name: Run tests
-        run: vx just test
+          command: ci
+          rust-toolchain: beta
 
   build-release:
     name: Build Release
     runs-on: windows-latest
-    needs: test
+    needs: ci
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup vx
-        uses: loonghao/vx@main
+      - uses: loonghao/rust-actions-toolkit@v2
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          tools: "rust just"
-          cache: "true"
-
-      - name: Build release
-        run: vx just build-release
+          command: build
+          rust-toolchain: stable
+          args: --release
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

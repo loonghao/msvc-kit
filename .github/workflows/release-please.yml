@@ -26,18 +26,21 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   build-and-release:
-    name: Build and Release
+    name: Build (${{ matrix.target }})
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created }}
-    runs-on: windows-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         include:
-          - target: x86_64-pc-windows-msvc
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
             asset_name: msvc-kit-x86_64-windows.exe
-          - target: i686-pc-windows-msvc
+          - os: windows-latest
+            target: i686-pc-windows-msvc
             asset_name: msvc-kit-i686-windows.exe
-          - target: aarch64-pc-windows-msvc
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
             asset_name: msvc-kit-aarch64-windows.exe
 
     permissions:
@@ -46,20 +49,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup vx
-        uses: loonghao/vx@main
+      - uses: loonghao/rust-actions-toolkit@v2
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          tools: "rust"
-          cache: "true"
-
-      - name: Install target
-        run: vx rustup target add ${{ matrix.target }}
-
-      - name: Build
-        run: vx cargo build --release --target ${{ matrix.target }}
+          command: build
+          rust-toolchain: stable
+          target: ${{ matrix.target }}
+          args: --release
 
       - name: Rename artifact
+        shell: bash
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/msvc-kit.exe dist/${{ matrix.asset_name }}
@@ -81,14 +79,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup vx
-        uses: loonghao/vx@main
+      - uses: loonghao/rust-actions-toolkit@v2
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          tools: "rust"
-
-      - name: Publish to crates.io
-        run: vx cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          command: publish
+          rust-toolchain: stable
+          args: --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
         continue-on-error: true
 
   update-winget:
