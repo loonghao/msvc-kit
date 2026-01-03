@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.3](https://github.com/loonghao/msvc-kit/compare/v0.1.2...v0.1.3) (2026-01-03)
+
+
+### Features
+
+* make self_update dependency optional to avoid lzma-sys conflict ([00cf2b9](https://github.com/loonghao/msvc-kit/commit/00cf2b98b2ea77c39b0fb3d0d0a6d6e16f5aa5c8))
+
+
+### Bug Fixes
+
+* **docs:** add type module to package.json for ESM support ([fcc28f5](https://github.com/loonghao/msvc-kit/commit/fcc28f5e20b5e12f818fae7e2ef4ffccbd6067f4))
+* **tests:** use struct initialization instead of default() for ToolPaths ([0d4629d](https://github.com/loonghao/msvc-kit/commit/0d4629d1c98b11071da130393727c84248d69d35))
+
+
+### Documentation
+
+* add missing Chinese documentation files ([a3f217a](https://github.com/loonghao/msvc-kit/commit/a3f217a1a4c212d944ad34dcd20e106221397b3a))
+* add winget and PowerShell script installation methods ([a63e9f6](https://github.com/loonghao/msvc-kit/commit/a63e9f629a23b1a7f83ad9a05b7e329ad7a2f704))
+
 ## [0.1.2](https://github.com/loonghao/msvc-kit/compare/v0.1.1...v0.1.2) (2026-01-03)
 
 
