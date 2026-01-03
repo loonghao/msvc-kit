@@ -155,6 +155,17 @@ enum Commands {
         #[arg(short, long, default_value = "shell")]
         format: String,
     },
+
+    /// Update msvc-kit to the latest version
+    Update {
+        /// Check for updates without installing
+        #[arg(long)]
+        check: bool,
+
+        /// Update to a specific version
+        #[arg(long)]
+        version: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -511,6 +522,83 @@ async fn main() -> anyhow::Result<()> {
                 _ => {
                     for (key, value) in &vars {
                         println!("{}={}", key, value);
+                    }
+                }
+            }
+        }
+
+        Commands::Update { check, version } => {
+            let current_version = env!("CARGO_PKG_VERSION");
+
+            // Determine target based on architecture
+            let target = if cfg!(target_arch = "x86_64") {
+                "x86_64-windows"
+            } else if cfg!(target_arch = "x86") {
+                "i686-windows"
+            } else if cfg!(target_arch = "aarch64") {
+                "aarch64-windows"
+            } else {
+                anyhow::bail!("Unsupported architecture for self-update");
+            };
+
+            let status = self_update::backends::github::Update::configure()
+                .repo_owner("loonghao")
+                .repo_name("msvc-kit")
+                .bin_name("msvc-kit")
+                .target(target)
+                .current_version(current_version)
+                .build()?;
+
+            if check {
+                println!("🔍 Checking for updates...\n");
+                println!("Current version: v{}", current_version);
+
+                match status.get_latest_release() {
+                    Ok(release) => {
+                        let latest = release.version();
+                        if latest != current_version {
+                            println!("Latest version:  v{}", latest);
+                            println!("\n📦 A new version is available!");
+                            println!("Run 'msvc-kit update' to upgrade.");
+                        } else {
+                            println!("\n✅ You are running the latest version.");
+                        }
+                    }
+                    Err(e) => {
+                        println!("⚠️  Failed to check for updates: {}", e);
+                    }
+                }
+            } else {
+                println!("🔄 Updating msvc-kit...\n");
+                println!("Current version: v{}", current_version);
+
+                let update_result = if let Some(target_version) = version {
+                    // Update to specific version
+                    self_update::backends::github::Update::configure()
+                        .repo_owner("loonghao")
+                        .repo_name("msvc-kit")
+                        .bin_name("msvc-kit")
+                        .target(target)
+                        .current_version(current_version)
+                        .target_version_tag(&format!("v{}", target_version))
+                        .build()?
+                        .update()
+                } else {
+                    // Update to latest
+                    status.update()
+                };
+
+                match update_result {
+                    Ok(status) => {
+                        if status.updated() {
+                            println!("\n✅ Updated to v{}!", status.version());
+                            println!("Please restart msvc-kit to use the new version.");
+                        } else {
+                            println!("\n✅ Already running the latest version (v{}).", current_version);
+                        }
+                    }
+                    Err(e) => {
+                        anyhow::bail!("Failed to update: {}", e);
                     }
                 }
             }
