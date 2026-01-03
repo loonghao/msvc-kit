@@ -1450,17 +1450,16 @@ mod error_conversion_tests {
     }
 
     #[test]
-    fn test_error_download_network() {
-        let error = MsvcKitError::DownloadNetwork {
+    fn test_error_hash_mismatch() {
+        let error = MsvcKitError::HashMismatch {
             file: "test.vsix".to_string(),
-            url: "https://example.com/test.vsix".to_string(),
-            source: reqwest::Client::new()
-                .get("invalid://url")
-                .build()
-                .unwrap_err(),
+            expected: "abc123".to_string(),
+            actual: "def456".to_string(),
         };
         let msg = error.to_string();
         assert!(msg.contains("test.vsix"));
+        assert!(msg.contains("abc123"));
+        assert!(msg.contains("def456"));
     }
 
     #[test]
