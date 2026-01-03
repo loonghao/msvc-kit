@@ -620,14 +620,14 @@ mod library_reexports_tests {
     fn test_download_functions_exist() {
         // Verify download functions are accessible from crate root
         // We just check that the function types exist, not that they work
-        let _: fn(&msvc_kit::DownloadOptions) -> _ = |_| {
-            async { Ok::<msvc_kit::InstallInfo, msvc_kit::MsvcKitError>(msvc_kit::InstallInfo {
+        let _: fn(&msvc_kit::DownloadOptions) -> _ = |_| async {
+            Ok::<msvc_kit::InstallInfo, msvc_kit::MsvcKitError>(msvc_kit::InstallInfo {
                 component_type: String::new(),
                 version: String::new(),
                 install_path: std::path::PathBuf::new(),
                 downloaded_files: vec![],
                 arch: msvc_kit::Architecture::X64,
-            }) }
+            })
         };
     }
 

@@ -41,9 +41,23 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 
 ### Installation
 
+- **Via Winget (Recommended)**
+  ```powershell
+  winget install loonghao.msvc-kit
+  ```
+- **Via PowerShell Script**
+  ```powershell
+  irm https://github.com/loonghao/msvc-kit/releases/latest/download/install.ps1 | iex
+  ```
 - **From crates.io**
   ```bash
   cargo install msvc-kit
+  ```
+- **Pre-built Binaries**
+  ```powershell
+  # Download and extract to a directory in your PATH
+  Invoke-WebRequest -Uri "https://github.com/loonghao/msvc-kit/releases/latest/download/msvc-kit-x86_64-pc-windows-msvc.zip" -OutFile msvc-kit.zip
+  Expand-Archive msvc-kit.zip -DestinationPath $env:USERPROFILE\.cargo\bin -Force
   ```
 - **From source**
   ```bash

@@ -11,7 +11,27 @@
 
 ## Installation Methods
 
-### Via Cargo (Recommended)
+### Via Winget (Recommended)
+
+The easiest way to install msvc-kit on Windows:
+
+```powershell
+winget install loonghao.msvc-kit
+```
+
+### Via PowerShell Script
+
+One-liner installation script:
+
+```powershell
+irm https://github.com/loonghao/msvc-kit/releases/latest/download/install.ps1 | iex
+```
+
+This script automatically downloads the latest release and installs it to your PATH.
+
+### Via Cargo
+
+If you have Rust installed:
 
 ```bash
 cargo install msvc-kit
@@ -19,22 +39,22 @@ cargo install msvc-kit
 
 This installs the latest stable version from crates.io.
 
+### Pre-built Binaries
+
+Download from [GitHub Releases](https://github.com/loonghao/msvc-kit/releases):
+
+```powershell
+# PowerShell - Download and extract to cargo bin directory
+Invoke-WebRequest -Uri "https://github.com/loonghao/msvc-kit/releases/latest/download/msvc-kit-x86_64-pc-windows-msvc.zip" -OutFile msvc-kit.zip
+Expand-Archive msvc-kit.zip -DestinationPath $env:USERPROFILE\.cargo\bin -Force
+```
+
 ### From Source
 
 ```bash
 git clone https://github.com/loonghao/msvc-kit.git
 cd msvc-kit
 cargo install --path .
-```
-
-### Pre-built Binaries
-
-Download from [GitHub Releases](https://github.com/loonghao/msvc-kit/releases):
-
-```powershell
-# PowerShell
-Invoke-WebRequest -Uri "https://github.com/loonghao/msvc-kit/releases/latest/download/msvc-kit-x64-windows.zip" -OutFile msvc-kit.zip
-Expand-Archive msvc-kit.zip -DestinationPath $env:USERPROFILE\.cargo\bin
 ```
 
 ## Verify Installation

@@ -39,8 +39,14 @@ features:
 
 ## 快速开始
 
-```bash
-# 安装
+```powershell
+# 通过 Winget 安装（推荐）
+winget install loonghao.msvc-kit
+
+# 或通过 PowerShell 脚本安装
+irm https://github.com/loonghao/msvc-kit/releases/latest/download/install.ps1 | iex
+
+# 或通过 Cargo 安装
 cargo install msvc-kit
 
 # 下载最新的 MSVC + Windows SDK
