@@ -71,7 +71,7 @@ jobs:
       pr-run-id: ${{ steps.check.outputs.run_id }}
       source-sha: ${{ steps.check.outputs.source_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Find PR workflow run for this commit
         id: check
@@ -142,7 +142,7 @@ jobs:
           - msvc-kit-aarch64-windows
     steps:
       - name: Download artifact from PR workflow
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           path: dist/
@@ -151,7 +151,7 @@ jobs:
         continue-on-error: true
 
       - name: Re-upload artifact for release
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           path: dist/
@@ -181,7 +181,7 @@ jobs:
           - target: aarch64-pc-windows-msvc
             artifact-name: msvc-kit-aarch64-windows
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -197,7 +197,7 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact-name }}
           path: target/${{ matrix.target }}/release/msvc-kit.exe
@@ -213,7 +213,7 @@ jobs:
       ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') ||
        (needs.check-tag.result == 'success' && needs.check-tag.outputs.is_tag == 'true'))
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -252,7 +252,7 @@ jobs:
       actions: read
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -291,7 +291,7 @@ jobs:
             {{__unknown__}}
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           pattern: msvc-kit-*
           path: release-artifacts
@@ -373,7 +373,7 @@ jobs:
       always() &&
       needs.github-release.result == 'success'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Determine version
         id: version

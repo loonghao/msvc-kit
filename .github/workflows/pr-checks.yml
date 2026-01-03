@@ -37,7 +37,7 @@ jobs:
           - target: aarch64-pc-windows-msvc
             artifact-name: msvc-kit-aarch64-windows
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -53,7 +53,7 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact-name }}
           path: target/${{ matrix.target }}/release/msvc-kit.exe
@@ -65,7 +65,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -87,7 +87,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -107,7 +107,7 @@ jobs:
     timeout-minutes: 20
     needs: [quick-checks]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -121,11 +121,34 @@ jobs:
       - name: Run doc tests
         run: cargo test --doc
 
+  # Documentation build test
+  docs-build:
+    name: Docs Build Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: 'npm'
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Install dependencies
+        working-directory: docs
+        run: npm ci
+
+      - name: Build documentation
+        working-directory: docs
+        run: npm run build
+
   # Final gate
   pr-ready:
     name: PR Ready
     runs-on: ubuntu-latest
-    needs: [pre-build, quick-checks, clippy, rust-tests]
+    needs: [pre-build, quick-checks, clippy, rust-tests, docs-build]
     if: always()
     steps:
       - name: Check results
@@ -134,6 +157,7 @@ jobs:
           QUICK_CHECKS_RESULT: ${{ needs.quick-checks.result }}
           CLIPPY_RESULT: ${{ needs.clippy.result }}
           RUST_TESTS_RESULT: ${{ needs.rust-tests.result }}
+          DOCS_BUILD_RESULT: ${{ needs.docs-build.result }}
         run: |
           echo "## PR Check Results" >> "$GITHUB_STEP_SUMMARY"
 
@@ -156,6 +180,7 @@ jobs:
           check_result "quick-checks" "$QUICK_CHECKS_RESULT"
           check_result "clippy" "$CLIPPY_RESULT"
           check_result "rust-tests" "$RUST_TESTS_RESULT"
+          check_result "docs-build" "$DOCS_BUILD_RESULT"
 
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
