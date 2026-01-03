@@ -284,6 +284,7 @@ async fn main() -> anyhow::Result<()> {
             arch,
             script,
             shell,
+            portable_root,
             persistent,
         } => {
             let install_dir = dir.unwrap_or_else(|| config.install_dir.clone());

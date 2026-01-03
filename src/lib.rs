@@ -66,8 +66,8 @@ pub use downloader::{
     FileSystemCacheManager, ProgressHandler,
 };
 pub use env::{
-    generate_activation_script, get_env_vars, setup_environment, MsvcEnvironment, ShellType,
-    ToolPaths,
+    generate_activation_script, generate_activation_script_with_vars, get_env_vars,
+    setup_environment, MsvcEnvironment, ShellType, ToolPaths,
 };
 pub use error::{MsvcKitError, Result};
 pub use installer::InstallInfo;
