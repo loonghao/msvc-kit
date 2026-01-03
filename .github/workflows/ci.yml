@@ -16,10 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: loonghao/rust-actions-toolkit@v2
+      - uses: loonghao/rust-actions-toolkit@v4
         with:
           command: ci
-          rust-toolchain: stable
 
   ci-beta:
     name: CI (beta)
@@ -28,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: loonghao/rust-actions-toolkit@v2
+      - uses: loonghao/rust-actions-toolkit@v4
         with:
           command: ci
           rust-toolchain: beta
@@ -42,14 +41,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: loonghao/rust-actions-toolkit@v2
+      - uses: loonghao/rust-actions-toolkit@v4
         with:
-          command: build
-          rust-toolchain: stable
-          args: --release
+          command: release
+          target: x86_64-pc-windows-msvc
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: msvc-kit-windows
-          path: target/release/msvc-kit.exe
+          path: target/x86_64-pc-windows-msvc/release/msvc-kit.exe
