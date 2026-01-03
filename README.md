@@ -155,14 +155,14 @@ use msvc_kit::version::Architecture;
 
 #[tokio::main]
 async fn main() -> msvc_kit::Result<()> {
-    let options = DownloadOptions {
-        target_dir: std::path::PathBuf::from("C:/msvc-kit"),
-        arch: Architecture::X64,
-        host_arch: Some(Architecture::X64),
-        verify_hashes: true,
-        parallel_downloads: 4,
-        ..Default::default()
-    };
+    // Use builder pattern for configuration
+    let options = DownloadOptions::builder()
+        .target_dir("C:/msvc-kit")
+        .arch(Architecture::X64)
+        .host_arch(Architecture::X64)
+        .verify_hashes(true)
+        .parallel_downloads(4)
+        .build();
 
     let msvc = download_msvc(&options).await?;
     let sdk = download_sdk(&options).await?;
@@ -171,20 +171,20 @@ async fn main() -> msvc_kit::Result<()> {
     // Get installation paths
     println!("MSVC install path: {:?}", msvc.install_path);
     println!("SDK install path: {:?}", sdk.install_path);
-    
+
     // Get directory paths
     println!("MSVC bin dir: {:?}", msvc.bin_dir());
     println!("MSVC include dir: {:?}", msvc.include_dir());
     println!("MSVC lib dir: {:?}", msvc.lib_dir());
-    
+
     // Get tool paths
     println!("cl.exe: {:?}", env.cl_exe_path());
     println!("link.exe: {:?}", env.link_exe_path());
-    
+
     // Get environment variable strings
     println!("INCLUDE: {}", env.include_path_string());
     println!("LIB: {}", env.lib_path_string());
-    
+
     // Export to JSON (for external tools)
     let json = env.to_json();
     std::fs::write("msvc-env.json", serde_json::to_string_pretty(&json)?)?;
