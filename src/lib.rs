@@ -44,7 +44,10 @@ pub mod version;
 // Re-export main types and functions
 pub use config::{load_config, save_config, MsvcKitConfig};
 pub use downloader::{download_msvc, download_sdk, DownloadOptions};
-pub use env::{generate_activation_script, get_env_vars, setup_environment, MsvcEnvironment};
+pub use env::{
+    generate_activation_script, get_env_vars, setup_environment, MsvcEnvironment, ShellType,
+    ToolPaths,
+};
 pub use error::{MsvcKitError, Result};
 pub use installer::InstallInfo;
 pub use version::{Architecture, MsvcVersion, SdkVersion};

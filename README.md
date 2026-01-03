@@ -168,9 +168,26 @@ async fn main() -> msvc_kit::Result<()> {
     let sdk = download_sdk(&options).await?;
     let env = setup_environment(&msvc, Some(&sdk))?;
 
-    // Environment variables are now set
-    println!("VCINSTALLDIR: {:?}", env.vc_install_dir);
-    println!("WindowsSdkDir: {:?}", env.windows_sdk_dir);
+    // Get installation paths
+    println!("MSVC install path: {:?}", msvc.install_path);
+    println!("SDK install path: {:?}", sdk.install_path);
+    
+    // Get directory paths
+    println!("MSVC bin dir: {:?}", msvc.bin_dir());
+    println!("MSVC include dir: {:?}", msvc.include_dir());
+    println!("MSVC lib dir: {:?}", msvc.lib_dir());
+    
+    // Get tool paths
+    println!("cl.exe: {:?}", env.cl_exe_path());
+    println!("link.exe: {:?}", env.link_exe_path());
+    
+    // Get environment variable strings
+    println!("INCLUDE: {}", env.include_path_string());
+    println!("LIB: {}", env.lib_path_string());
+    
+    // Export to JSON (for external tools)
+    let json = env.to_json();
+    std::fs::write("msvc-env.json", serde_json::to_string_pretty(&json)?)?;
 
     Ok(())
 }
