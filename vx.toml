@@ -1,0 +1,23 @@
+# VX Project Configuration
+# This file defines the tools and versions required for this project.
+# Run 'vx setup' to install all required tools.
+# Run 'vx dev' to enter the development environment.
+# Project: msvc-kit
+
+[tools]
+rust = "latest"
+
+[settings]
+# Automatically install missing tools when entering dev environment
+auto_install = true
+# Cache duration for version checks
+cache_duration = "7d"
+
+[scripts]
+build = "cargo build"
+build-release = "cargo build --release"
+check = "cargo check"
+doc = "cargo doc"
+format = "cargo fmt"
+lint = "cargo clippy"
+test = "cargo test"

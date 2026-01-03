@@ -211,6 +211,118 @@ impl MsvcEnvironment {
             .map(|p| p.join("link.exe"))
             .find(|p| p.exists())
     }
+
+    /// Get the path to lib.exe (static library manager)
+    pub fn lib_exe_path(&self) -> Option<PathBuf> {
+        self.bin_paths
+            .iter()
+            .map(|p| p.join("lib.exe"))
+            .find(|p| p.exists())
+    }
+
+    /// Get the path to ml64.exe (MASM assembler)
+    pub fn ml64_exe_path(&self) -> Option<PathBuf> {
+        self.bin_paths
+            .iter()
+            .map(|p| p.join("ml64.exe"))
+            .find(|p| p.exists())
+    }
+
+    /// Get the path to nmake.exe
+    pub fn nmake_exe_path(&self) -> Option<PathBuf> {
+        self.bin_paths
+            .iter()
+            .map(|p| p.join("nmake.exe"))
+            .find(|p| p.exists())
+    }
+
+    /// Get the path to rc.exe (resource compiler)
+    pub fn rc_exe_path(&self) -> Option<PathBuf> {
+        self.bin_paths
+            .iter()
+            .map(|p| p.join("rc.exe"))
+            .find(|p| p.exists())
+    }
+
+    /// Get all tool paths as a struct for easy access
+    pub fn tool_paths(&self) -> ToolPaths {
+        ToolPaths {
+            cl: self.cl_exe_path(),
+            link: self.link_exe_path(),
+            lib: self.lib_exe_path(),
+            ml64: self.ml64_exe_path(),
+            nmake: self.nmake_exe_path(),
+            rc: self.rc_exe_path(),
+        }
+    }
+
+    /// Get the INCLUDE environment variable value
+    pub fn include_path_string(&self) -> String {
+        self.include_paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    /// Get the LIB environment variable value
+    pub fn lib_path_string(&self) -> String {
+        self.lib_paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    /// Get the PATH additions
+    pub fn bin_path_string(&self) -> String {
+        self.bin_paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    /// Export environment to JSON for external tools
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "vc_install_dir": self.vc_install_dir,
+            "vc_tools_install_dir": self.vc_tools_install_dir,
+            "vc_tools_version": self.vc_tools_version,
+            "windows_sdk_dir": self.windows_sdk_dir,
+            "windows_sdk_version": self.windows_sdk_version,
+            "include_paths": self.include_paths,
+            "lib_paths": self.lib_paths,
+            "bin_paths": self.bin_paths,
+            "arch": self.arch.to_string(),
+            "host_arch": self.host_arch.to_string(),
+            "tools": {
+                "cl": self.cl_exe_path(),
+                "link": self.link_exe_path(),
+                "lib": self.lib_exe_path(),
+                "ml64": self.ml64_exe_path(),
+                "nmake": self.nmake_exe_path(),
+                "rc": self.rc_exe_path(),
+            }
+        })
+    }
+}
+
+/// Collection of tool executable paths
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolPaths {
+    /// Path to cl.exe (C/C++ compiler)
+    pub cl: Option<PathBuf>,
+    /// Path to link.exe (linker)
+    pub link: Option<PathBuf>,
+    /// Path to lib.exe (static library manager)
+    pub lib: Option<PathBuf>,
+    /// Path to ml64.exe (MASM assembler)
+    pub ml64: Option<PathBuf>,
+    /// Path to nmake.exe (make utility)
+    pub nmake: Option<PathBuf>,
+    /// Path to rc.exe (resource compiler)
+    pub rc: Option<PathBuf>,
 }
 
 /// Get environment variables as a HashMap

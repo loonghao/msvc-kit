@@ -168,9 +168,26 @@ async fn main() -> msvc_kit::Result<()> {
     let sdk = download_sdk(&options).await?;
     let env = setup_environment(&msvc, Some(&sdk))?;
 
-    // 环境变量已设置
-    println!("VCINSTALLDIR: {:?}", env.vc_install_dir);
-    println!("WindowsSdkDir: {:?}", env.windows_sdk_dir);
+    // 获取安装路径
+    println!("MSVC 安装路径: {:?}", msvc.install_path);
+    println!("SDK 安装路径: {:?}", sdk.install_path);
+    
+    // 获取目录路径
+    println!("MSVC bin 目录: {:?}", msvc.bin_dir());
+    println!("MSVC include 目录: {:?}", msvc.include_dir());
+    println!("MSVC lib 目录: {:?}", msvc.lib_dir());
+    
+    // 获取工具路径
+    println!("cl.exe: {:?}", env.cl_exe_path());
+    println!("link.exe: {:?}", env.link_exe_path());
+    
+    // 获取环境变量字符串
+    println!("INCLUDE: {}", env.include_path_string());
+    println!("LIB: {}", env.lib_path_string());
+    
+    // 导出为 JSON（用于外部工具）
+    let json = env.to_json();
+    std::fs::write("msvc-env.json", serde_json::to_string_pretty(&json)?)?;
 
     Ok(())
 }

@@ -131,6 +131,61 @@ impl InstallInfo {
             .map(|m| m.len())
             .sum()
     }
+
+    /// Get the bin directory for this component
+    pub fn bin_dir(&self) -> PathBuf {
+        match self.component_type.as_str() {
+            "msvc" => {
+                let host_dir = self.arch.msvc_host_dir();
+                let target_dir = self.arch.msvc_target_dir();
+                self.install_path.join("bin").join(host_dir).join(target_dir)
+            }
+            "sdk" => {
+                self.install_path
+                    .join("bin")
+                    .join(&self.version)
+                    .join(self.arch.to_string())
+            }
+            _ => self.install_path.join("bin"),
+        }
+    }
+
+    /// Get the include directory for this component
+    pub fn include_dir(&self) -> PathBuf {
+        match self.component_type.as_str() {
+            "msvc" => self.install_path.join("include"),
+            "sdk" => self.install_path.join("Include").join(&self.version),
+            _ => self.install_path.join("include"),
+        }
+    }
+
+    /// Get the lib directory for this component
+    pub fn lib_dir(&self) -> PathBuf {
+        match self.component_type.as_str() {
+            "msvc" => self.install_path.join("lib").join(self.arch.to_string()),
+            "sdk" => self.install_path
+                .join("Lib")
+                .join(&self.version)
+                .join("um")
+                .join(self.arch.to_string()),
+            _ => self.install_path.join("lib"),
+        }
+    }
+
+    /// Export install info to JSON
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "component_type": self.component_type,
+            "version": self.version,
+            "install_path": self.install_path,
+            "bin_dir": self.bin_dir(),
+            "include_dir": self.include_dir(),
+            "lib_dir": self.lib_dir(),
+            "arch": self.arch.to_string(),
+            "is_valid": self.is_valid(),
+            "total_size": self.total_size(),
+        })
+    }
 }
 
 /// Install MSVC components from downloaded files
