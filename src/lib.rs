@@ -13,20 +13,19 @@
 //! - Support version selection (defaults to latest)
 //! - Generate activation scripts for shell environments
 //!
-//! ## Library Usage
+//! ## Quick Start
 //!
 //! ```rust,no_run
 //! use msvc_kit::{download_msvc, DownloadOptions, Architecture};
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     let options = DownloadOptions {
-//!         msvc_version: None, // Use latest
-//!         sdk_version: None,  // Use latest
-//!         target_dir: std::path::PathBuf::from("C:\\msvc-kit"),
-//!         arch: Architecture::X64,
-//!         ..Default::default()
-//!     };
+//!     // Use builder pattern for configuration
+//!     let options = DownloadOptions::builder()
+//!         .target_dir("C:/msvc-kit")
+//!         .arch(Architecture::X64)
+//!         .parallel_downloads(8)
+//!         .build();
 //!
 //!     let install_info = download_msvc(&options).await?;
 //!     println!("Installed MSVC to: {:?}", install_info.install_path);
@@ -34,15 +33,20 @@
 //! }
 //! ```
 //!
-//! ## Builder Pattern (Recommended for vx integration)
+//! ## Advanced Configuration
 //!
 //! ```rust,no_run
 //! use msvc_kit::{DownloadOptions, Architecture};
 //!
 //! let options = DownloadOptions::builder()
+//!     .msvc_version("14.44")           // Specific MSVC version
+//!     .sdk_version("10.0.26100.0")     // Specific SDK version
 //!     .target_dir("C:/msvc-kit")
 //!     .arch(Architecture::X64)
+//!     .host_arch(Architecture::X64)    // For cross-compilation
+//!     .verify_hashes(true)
 //!     .parallel_downloads(8)
+//!     .dry_run(false)                  // Set to true for preview mode
 //!     .build();
 //! ```
 
