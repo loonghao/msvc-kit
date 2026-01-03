@@ -16,8 +16,6 @@ pub enum DownloadStatus {
     Partial,
 }
 
-
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexEntry {
     pub file_name: String,
@@ -40,8 +38,15 @@ pub struct IndexEntry {
 /// redb-based download index (single-file, crash-safe)
 pub struct DownloadIndex {
     db: Arc<Database>,
-    #[allow(dead_code)]
+    /// Path to the database file (used for debugging and diagnostics)
     path: PathBuf,
+}
+
+impl DownloadIndex {
+    /// Get the path to the database file
+    pub fn db_path(&self) -> &Path {
+        &self.path
+    }
 }
 
 impl DownloadIndex {
@@ -72,7 +77,11 @@ impl DownloadIndex {
                         Ok(db)
                     }
                     Err(e) => {
-                        tracing::warn!("Index DB open failed, backing up and recreating: {:?}, err={}", db_path_clone, e);
+                        tracing::warn!(
+                            "Index DB open failed, backing up and recreating: {:?}, err={}",
+                            db_path_clone,
+                            e
+                        );
 
                         // If corrupted, back it up and recreate
                         let mut backup = db_path_clone.clone();
@@ -90,13 +99,9 @@ impl DownloadIndex {
                     .create(db_path_str.as_str())
                     .map_err(|db_err| MsvcKitError::Database(db_err.to_string()))
             }
-
         })
         .await
         .map_err(|je| MsvcKitError::Database(je.to_string()))??;
-
-
-
 
         // Ensure table exists
         let db_arc = Arc::new(db);
@@ -124,10 +129,15 @@ impl DownloadIndex {
                 .begin_read()
                 .map_err(|e| MsvcKitError::Database(e.to_string()))?;
             if let Ok(table) = tx.open_table(TABLE) {
-                let count = table.len().map_err(|e| MsvcKitError::Database(e.to_string()))?;
+                let count = table
+                    .len()
+                    .map_err(|e| MsvcKitError::Database(e.to_string()))?;
                 let mut with_hash = 0u64;
                 let mut without_hash = 0u64;
-                for item in table.iter().map_err(|e| MsvcKitError::Database(e.to_string()))? {
+                for item in table
+                    .iter()
+                    .map_err(|e| MsvcKitError::Database(e.to_string()))?
+                {
                     let (_, val) = item.map_err(|e| MsvcKitError::Database(e.to_string()))?;
                     let entry: IndexEntry = bincode::deserialize(val.value())?;
                     if entry.computed_hash.is_some() {
@@ -151,13 +161,11 @@ impl DownloadIndex {
         .await
         .map_err(|je| MsvcKitError::Database(je.to_string()))?;
 
-
         Ok(Self {
             db: db_arc,
             path: db_path,
         })
     }
-
 
     pub async fn get_entry(&self, file_name: &str) -> Result<Option<IndexEntry>> {
         let db = self.db.clone();
@@ -170,13 +178,10 @@ impl DownloadIndex {
                 Ok(t) => t,
                 Err(_) => return Ok(None),
             };
-            let maybe_bytes = match table
+            let maybe_bytes = table
                 .get(key.as_str())
                 .map_err(|e| MsvcKitError::Database(e.to_string()))?
-            {
-                Some(value) => Some(value.value().to_vec()),
-                None => None,
-            };
+                .map(|value| value.value().to_vec());
             drop(table);
             drop(tx);
             if let Some(bytes) = maybe_bytes {
@@ -307,12 +312,16 @@ impl DownloadIndex {
         let db = self.db.clone();
         let payload = payload.clone();
         tokio::spawn(async move {
-            let mut idx = DownloadIndex { db, path: PathBuf::new() };
-            let _ = idx.mark_completed(&payload, local_path, computed_hash).await;
+            let mut idx = DownloadIndex {
+                db,
+                path: PathBuf::new(),
+            };
+            let _ = idx
+                .mark_completed(&payload, local_path, computed_hash)
+                .await;
         });
         true
     }
-
 
     pub async fn mark_partial(
         &mut self,

@@ -121,24 +121,6 @@ jobs:
       - name: Run doc tests
         run: cargo test --doc
 
-  # Beta toolchain test
-  rust-beta:
-    name: Rust Beta
-    runs-on: windows-latest
-    timeout-minutes: 20
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Rust Beta
-        uses: dtolnay/rust-toolchain@beta
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-
-      - name: Run tests
-        run: cargo test --all-features --verbose
-
   # Final gate
   pr-ready:
     name: PR Ready

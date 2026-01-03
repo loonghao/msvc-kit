@@ -1,6 +1,12 @@
 //! Windows SDK download functionality
 
-use super::{common::CommonDownloader, DownloadOptions, VsManifest};
+use async_trait::async_trait;
+
+use super::http::create_http_client;
+use super::traits::{ComponentDownloader, ComponentType};
+use super::{
+    common::CommonDownloader, DownloadOptions, DownloadPreview, PackagePreview, VsManifest,
+};
 use crate::error::{MsvcKitError, Result};
 use crate::installer::{extract_packages_with_progress, InstallInfo};
 
@@ -12,13 +18,88 @@ pub struct SdkDownloader {
 impl SdkDownloader {
     /// Create a new SDK downloader
     pub fn new(options: DownloadOptions) -> Self {
-        Self {
-            downloader: CommonDownloader::new(options),
+        let client = options
+            .http_client
+            .clone()
+            .unwrap_or_else(create_http_client);
+        let progress_handler = options.progress_handler.clone();
+
+        let mut downloader = CommonDownloader::with_client(options, client);
+        if let Some(handler) = progress_handler {
+            downloader = downloader.with_progress_handler(handler);
         }
+
+        Self { downloader }
     }
 
-    /// Download Windows SDK components
-    pub async fn download(&self) -> Result<InstallInfo> {
+    /// Preview what would be downloaded (dry-run mode)
+    pub async fn preview(&self) -> Result<DownloadPreview> {
+        let manifest = VsManifest::fetch().await?;
+
+        let available_versions = manifest.list_sdk_versions();
+        let version = self
+            .downloader
+            .options
+            .sdk_version
+            .clone()
+            .or_else(|| manifest.get_latest_sdk_version())
+            .ok_or_else(|| {
+                MsvcKitError::VersionNotFound(format!(
+                    "No Windows SDK version found. Available: {:?}",
+                    available_versions
+                ))
+            })?;
+
+        let target_arch = self.downloader.options.arch.to_string();
+        let packages = manifest.find_sdk_packages(&version, &target_arch);
+
+        let file_count: usize = packages.iter().map(|p| p.payloads.len()).sum();
+        let total_size: u64 = packages.iter().map(|p| p.total_size).sum();
+
+        let package_previews: Vec<PackagePreview> = packages
+            .iter()
+            .map(|p| PackagePreview {
+                id: p.id.clone(),
+                version: p.version.clone(),
+                file_count: p.payloads.len(),
+                size: p.total_size,
+            })
+            .collect();
+
+        Ok(DownloadPreview {
+            component: "Windows SDK".to_string(),
+            version,
+            package_count: packages.len(),
+            file_count,
+            total_size,
+            packages: package_previews,
+        })
+    }
+
+    /// Internal download implementation
+    async fn download_impl(&self) -> Result<InstallInfo> {
+        // Check for dry-run mode
+        if self.downloader.options.dry_run {
+            let preview = self.preview().await?;
+            tracing::info!("Dry-run mode: {}", preview.format());
+            for pkg in &preview.packages {
+                tracing::info!(
+                    "  - {} v{} ({} files, {})",
+                    pkg.id,
+                    pkg.version,
+                    pkg.file_count,
+                    humansize::format_size(pkg.size, humansize::BINARY)
+                );
+            }
+            return Ok(InstallInfo {
+                component_type: "sdk".to_string(),
+                version: preview.version,
+                install_path: self.downloader.options.target_dir.clone(),
+                downloaded_files: vec![],
+                arch: self.downloader.options.arch,
+            });
+        }
+
         let manifest = VsManifest::fetch().await?;
 
         // List available versions for debugging
@@ -81,7 +162,9 @@ impl SdkDownloader {
 
         tracing::info!(
             "Download directory: {:?} (version={}, target={})",
-            download_dir, version, target_arch
+            download_dir,
+            version,
+            target_arch
         );
 
         // Download all packages
@@ -106,5 +189,21 @@ impl SdkDownloader {
             downloaded_files,
             arch: self.downloader.options.arch,
         })
+    }
+
+    /// Download Windows SDK components
+    pub async fn download(&self) -> Result<InstallInfo> {
+        self.download_impl().await
+    }
+}
+
+#[async_trait]
+impl ComponentDownloader for SdkDownloader {
+    async fn download(&self) -> Result<InstallInfo> {
+        self.download_impl().await
+    }
+
+    fn component_type(&self) -> ComponentType {
+        ComponentType::Sdk
     }
 }

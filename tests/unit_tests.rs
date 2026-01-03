@@ -101,7 +101,7 @@ mod architecture_tests {
     #[test]
     fn test_architecture_clone_eq() {
         let arch = Architecture::X64;
-        let cloned = arch.clone();
+        let cloned = arch;
         assert_eq!(arch, cloned);
     }
 
@@ -200,15 +200,15 @@ mod download_options_tests {
 
     #[test]
     fn test_download_options_custom() {
-        let options = DownloadOptions {
-            msvc_version: Some("14.44".to_string()),
-            sdk_version: Some("10.0.26100.0".to_string()),
-            target_dir: PathBuf::from("C:/custom"),
-            arch: Architecture::Arm64,
-            host_arch: Some(Architecture::X64),
-            verify_hashes: false,
-            parallel_downloads: 16,
-        };
+        let options = DownloadOptions::builder()
+            .msvc_version("14.44")
+            .sdk_version("10.0.26100.0")
+            .target_dir("C:/custom")
+            .arch(Architecture::Arm64)
+            .host_arch(Architecture::X64)
+            .verify_hashes(false)
+            .parallel_downloads(16)
+            .build();
 
         assert_eq!(options.msvc_version, Some("14.44".to_string()));
         assert_eq!(options.sdk_version, Some("10.0.26100.0".to_string()));
@@ -229,15 +229,8 @@ mod version_tests {
 
     #[test]
     fn test_msvc_version_display() {
-        let version = MsvcVersion {
-            version: "14.44.33807".to_string(),
-            display_name: "MSVC 14.44".to_string(),
-            is_latest: true,
-            install_path: None,
-            download_url: None,
-            size: None,
-            sha256: None,
-        };
+        let mut version = MsvcVersion::new("14.44.33807", "MSVC 14.44");
+        version.is_latest = true;
 
         let display = format!("{}", version);
         assert!(display.contains("14.44.33807"));
@@ -246,30 +239,15 @@ mod version_tests {
 
     #[test]
     fn test_msvc_version_is_installed() {
-        let version = MsvcVersion {
-            version: "14.44.33807".to_string(),
-            display_name: "MSVC 14.44".to_string(),
-            is_latest: false,
-            install_path: None,
-            download_url: None,
-            size: None,
-            sha256: None,
-        };
+        let version = MsvcVersion::new("14.44.33807", "MSVC 14.44");
 
         assert!(!version.is_installed());
     }
 
     #[test]
     fn test_sdk_version_display() {
-        let version = SdkVersion {
-            version: "10.0.26100.0".to_string(),
-            display_name: "Windows SDK 10.0.26100.0".to_string(),
-            is_latest: true,
-            install_path: None,
-            download_url: None,
-            size: None,
-            sha256: None,
-        };
+        let mut version = SdkVersion::new("10.0.26100.0", "Windows SDK 10.0.26100.0");
+        version.is_latest = true;
 
         let display = format!("{}", version);
         assert!(display.contains("10.0.26100.0"));
@@ -278,15 +256,7 @@ mod version_tests {
 
     #[test]
     fn test_sdk_version_is_installed() {
-        let version = SdkVersion {
-            version: "10.0.26100.0".to_string(),
-            display_name: "Windows SDK".to_string(),
-            is_latest: false,
-            install_path: None,
-            download_url: None,
-            size: None,
-            sha256: None,
-        };
+        let version = SdkVersion::new("10.0.26100.0", "Windows SDK");
 
         assert!(!version.is_installed());
     }
@@ -294,14 +264,14 @@ mod version_tests {
     #[test]
     fn test_list_installed_msvc_empty_dir() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let versions = msvc_kit::version::list_installed_msvc(&temp_dir.path().to_path_buf());
+        let versions = msvc_kit::version::list_installed_msvc(temp_dir.path());
         assert!(versions.is_empty());
     }
 
     #[test]
     fn test_list_installed_sdk_empty_dir() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let versions = msvc_kit::version::list_installed_sdk(&temp_dir.path().to_path_buf());
+        let versions = msvc_kit::version::list_installed_sdk(temp_dir.path());
         assert!(versions.is_empty());
     }
 
@@ -314,7 +284,7 @@ mod version_tests {
         std::fs::create_dir_all(msvc_dir.join("14.44.33807")).unwrap();
         std::fs::create_dir_all(msvc_dir.join("14.43.34808")).unwrap();
 
-        let versions = msvc_kit::version::list_installed_msvc(&temp_dir.path().to_path_buf());
+        let versions = msvc_kit::version::list_installed_msvc(temp_dir.path());
         assert_eq!(versions.len(), 2);
 
         // Should be sorted descending, so 14.44 should be first and marked as latest
@@ -326,13 +296,17 @@ mod version_tests {
     #[test]
     fn test_list_installed_sdk_with_versions() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let sdk_dir = temp_dir.path().join("Windows Kits").join("10").join("Include");
+        let sdk_dir = temp_dir
+            .path()
+            .join("Windows Kits")
+            .join("10")
+            .join("Include");
 
         // Create fake version directories
         std::fs::create_dir_all(sdk_dir.join("10.0.26100.0")).unwrap();
         std::fs::create_dir_all(sdk_dir.join("10.0.22621.0")).unwrap();
 
-        let versions = msvc_kit::version::list_installed_sdk(&temp_dir.path().to_path_buf());
+        let versions = msvc_kit::version::list_installed_sdk(temp_dir.path());
         assert_eq!(versions.len(), 2);
 
         // Should be sorted descending
@@ -491,7 +465,8 @@ mod windows_env_tests {
         let vars = get_env_vars(&env);
 
         assert_eq!(vars.get("VCToolsVersion").unwrap(), "14.44.33807");
-        assert_eq!(vars.get("WindowsSDKVersion").unwrap(), "10.0.26100.0");
+        // WindowsSDKVersion includes trailing backslash per Windows SDK standard
+        assert_eq!(vars.get("WindowsSDKVersion").unwrap(), "10.0.26100.0\\");
     }
 
     #[test]
@@ -550,7 +525,7 @@ mod shell_script_tests {
     #[test]
     fn test_shell_type_clone_eq() {
         let shell = ShellType::PowerShell;
-        let cloned = shell.clone();
+        let cloned = shell;
         assert_eq!(shell, cloned);
     }
 }

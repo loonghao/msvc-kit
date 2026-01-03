@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use msvc_kit::config::MsvcKitConfig;
 use msvc_kit::downloader::{DownloadIndex, DownloadStatus, IndexEntry};
-use msvc_kit::env::{generate_activation_script, ShellType, MsvcEnvironment};
+use msvc_kit::env::{generate_activation_script, MsvcEnvironment, ShellType};
 use msvc_kit::installer::InstallInfo;
 use msvc_kit::version::Architecture;
 use msvc_kit::DownloadOptions;
@@ -298,7 +298,6 @@ mod config_persistence_tests {
 // ============================================================================
 
 mod extraction_tests {
-    use super::*;
     use std::io::Write;
 
     #[tokio::test]
@@ -379,16 +378,15 @@ mod download_options_builder_tests {
             cache_dir: None,
         };
 
-        // Options can override config
-        let options = DownloadOptions {
-            msvc_version: config.default_msvc_version.clone(),
-            sdk_version: config.default_sdk_version.clone(),
-            target_dir: config.install_dir.clone(),
-            arch: config.default_arch,
-            host_arch: None,
-            verify_hashes: config.verify_hashes,
-            parallel_downloads: config.parallel_downloads,
-        };
+        // Options can override config - use builder pattern
+        let mut options = DownloadOptions::builder()
+            .target_dir(&config.install_dir)
+            .arch(config.default_arch)
+            .verify_hashes(config.verify_hashes)
+            .parallel_downloads(config.parallel_downloads)
+            .build();
+        options.msvc_version = config.default_msvc_version.clone();
+        options.sdk_version = config.default_sdk_version.clone();
 
         assert_eq!(options.msvc_version, Some("14.43".to_string()));
         assert_eq!(options.sdk_version, Some("10.0.22621.0".to_string()));
@@ -401,16 +399,15 @@ mod download_options_builder_tests {
     fn test_download_options_override_config() {
         let config = MsvcKitConfig::default();
 
-        // Override specific fields
-        let options = DownloadOptions {
-            msvc_version: Some("14.44".to_string()), // Override
-            sdk_version: config.default_sdk_version.clone(),
-            target_dir: PathBuf::from("C:/custom"), // Override
-            arch: Architecture::Arm64,              // Override
-            host_arch: Some(Architecture::X64),
-            verify_hashes: config.verify_hashes,
-            parallel_downloads: 8, // Override
-        };
+        // Override specific fields - use builder pattern
+        let options = DownloadOptions::builder()
+            .msvc_version("14.44")
+            .target_dir("C:/custom")
+            .arch(Architecture::Arm64)
+            .host_arch(Architecture::X64)
+            .verify_hashes(config.verify_hashes)
+            .parallel_downloads(8)
+            .build();
 
         assert_eq!(options.msvc_version, Some("14.44".to_string()));
         assert_eq!(options.target_dir, PathBuf::from("C:/custom"));
@@ -484,7 +481,11 @@ mod network_tests {
 
         // Download MSVC
         let msvc_result = msvc_kit::download_msvc(&options).await;
-        assert!(msvc_result.is_ok(), "MSVC download failed: {:?}", msvc_result);
+        assert!(
+            msvc_result.is_ok(),
+            "MSVC download failed: {:?}",
+            msvc_result
+        );
 
         let msvc_info = msvc_result.unwrap();
         assert_eq!(msvc_info.component_type, "msvc");
@@ -500,7 +501,11 @@ mod network_tests {
 
         // Setup environment
         let env_result = msvc_kit::setup_environment(&msvc_info, Some(&sdk_info));
-        assert!(env_result.is_ok(), "Environment setup failed: {:?}", env_result);
+        assert!(
+            env_result.is_ok(),
+            "Environment setup failed: {:?}",
+            env_result
+        );
 
         let env = env_result.unwrap();
         assert!(!env.vc_tools_version.is_empty());
@@ -549,10 +554,7 @@ mod concurrency_tests {
 
         // Verify all entries
         for i in 0..10 {
-            let entry = index
-                .get_entry(&format!("file_{}.vsix", i))
-                .await
-                .unwrap();
+            let entry = index.get_entry(&format!("file_{}.vsix", i)).await.unwrap();
             assert!(entry.is_some());
         }
     }

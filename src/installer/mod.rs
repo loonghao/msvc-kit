@@ -2,19 +2,18 @@
 
 mod extractor;
 
-use indicatif::{ProgressBar, ProgressStyle, ProgressDrawTarget};
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::constants::progress as progress_const;
 use crate::error::Result;
 use crate::version::Architecture;
 
-pub use extractor::{extract_cab, extract_msi, extract_vsix};
+pub use extractor::{extract_cab, extract_msi, extract_vsix, get_extractor};
 use extractor::{
-    extract_cab_with_progress,
-    extract_msi_with_progress,
-    extract_vsix_with_progress,
+    extract_cab_with_progress, extract_msi_with_progress, extract_vsix_with_progress,
     inner_progress_enabled,
 };
 
@@ -59,7 +58,7 @@ pub async fn extract_packages_with_progress(
             .unwrap()
             .tick_chars("⠁⠃⠇⠋⠙⠸⠴⠦"),
     );
-    pb.enable_steady_tick(Duration::from_millis(120));
+    pb.enable_steady_tick(Duration::from_millis(progress_const::PROGRESS_TICK_MS));
     pb.set_message(format!("{} extracting 0/{} files", label, total));
 
     // cache marker dir
@@ -72,23 +71,42 @@ pub async fn extract_packages_with_progress(
     };
 
     for (idx, file) in files.iter().enumerate() {
-        let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
+        let name = file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
         let marker = marker_dir.join(format!("{}.done", name));
 
         if marker.exists() {
-            pb.set_message(format!("{} extracting {}/{} (cached)", label, idx + 1, total));
+            pb.set_message(format!(
+                "{} extracting {}/{} (cached)",
+                label,
+                idx + 1,
+                total
+            ));
             pb.inc(0);
             continue;
         }
 
         if has_existing_content {
-            pb.set_message(format!("{} extracting {}/{} (cached-existing)", label, idx + 1, total));
+            pb.set_message(format!(
+                "{} extracting {}/{} (cached-existing)",
+                label,
+                idx + 1,
+                total
+            ));
             let _ = std::fs::write(&marker, b"ok");
             pb.inc(0);
             continue;
         }
 
-        pb.set_message(format!("{} extracting {}/{}: {}", label, idx + 1, total, name));
+        pb.set_message(format!(
+            "{} extracting {}/{}: {}",
+            label,
+            idx + 1,
+            total,
+            name
+        ));
         extract_package_with_progress(file, target_dir, false).await?;
         // mark extracted
         let _ = std::fs::write(&marker, b"ok");
@@ -138,14 +156,16 @@ impl InstallInfo {
             "msvc" => {
                 let host_dir = self.arch.msvc_host_dir();
                 let target_dir = self.arch.msvc_target_dir();
-                self.install_path.join("bin").join(host_dir).join(target_dir)
-            }
-            "sdk" => {
                 self.install_path
                     .join("bin")
-                    .join(&self.version)
-                    .join(self.arch.to_string())
+                    .join(host_dir)
+                    .join(target_dir)
             }
+            "sdk" => self
+                .install_path
+                .join("bin")
+                .join(&self.version)
+                .join(self.arch.to_string()),
             _ => self.install_path.join("bin"),
         }
     }
@@ -163,7 +183,8 @@ impl InstallInfo {
     pub fn lib_dir(&self) -> PathBuf {
         match self.component_type.as_str() {
             "msvc" => self.install_path.join("lib").join(self.arch.to_string()),
-            "sdk" => self.install_path
+            "sdk" => self
+                .install_path
                 .join("Lib")
                 .join(&self.version)
                 .join("um")

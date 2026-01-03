@@ -33,6 +33,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 simd-json = "0.14"
 chrono = { version = "0.4", features = ["serde"] }
+toml = "0.8"
 
 # Compression
 zip = "2.2"
@@ -53,6 +54,7 @@ anyhow = "1.0"
 
 # Path utilities
 directories = "6.0"
+async-trait = "0.1.89"
 
 # Windows registry (Windows only)
 [target.'cfg(windows)'.dependencies]

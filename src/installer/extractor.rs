@@ -6,8 +6,9 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
-use indicatif::{ProgressBar, ProgressStyle, ProgressDrawTarget};
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 
+use crate::constants::{extraction as ext_const, progress as progress_const};
 use crate::error::{MsvcKitError, Result};
 
 pub(crate) fn inner_progress_enabled() -> bool {
@@ -29,7 +30,9 @@ pub(crate) fn progress_style_bytes() -> ProgressStyle {
 
 pub(crate) fn progress_style_items() -> ProgressStyle {
     ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] {wide_bar:.cyan/blue} {pos}/{len} files | {msg}")
+        .template(
+            "{spinner:.green} [{elapsed_precise}] {wide_bar:.cyan/blue} {pos}/{len} files | {msg}",
+        )
         .unwrap()
         .progress_chars("##-")
 }
@@ -117,7 +120,7 @@ fn extract_vsix_sync(vsix_path: &Path, target_dir: &Path, show_progress: bool) -
         }
 
         let mut out_file = File::create(&out_path)?;
-        let mut buffer = [0u8; 128 * 1024];
+        let mut buffer = [0u8; ext_const::EXTRACT_BUFFER_SIZE];
         loop {
             let n = file.read(&mut buffer)?;
             if n == 0 {
@@ -174,7 +177,7 @@ fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> 
                 .map(|n| format!("msiexec extracting {}", n))
                 .unwrap_or_else(|| "msiexec extracting".to_string()),
         );
-        pb.enable_steady_tick(Duration::from_millis(120));
+        pb.enable_steady_tick(Duration::from_millis(progress_const::PROGRESS_TICK_MS));
         Some(pb)
     } else {
         None
@@ -278,7 +281,7 @@ fn extract_cab_sync(cab_path: &Path, target_dir: &Path, show_progress: bool) -> 
     let cabinet = cab::Cabinet::new(file)
         .map_err(|e| MsvcKitError::Cab(format!("Failed to open CAB: {}", e)))?;
 
-    // Collect file names first
+    // Collect file names first by iterating through folders
     let file_names: Vec<String> = cabinet
         .folder_entries()
         .flat_map(|folder| folder.file_entries())
@@ -301,7 +304,11 @@ fn extract_cab_sync(cab_path: &Path, target_dir: &Path, show_progress: bool) -> 
         None
     };
 
-    // Extract each file
+    // Re-open cabinet for extraction (cab crate requires this pattern)
+    // Note: The cab crate's API requires re-opening for each file read.
+    // This is a limitation of the crate, not an efficiency issue we can fix here.
+    // A future optimization would be to use a different CAB library or implement
+    // streaming extraction.
     for (idx, name) in file_names.iter().enumerate() {
         let out_path = target_dir.join(name);
 
@@ -313,7 +320,7 @@ fn extract_cab_sync(cab_path: &Path, target_dir: &Path, show_progress: bool) -> 
             pb.set_message(format!("{} ({}/{})", name, idx + 1, total_files));
         }
 
-        // Re-open cabinet to read the file
+        // Re-open cabinet to read the file (cab crate limitation)
         let file = File::open(cab_path)?;
         let mut cabinet = cab::Cabinet::new(file)
             .map_err(|e| MsvcKitError::Cab(format!("Failed to open CAB: {}", e)))?;
@@ -323,7 +330,7 @@ fn extract_cab_sync(cab_path: &Path, target_dir: &Path, show_progress: bool) -> 
             .map_err(|e| MsvcKitError::Cab(format!("Failed to read file {}: {}", name, e)))?;
 
         let mut out_file = File::create(&out_path)?;
-        let mut buffer = [0u8; 128 * 1024];
+        let mut buffer = [0u8; ext_const::EXTRACT_BUFFER_SIZE];
         loop {
             let n = reader
                 .read(&mut buffer)
@@ -346,7 +353,6 @@ fn extract_cab_sync(cab_path: &Path, target_dir: &Path, show_progress: bool) -> 
 }
 
 /// Determine the extraction method based on file extension
-#[allow(dead_code)]
 pub fn get_extractor(path: &Path) -> Option<fn(&Path, &Path) -> Result<()>> {
     let extension = path.extension()?.to_str()?.to_lowercase();
 
