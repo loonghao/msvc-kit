@@ -57,15 +57,18 @@ jobs:
             --arch $env:BUNDLE_ARCH `
             --output $bundleDir
           
-          # Verify bundle structure
+          # Verify bundle structure (new layout without runtime/ subdirectory)
           if (-not (Test-Path "$bundleDir\setup.bat")) {
             throw "setup.bat not found in bundle"
           }
           if (-not (Test-Path "$bundleDir\setup.ps1")) {
             throw "setup.ps1 not found in bundle"
           }
-          if (-not (Test-Path "$bundleDir\runtime\VC\Tools\MSVC")) {
-            throw "MSVC tools not found in bundle"
+          if (-not (Test-Path "$bundleDir\VC\Tools\MSVC")) {
+            throw "MSVC tools not found in bundle (expected VC/Tools/MSVC)"
+          }
+          if (-not (Test-Path "$bundleDir\Windows Kits\10")) {
+            throw "Windows SDK not found in bundle (expected Windows Kits/10)"
           }
           
           Write-Host "✅ Bundle structure validated"
