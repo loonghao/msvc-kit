@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.0](https://github.com/loonghao/msvc-kit/compare/v0.1.4...v0.2.0) (2026-01-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* Pre-built MSVC bundles are no longer distributed via GitHub Releases. Users must create bundles locally with 'msvc-kit bundle --accept-license'.
+
+### Features
+
+* add bundle command for portable MSVC toolchain creation ([f27c381](https://github.com/loonghao/msvc-kit/commit/f27c3813be71726bc7a2d6db815fd825083bbd66))
+* add bundle release CI and list_available_versions API ([6884f11](https://github.com/loonghao/msvc-kit/commit/6884f119715b8a2ce90f586ca5563af65d425b2b))
+
+
+### Bug Fixes
+
+* export generate_activation_script_with_vars and fix Setup pattern matching ([f2aad74](https://github.com/loonghao/msvc-kit/commit/f2aad74a34b747aa1496a770f8a64e3f406d6906))
+* remove broken has_existing_content logic that skips extraction ([9f9d5eb](https://github.com/loonghao/msvc-kit/commit/9f9d5eba44b4bb7f4725707e40bb50449d805fbe))
+
 ## [0.1.4](https://github.com/loonghao/msvc-kit/compare/v0.1.3...v0.1.4) (2026-01-03)
 
 
