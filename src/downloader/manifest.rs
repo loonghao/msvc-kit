@@ -505,4 +505,188 @@ mod tests {
         assert_eq!(payload.file_name, "test.vsix");
         assert_eq!(payload.size, 2048);
     }
+
+    #[test]
+    fn test_normalize_sdk_version() {
+        // Normal version with trailing .0
+        assert_eq!(
+            normalize_sdk_version("10.0.26100.0"),
+            Some("10.0.26100.0".to_string())
+        );
+
+        // Version without trailing .0 should get it appended
+        assert_eq!(
+            normalize_sdk_version("10.0.26100"),
+            Some("10.0.26100.0".to_string())
+        );
+
+        // Non-version strings should return None
+        assert_eq!(normalize_sdk_version("Headers"), None);
+        assert_eq!(normalize_sdk_version("Desktop"), None);
+    }
+
+    /// Helper to create a mock VsManifest for testing
+    fn create_test_manifest() -> VsManifest {
+        VsManifest {
+            manifest_version: "1.0".to_string(),
+            engine_version: None,
+            packages: vec![
+                // MSVC Tools packages (simulate real package IDs)
+                VsPackage {
+                    id: "Microsoft.VC.14.44.Tools.HostX64.TargetX64.base".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("x64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                VsPackage {
+                    id: "Microsoft.VC.14.44.CRT.Headers".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: None,
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                VsPackage {
+                    id: "Microsoft.VC.14.43.Tools.HostX64.TargetX64.base".to_string(),
+                    version: "14.43.34607".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("x64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                // SDK packages
+                VsPackage {
+                    id: "Win11SDK_10.0.26100".to_string(),
+                    version: "26100.1742".to_string(),
+                    package_type: "Msi".to_string(),
+                    chip: Some("x64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                VsPackage {
+                    id: "Win10SDK_10.0.22621".to_string(),
+                    version: "22621.3233".to_string(),
+                    package_type: "Msi".to_string(),
+                    chip: Some("x64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn test_get_latest_msvc_version() {
+        let manifest = create_test_manifest();
+        let latest = manifest.get_latest_msvc_version();
+
+        // Should return the short version prefix (14.44), not the full version
+        assert_eq!(latest, Some("14.44".to_string()));
+    }
+
+    #[test]
+    fn test_list_msvc_versions() {
+        let manifest = create_test_manifest();
+        let versions = manifest.list_msvc_versions();
+
+        // Should contain both version prefixes
+        assert!(versions.contains(&"14.44".to_string()));
+        assert!(versions.contains(&"14.43".to_string()));
+        // Should be sorted
+        assert_eq!(versions.last(), Some(&"14.44".to_string()));
+    }
+
+    #[test]
+    fn test_get_latest_sdk_version() {
+        let manifest = create_test_manifest();
+        let latest = manifest.get_latest_sdk_version();
+
+        // Should return the full SDK version
+        assert_eq!(latest, Some("10.0.26100.0".to_string()));
+    }
+
+    #[test]
+    fn test_list_sdk_versions() {
+        let manifest = create_test_manifest();
+        let versions = manifest.list_sdk_versions();
+
+        assert!(versions.contains(&"10.0.26100.0".to_string()));
+        assert!(versions.contains(&"10.0.22621.0".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_msvc_version() {
+        let manifest = create_test_manifest();
+
+        // Should resolve short version to full version
+        let resolved = manifest.resolve_msvc_version("14.44");
+        assert_eq!(resolved, Some("14.44.34823".to_string()));
+
+        // Should resolve older version
+        let resolved_old = manifest.resolve_msvc_version("14.43");
+        assert_eq!(resolved_old, Some("14.43.34607".to_string()));
+
+        // Non-existent version should return None
+        let not_found = manifest.resolve_msvc_version("14.99");
+        assert_eq!(not_found, None);
+    }
+
+    #[test]
+    fn test_resolve_sdk_version() {
+        let manifest = create_test_manifest();
+
+        // Exact match
+        let exact = manifest.resolve_sdk_version("10.0.26100.0");
+        assert_eq!(exact, Some("10.0.26100.0".to_string()));
+
+        // Match by build number
+        let by_build = manifest.resolve_sdk_version("26100");
+        assert_eq!(by_build, Some("10.0.26100.0".to_string()));
+
+        // Non-existent version
+        let not_found = manifest.resolve_sdk_version("99999");
+        assert_eq!(not_found, None);
+    }
+
+    #[test]
+    fn test_find_msvc_packages() {
+        let manifest = create_test_manifest();
+
+        // Find packages for 14.44 x64
+        let packages = manifest.find_msvc_packages("14.44", "x64", "x64");
+
+        // Should find the tools package
+        assert!(!packages.is_empty());
+        assert!(packages.iter().any(|p| p.id.contains("Tools")));
+        assert!(packages.iter().any(|p| p.id.contains("CRT")));
+    }
+
+    #[test]
+    fn test_find_sdk_packages() {
+        let manifest = create_test_manifest();
+
+        // Find SDK packages for 10.0.26100.0
+        let packages = manifest.find_sdk_packages("10.0.26100.0", "x64");
+
+        // Should find the SDK package
+        assert!(!packages.is_empty());
+        assert!(packages.iter().any(|p| p.id.contains("Win11SDK")));
+    }
 }

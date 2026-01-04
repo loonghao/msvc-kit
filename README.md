@@ -75,6 +75,7 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 msvc-kit download
 
 # Specify versions / dirs / arch
+# MSVC version can be short (14.44) or full (14.44.34823)
 msvc-kit download \
   --msvc-version 14.44 \
   --sdk-version 10.0.26100.0 \
@@ -95,6 +96,18 @@ msvc-kit download --parallel-downloads 8
 msvc-kit download --no-verify
 ```
 
+> **Note:** MSVC version can be specified as short format (e.g., `14.44`) which auto-resolves to the latest build, or full format (e.g., `14.44.34823`) for a specific build.
+
+**Version Compatibility Quick Reference:**
+
+| Scenario | MSVC | SDK | Command |
+|----------|------|-----|---------|
+| Latest (recommended) | `14.44` | `10.0.26100.0` | `msvc-kit download` |
+| Windows 11 development | `14.42`+ | `10.0.22621.0`+ | `msvc-kit download --sdk-version 10.0.22621.0` |
+| Maximum Win10 compat | `14.40` | `10.0.19041.0` | `msvc-kit download --msvc-version 14.40 --sdk-version 10.0.19041.0` |
+
+See [Version Compatibility Guide](docs/guide/cli-download.md#version-compatibility-guide) for detailed information.
+
 #### Setup Environment
 
 ```bash
@@ -104,12 +117,58 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 # Or for CMD
 msvc-kit setup --script --shell cmd > setup.bat && setup.bat
 
+# Portable script (rewrites install root to %~dp0runtime)
+msvc-kit setup --script --shell cmd --portable-root "%~dp0runtime" > setup.bat
+
 # Or for Bash/WSL
 eval "$(msvc-kit setup --script --shell bash)"
 
 # Persist to Windows registry (requires admin)
 msvc-kit setup --persistent
 ```
+
+#### Create Portable Bundle
+
+Create a self-contained bundle with MSVC toolchain that can be used anywhere:
+
+```bash
+# Create bundle (requires accepting Microsoft license)
+msvc-kit bundle --accept-license
+
+# Specify output directory and architecture
+msvc-kit bundle --accept-license --output ./my-msvc-bundle --arch x64
+
+# Cross-compilation bundle (x64 host targeting ARM64)
+msvc-kit bundle --accept-license --host-arch x64 --arch arm64
+
+# Also create a zip archive
+msvc-kit bundle --accept-license --zip
+
+# Specify versions
+msvc-kit bundle --accept-license --msvc-version 14.44 --sdk-version 10.0.26100.0
+```
+
+The bundle contains:
+- `msvc-kit.exe` - CLI tool
+- `VC/Tools/MSVC/{version}/` - MSVC compiler and tools
+- `Windows Kits/10/` - Windows SDK
+- `setup.bat` - CMD activation script
+- `setup.ps1` - PowerShell activation script
+- `setup.sh` - Bash/WSL activation script
+- `README.txt` - Usage instructions
+
+Usage:
+```bash
+# Extract and run setup script
+cd msvc-bundle
+setup.bat          # CMD
+.\setup.ps1        # PowerShell
+source setup.sh    # Bash/WSL
+
+# Now cl, link, nmake are available
+cl /nologo test.c
+```
+
 
 #### List Versions
 
@@ -169,64 +228,31 @@ msvc-kit = "0.1"
 
 ```rust
 use msvc_kit::{download_msvc, download_sdk, setup_environment, DownloadOptions};
-use msvc_kit::version::Architecture;
+use msvc_kit::{list_available_versions, Architecture};
 
 #[tokio::main]
 async fn main() -> msvc_kit::Result<()> {
-    // Use builder pattern for configuration
+    // List available versions from Microsoft
+    let versions = list_available_versions().await?;
+    println!("Latest MSVC: {:?}", versions.latest_msvc);
+    println!("Latest SDK: {:?}", versions.latest_sdk);
+
+    // Download with builder pattern
     let options = DownloadOptions::builder()
         .target_dir("C:/msvc-kit")
         .arch(Architecture::X64)
-        .host_arch(Architecture::X64)
-        .verify_hashes(true)
-        .parallel_downloads(4)
         .build();
 
     let msvc = download_msvc(&options).await?;
     let sdk = download_sdk(&options).await?;
     let env = setup_environment(&msvc, Some(&sdk))?;
 
-    // Get installation paths
-    println!("MSVC install path: {:?}", msvc.install_path);
-    println!("SDK install path: {:?}", sdk.install_path);
-
-    // Get directory paths
-    println!("MSVC bin dir: {:?}", msvc.bin_dir());
-    println!("MSVC include dir: {:?}", msvc.include_dir());
-    println!("MSVC lib dir: {:?}", msvc.lib_dir());
-
-    // Get tool paths
     println!("cl.exe: {:?}", env.cl_exe_path());
-    println!("link.exe: {:?}", env.link_exe_path());
-
-    // Get environment variable strings
-    println!("INCLUDE: {}", env.include_path_string());
-    println!("LIB: {}", env.lib_path_string());
-
-    // Export to JSON (for external tools)
-    let json = env.to_json();
-    std::fs::write("msvc-env.json", serde_json::to_string_pretty(&json)?)?;
-
     Ok(())
 }
 ```
 
-### Environment Variables Set
-
-After `setup_environment()` or `msvc-kit setup`:
-
-| Variable | Description |
-|----------|-------------|
-| `VCINSTALLDIR` | VC install directory |
-| `VCToolsInstallDir` | VC tools install directory |
-| `VCToolsVersion` | VC tools version |
-| `WindowsSdkDir` | Windows SDK directory |
-| `WindowsSDKVersion` | Windows SDK version |
-| `WindowsSdkBinPath` | Windows SDK bin path |
-| `INCLUDE` | Include paths for compiler |
-| `LIB` | Library paths for linker |
-| `PATH` | Updated with compiler/SDK bin directories |
-| `Platform` | Target platform (x64, x86, etc.) |
+See [Library API Documentation](docs/api/library.md) for full API reference.
 
 ### Architecture Support
 
@@ -240,3 +266,13 @@ After `setup_environment()` or `msvc-kit setup`:
 ### License
 
 MIT License - see `LICENSE`.
+
+**Important: Microsoft Software License Notice**
+
+The MSVC compiler and Windows SDK downloaded by this tool are property of Microsoft
+and subject to [Microsoft Visual Studio License Terms](https://visualstudio.microsoft.com/license-terms/).
+
+- **msvc-kit** itself is MIT licensed
+- MSVC Build Tools and Windows SDK are **NOT redistributable** - users must download them directly
+- By using `msvc-kit download` or `msvc-kit bundle --accept-license`, you agree to Microsoft's license terms
+- This tool automates the download process; it does not redistribute Microsoft software

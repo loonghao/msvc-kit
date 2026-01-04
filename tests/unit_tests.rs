@@ -5,7 +5,8 @@ use msvc_kit::downloader::{
     compute_hash, hashes_match, ComponentType, DownloadOptions, DownloadPreview,
     FileSystemCacheManager, HttpClientConfig, NoopProgressHandler, PackagePreview, ProgressHandler,
 };
-use msvc_kit::env::{generate_activation_script, get_env_vars, MsvcEnvironment, ShellType};
+use msvc_kit::env::{generate_activation_script, get_env_vars, MsvcEnvironment};
+use msvc_kit::ShellType;
 use msvc_kit::error::MsvcKitError;
 use msvc_kit::installer::InstallInfo;
 use msvc_kit::version::{
@@ -513,7 +514,7 @@ mod windows_env_tests {
 // ============================================================================
 
 mod shell_script_tests {
-    use msvc_kit::env::ShellType;
+    use msvc_kit::ShellType;
 
     #[test]
     fn test_shell_type_script_extension() {
@@ -940,28 +941,28 @@ mod shell_script_generation_tests {
     #[test]
     fn test_generate_cmd_script() {
         let env = create_test_environment();
-        let script = generate_activation_script(&env, ShellType::Cmd);
+        let script = generate_activation_script(&env, ShellType::Cmd).unwrap();
         assert!(script.contains("@echo off"));
         assert!(script.contains("set \""));
-        assert!(script.contains("MSVC environment"));
+        assert!(script.contains("MSVC Toolchain activated"));
     }
 
     #[test]
     fn test_generate_powershell_script() {
         let env = create_test_environment();
-        let script = generate_activation_script(&env, ShellType::PowerShell);
+        let script = generate_activation_script(&env, ShellType::PowerShell).unwrap();
         assert!(script.contains("$env:"));
         assert!(script.contains("Write-Host"));
-        assert!(script.contains("MSVC environment"));
+        assert!(script.contains("MSVC Toolchain activated"));
     }
 
     #[test]
     fn test_generate_bash_script() {
         let env = create_test_environment();
-        let script = generate_activation_script(&env, ShellType::Bash);
+        let script = generate_activation_script(&env, ShellType::Bash).unwrap();
         assert!(script.contains("#!/bin/bash"));
         assert!(script.contains("export "));
-        assert!(script.contains("MSVC environment"));
+        assert!(script.contains("MSVC Toolchain activated"));
     }
 
     #[test]

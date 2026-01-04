@@ -5,7 +5,13 @@ on:
     branches: [main]
     paths:
       - "docs/**"
+      - "README.md"
+      - "README_zh.md"
       - ".github/workflows/docs.yml"
+  # Deploy on release published
+  release:
+    types: [published]
+  # Allow manual trigger
   workflow_dispatch:
 
 permissions:
@@ -29,7 +35,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "22"
-          cache: 'npm'
+          cache: "npm"
           cache-dependency-path: docs/package-lock.json
 
       - name: Install dependencies

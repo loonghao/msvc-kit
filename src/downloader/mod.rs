@@ -302,3 +302,56 @@ pub async fn download_all(options: &DownloadOptions) -> Result<(InstallInfo, Ins
     let sdk_info = download_sdk(options).await?;
     Ok((msvc_info, sdk_info))
 }
+
+/// Information about available versions from Microsoft servers
+#[derive(Debug, Clone)]
+pub struct AvailableVersions {
+    /// Available MSVC toolset versions (short format, e.g., "14.44")
+    pub msvc_versions: Vec<String>,
+    /// Available Windows SDK versions (e.g., "10.0.26100.0")
+    pub sdk_versions: Vec<String>,
+    /// Latest MSVC version
+    pub latest_msvc: Option<String>,
+    /// Latest SDK version
+    pub latest_sdk: Option<String>,
+}
+
+/// Fetch available MSVC and Windows SDK versions from Microsoft servers
+///
+/// This function queries the Visual Studio manifest to get all available
+/// versions that can be downloaded.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use msvc_kit::list_available_versions;
+///
+/// #[tokio::main]
+/// async fn main() -> anyhow::Result<()> {
+///     let versions = list_available_versions().await?;
+///     
+///     println!("Latest MSVC: {:?}", versions.latest_msvc);
+///     println!("Latest SDK: {:?}", versions.latest_sdk);
+///     
+///     println!("\nAvailable MSVC versions:");
+///     for v in &versions.msvc_versions {
+///         println!("  {}", v);
+///     }
+///     
+///     println!("\nAvailable SDK versions:");
+///     for v in &versions.sdk_versions {
+///         println!("  {}", v);
+///     }
+///     Ok(())
+/// }
+/// ```
+pub async fn list_available_versions() -> Result<AvailableVersions> {
+    let manifest = VsManifest::fetch().await?;
+
+    Ok(AvailableVersions {
+        msvc_versions: manifest.list_msvc_versions(),
+        sdk_versions: manifest.list_sdk_versions(),
+        latest_msvc: manifest.get_latest_msvc_version(),
+        latest_sdk: manifest.get_latest_sdk_version(),
+    })
+}

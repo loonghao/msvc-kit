@@ -12,6 +12,7 @@
 //! - Configure environment variables for cc-rs compatibility
 //! - Support version selection (defaults to latest)
 //! - Generate activation scripts for shell environments
+//! - Create portable bundles with all dependencies
 //!
 //! ## Quick Start
 //!
@@ -33,6 +34,31 @@
 //! }
 //! ```
 //!
+//! ## Bundle Creation
+//!
+//! ```rust,no_run
+//! use msvc_kit::bundle::{create_bundle, BundleOptions, BundleLayout};
+//! use msvc_kit::Architecture;
+//!
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     // Create a portable bundle
+//!     let options = BundleOptions {
+//!         output_dir: "./msvc-bundle".into(),
+//!         arch: Architecture::X64,
+//!         ..Default::default()
+//!     };
+//!     
+//!     let result = create_bundle(options).await?;
+//!     println!("Bundle created with MSVC {}", result.msvc_info.version);
+//!     
+//!     // Later, discover an existing bundle
+//!     let layout = BundleLayout::from_root("./msvc-bundle")?;
+//!     println!("cl.exe at: {:?}", layout.cl_exe_path());
+//!     Ok(())
+//! }
+//! ```
+//!
 //! ## Advanced Configuration
 //!
 //! ```rust,no_run
@@ -50,25 +76,31 @@
 //!     .build();
 //! ```
 
+pub mod bundle;
 pub mod config;
 pub mod constants;
 pub mod downloader;
 pub mod env;
 pub mod error;
 pub mod installer;
+pub mod scripts;
 pub mod version;
 
 // Re-export main types and functions
 pub use config::{load_config, save_config, MsvcKitConfig};
 pub use downloader::{
-    download_msvc, download_sdk, BoxedCacheManager, BoxedProgressHandler, CacheManager,
-    ComponentDownloader, ComponentType, DownloadOptions, DownloadOptionsBuilder,
-    FileSystemCacheManager, ProgressHandler,
+    download_msvc, download_sdk, list_available_versions, AvailableVersions, BoxedCacheManager,
+    BoxedProgressHandler, CacheManager, ComponentDownloader, ComponentType, DownloadOptions,
+    DownloadOptionsBuilder, FileSystemCacheManager, ProgressHandler,
 };
-pub use env::{
-    generate_activation_script, get_env_vars, setup_environment, MsvcEnvironment, ShellType,
-    ToolPaths,
-};
+pub use env::{get_env_vars, setup_environment, MsvcEnvironment, ToolPaths};
 pub use error::{MsvcKitError, Result};
 pub use installer::InstallInfo;
+pub use scripts::{
+    generate_absolute_scripts, generate_portable_scripts, generate_script, save_scripts,
+    GeneratedScripts, ScriptContext, ShellType,
+};
 pub use version::{Architecture, MsvcVersion, SdkVersion};
+
+// Re-export bundle types
+pub use bundle::{create_bundle, discover_bundle, BundleLayout, BundleOptions, BundleResult};
