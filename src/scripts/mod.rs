@@ -537,4 +537,183 @@ mod tests {
         assert!(scripts.bash.contains("/c/msvc-kit"));
         assert!(scripts.readme.is_none());
     }
+
+    #[test]
+    fn test_shell_type_display() {
+        assert_eq!(format!("{}", ShellType::Cmd), "cmd");
+        assert_eq!(format!("{}", ShellType::PowerShell), "powershell");
+        assert_eq!(format!("{}", ShellType::Bash), "bash");
+    }
+
+    #[test]
+    fn test_generated_scripts_get() {
+        let scripts = GeneratedScripts {
+            cmd: "cmd content".to_string(),
+            powershell: "ps content".to_string(),
+            bash: "bash content".to_string(),
+            readme: Some("readme content".to_string()),
+        };
+
+        assert_eq!(scripts.get(ShellType::Cmd), "cmd content");
+        assert_eq!(scripts.get(ShellType::PowerShell), "ps content");
+        assert_eq!(scripts.get(ShellType::Bash), "bash content");
+    }
+
+    #[test]
+    fn test_generate_script_single() {
+        let ctx = ScriptContext::portable(
+            "14.44.34823",
+            "10.0.26100.0",
+            Architecture::X64,
+            Architecture::X64,
+        );
+
+        let cmd_script = generate_script(&ctx, ShellType::Cmd).unwrap();
+        assert!(cmd_script.contains("14.44.34823"));
+        assert!(cmd_script.contains("10.0.26100.0"));
+
+        let ps_script = generate_script(&ctx, ShellType::PowerShell).unwrap();
+        assert!(ps_script.contains("14.44.34823"));
+
+        let bash_script = generate_script(&ctx, ShellType::Bash).unwrap();
+        assert!(bash_script.contains("14.44.34823"));
+    }
+
+    #[test]
+    fn test_generate_absolute_script_single() {
+        let ctx = ScriptContext::absolute(
+            PathBuf::from("C:\\test"),
+            "14.44.34823",
+            "10.0.26100.0",
+            Architecture::X64,
+            Architecture::X64,
+        );
+
+        let script = generate_absolute_script(&ctx, ShellType::Cmd).unwrap();
+        assert!(script.contains("C:\\test"));
+    }
+
+    #[test]
+    fn test_portable_root_expr() {
+        let ctx = ScriptContext::portable(
+            "14.44.34823",
+            "10.0.26100.0",
+            Architecture::X64,
+            Architecture::X64,
+        );
+
+        assert_eq!(ctx.root_expr(ShellType::Cmd), "%BUNDLE_ROOT%");
+        assert_eq!(ctx.root_expr(ShellType::PowerShell), "$BundleRoot");
+        assert_eq!(ctx.root_expr(ShellType::Bash), "$BUNDLE_ROOT");
+    }
+
+    #[test]
+    fn test_script_context_arm64() {
+        let ctx = ScriptContext::portable(
+            "14.44.34823",
+            "10.0.26100.0",
+            Architecture::Arm64,
+            Architecture::X64,
+        );
+
+        assert_eq!(ctx.host_arch_dir(), "Hostx64");
+        assert_eq!(ctx.target_arch_dir(), "arm64");
+    }
+
+    #[test]
+    fn test_script_context_x86() {
+        let ctx = ScriptContext::portable(
+            "14.44.34823",
+            "10.0.26100.0",
+            Architecture::X86,
+            Architecture::X86,
+        );
+
+        assert_eq!(ctx.host_arch_dir(), "Hostx86");
+        assert_eq!(ctx.target_arch_dir(), "x86");
+    }
+
+    #[test]
+    fn test_d_drive_path_conversion() {
+        let ctx = ScriptContext::absolute(
+            PathBuf::from("D:\\msvc-kit"),
+            "14.44.34823",
+            "10.0.26100.0",
+            Architecture::X64,
+            Architecture::X64,
+        );
+
+        assert_eq!(ctx.root_expr(ShellType::Bash), "/d/msvc-kit");
+    }
+
+    #[tokio::test]
+    async fn test_save_scripts() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let scripts = GeneratedScripts {
+            cmd: "@echo off\necho test".to_string(),
+            powershell: "Write-Host 'test'".to_string(),
+            bash: "#!/bin/bash\necho test".to_string(),
+            readme: Some("README content".to_string()),
+        };
+
+        save_scripts(&scripts, temp_dir.path(), "setup")
+            .await
+            .unwrap();
+
+        // Verify files were created
+        assert!(temp_dir.path().join("setup.bat").exists());
+        assert!(temp_dir.path().join("setup.ps1").exists());
+        assert!(temp_dir.path().join("setup.sh").exists());
+        assert!(temp_dir.path().join("README.txt").exists());
+
+        // Verify content
+        let cmd_content = std::fs::read_to_string(temp_dir.path().join("setup.bat")).unwrap();
+        assert!(cmd_content.contains("echo test"));
+
+        let ps_content = std::fs::read_to_string(temp_dir.path().join("setup.ps1")).unwrap();
+        assert!(ps_content.contains("Write-Host"));
+
+        let bash_content = std::fs::read_to_string(temp_dir.path().join("setup.sh")).unwrap();
+        assert!(bash_content.contains("#!/bin/bash"));
+
+        let readme_content = std::fs::read_to_string(temp_dir.path().join("README.txt")).unwrap();
+        assert!(readme_content.contains("README content"));
+    }
+
+    #[tokio::test]
+    async fn test_save_scripts_without_readme() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let scripts = GeneratedScripts {
+            cmd: "cmd".to_string(),
+            powershell: "ps".to_string(),
+            bash: "bash".to_string(),
+            readme: None,
+        };
+
+        save_scripts(&scripts, temp_dir.path(), "activate")
+            .await
+            .unwrap();
+
+        assert!(temp_dir.path().join("activate.bat").exists());
+        assert!(temp_dir.path().join("activate.ps1").exists());
+        assert!(temp_dir.path().join("activate.sh").exists());
+        assert!(!temp_dir.path().join("README.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn test_save_scripts_creates_dir() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let nested_dir = temp_dir.path().join("nested").join("dir");
+
+        let scripts = GeneratedScripts {
+            cmd: "cmd".to_string(),
+            powershell: "ps".to_string(),
+            bash: "bash".to_string(),
+            readme: None,
+        };
+
+        save_scripts(&scripts, &nested_dir, "setup").await.unwrap();
+
+        assert!(nested_dir.join("setup.bat").exists());
+    }
 }

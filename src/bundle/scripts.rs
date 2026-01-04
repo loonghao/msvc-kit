@@ -60,4 +60,72 @@ mod tests {
         assert!(scripts.bash.contains("BASH_SOURCE"));
         assert!(scripts.readme.is_some());
     }
+
+    #[test]
+    fn test_generate_bundle_scripts_arm64() {
+        let layout = BundleLayout {
+            root: PathBuf::from("C:/msvc-bundle"),
+            msvc_version: "14.44.34823".to_string(),
+            sdk_version: "10.0.26100.0".to_string(),
+            arch: Architecture::Arm64,
+            host_arch: Architecture::X64,
+        };
+
+        let scripts = generate_bundle_scripts(&layout).unwrap();
+
+        assert!(scripts.cmd.contains("Hostx64"));
+        assert!(scripts.cmd.contains("arm64"));
+    }
+
+    #[test]
+    fn test_generate_bundle_scripts_x86() {
+        let layout = BundleLayout {
+            root: PathBuf::from("C:/msvc-bundle"),
+            msvc_version: "14.44.34823".to_string(),
+            sdk_version: "10.0.26100.0".to_string(),
+            arch: Architecture::X86,
+            host_arch: Architecture::X86,
+        };
+
+        let scripts = generate_bundle_scripts(&layout).unwrap();
+
+        assert!(scripts.cmd.contains("Hostx86"));
+        assert!(scripts.cmd.contains("x86"));
+    }
+
+    #[test]
+    fn test_bundle_scripts_readme() {
+        let layout = sample_layout();
+        let scripts = generate_bundle_scripts(&layout).unwrap();
+
+        let readme = scripts.readme.as_ref().unwrap();
+        assert!(readme.contains("14.44.34823"));
+        assert!(readme.contains("10.0.26100.0"));
+    }
+
+    #[tokio::test]
+    async fn test_save_bundle_scripts() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let layout = BundleLayout {
+            root: temp_dir.path().to_path_buf(),
+            msvc_version: "14.44.34823".to_string(),
+            sdk_version: "10.0.26100.0".to_string(),
+            arch: Architecture::X64,
+            host_arch: Architecture::X64,
+        };
+
+        let scripts = generate_bundle_scripts(&layout).unwrap();
+        save_bundle_scripts(&layout, &scripts).await.unwrap();
+
+        // Verify files were created
+        assert!(temp_dir.path().join("setup.bat").exists());
+        assert!(temp_dir.path().join("setup.ps1").exists());
+        assert!(temp_dir.path().join("setup.sh").exists());
+        assert!(temp_dir.path().join("README.txt").exists());
+
+        // Verify content
+        let cmd_content = std::fs::read_to_string(temp_dir.path().join("setup.bat")).unwrap();
+        assert!(cmd_content.contains("14.44.34823"));
+        assert!(cmd_content.contains("BUNDLE_ROOT"));
+    }
 }
