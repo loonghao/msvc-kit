@@ -39,6 +39,41 @@ async fn main() -> msvc_kit::Result<()> {
 
 ## Main Types
 
+### Version Discovery Functions
+
+```rust
+/// Fetch available versions from Microsoft servers
+pub async fn list_available_versions() -> Result<AvailableVersions>;
+
+/// Available version information
+pub struct AvailableVersions {
+    pub msvc_versions: Vec<String>,  // e.g., ["14.44", "14.43", "14.42"]
+    pub sdk_versions: Vec<String>,   // e.g., ["10.0.26100.0", "10.0.22621.0"]
+    pub latest_msvc: Option<String>, // e.g., Some("14.44")
+    pub latest_sdk: Option<String>,  // e.g., Some("10.0.26100.0")
+}
+```
+
+**Example:**
+
+```rust
+use msvc_kit::list_available_versions;
+
+#[tokio::main]
+async fn main() -> msvc_kit::Result<()> {
+    let versions = list_available_versions().await?;
+    
+    println!("Latest MSVC: {:?}", versions.latest_msvc);
+    println!("Latest SDK: {:?}", versions.latest_sdk);
+    
+    println!("\nAvailable MSVC versions:");
+    for v in &versions.msvc_versions {
+        println!("  {}", v);
+    }
+    Ok(())
+}
+```
+
 ### Download Functions
 
 ```rust
@@ -58,14 +93,49 @@ pub fn setup_environment(
     sdk_info: Option<&InstallInfo>,
 ) -> Result<MsvcEnvironment>;
 
-/// Generate shell activation script
-pub fn generate_activation_script(
-    env: &MsvcEnvironment,
-    shell: ShellType,
-) -> String;
-
 /// Get environment variables as HashMap
 pub fn get_env_vars(env: &MsvcEnvironment) -> HashMap<String, String>;
+```
+
+### Script Generation Functions
+
+```rust
+/// Generate portable scripts (relative paths, for bundles)
+pub fn generate_portable_scripts(ctx: &ScriptContext) -> Result<GeneratedScripts>;
+
+/// Generate absolute path scripts (for installed environments)
+pub fn generate_absolute_scripts(ctx: &ScriptContext) -> Result<GeneratedScripts>;
+
+/// Generate a single script for specified shell
+pub fn generate_script(ctx: &ScriptContext, shell: ShellType) -> Result<String>;
+
+/// Save scripts to a directory
+pub async fn save_scripts(
+    scripts: &GeneratedScripts,
+    output_dir: &Path,
+    base_name: &str,
+) -> Result<()>;
+```
+
+### Script Context
+
+```rust
+/// Create portable script context (uses relative paths like %~dp0)
+let ctx = ScriptContext::portable(
+    "14.44.34823",      // MSVC version
+    "10.0.26100.0",     // SDK version
+    Architecture::X64,   // Target arch
+    Architecture::X64,   // Host arch
+);
+
+/// Create absolute script context (uses actual paths)
+let ctx = ScriptContext::absolute(
+    PathBuf::from("C:/msvc-kit"),
+    "14.44.34823",
+    "10.0.26100.0",
+    Architecture::X64,
+    Architecture::X64,
+);
 ```
 
 ### Configuration Functions
@@ -82,10 +152,11 @@ pub fn save_config(config: &MsvcKitConfig) -> Result<()>;
 
 ```rust
 pub use config::MsvcKitConfig;
-pub use downloader::DownloadOptions;
-pub use env::{MsvcEnvironment, ShellType, ToolPaths};
+pub use downloader::{DownloadOptions, AvailableVersions, list_available_versions};
+pub use env::{MsvcEnvironment, ToolPaths};
 pub use error::{MsvcKitError, Result};
 pub use installer::InstallInfo;
+pub use scripts::{GeneratedScripts, ScriptContext, ShellType};
 pub use version::{Architecture, MsvcVersion, SdkVersion};
 ```
 

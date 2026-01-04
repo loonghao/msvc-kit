@@ -201,26 +201,37 @@ impl MsvcDownloader {
 
         extract_packages_with_progress(&downloaded_files, &install_path, "MSVC").await?;
 
-        // Find the actual MSVC version directory
+        // Find the actual MSVC version directory and extract the full version number
         let vc_tools_path = install_path.join("VC").join("Tools").join("MSVC");
-        let msvc_version_dir = if vc_tools_path.exists() {
-            // Find the version directory
+        let (msvc_version_dir, actual_version) = if vc_tools_path.exists() {
+            // Find the version directory - this contains the full version number (e.g., 14.44.34823)
             let mut entries = tokio::fs::read_dir(&vc_tools_path).await?;
             let mut version_dir = None;
+            let mut full_version = version.clone();
             while let Some(entry) = entries.next_entry().await? {
                 if entry.file_type().await?.is_dir() {
-                    version_dir = Some(entry.path());
-                    break;
+                    let dir_name = entry.file_name();
+                    if let Some(name) = dir_name.to_str() {
+                        // The directory name is the full version (e.g., "14.44.34823")
+                        full_version = name.to_string();
+                        version_dir = Some(entry.path());
+                        tracing::info!(
+                            "Found MSVC version directory: {} (full version: {})",
+                            entry.path().display(),
+                            full_version
+                        );
+                        break;
+                    }
                 }
             }
-            version_dir.unwrap_or(vc_tools_path)
+            (version_dir.unwrap_or(vc_tools_path), full_version)
         } else {
-            install_path.clone()
+            (install_path.clone(), version.clone())
         };
 
         Ok(InstallInfo {
             component_type: "msvc".to_string(),
-            version: version.clone(),
+            version: actual_version,
             install_path: msvc_version_dir,
             downloaded_files,
             arch: self.downloader.options.arch,

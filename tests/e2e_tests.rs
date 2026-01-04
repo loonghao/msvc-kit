@@ -13,10 +13,10 @@ use std::sync::Arc;
 
 use msvc_kit::config::MsvcKitConfig;
 use msvc_kit::downloader::{DownloadIndex, DownloadStatus, IndexEntry};
-use msvc_kit::env::{generate_activation_script, MsvcEnvironment, ShellType};
+use msvc_kit::env::{generate_activation_script, MsvcEnvironment};
 use msvc_kit::installer::InstallInfo;
 use msvc_kit::version::Architecture;
-use msvc_kit::DownloadOptions;
+use msvc_kit::{DownloadOptions, ShellType};
 
 // ============================================================================
 // Download Index Tests
@@ -202,11 +202,11 @@ mod env_generation_tests {
             host_arch: Architecture::X64,
         };
 
-        let script = generate_activation_script(&env, ShellType::Cmd);
+        let script = generate_activation_script(&env, ShellType::Cmd).unwrap();
 
         assert!(script.contains("@echo off"));
         assert!(script.contains("set \""));
-        assert!(script.contains("MSVC environment configured"));
+        assert!(script.contains("MSVC Toolchain activated"));
     }
 
     #[test]
@@ -224,7 +224,7 @@ mod env_generation_tests {
             host_arch: Architecture::X64,
         };
 
-        let script = generate_activation_script(&env, ShellType::PowerShell);
+        let script = generate_activation_script(&env, ShellType::PowerShell).unwrap();
 
         assert!(script.contains("$env:"));
         assert!(script.contains("Write-Host"));
@@ -245,7 +245,7 @@ mod env_generation_tests {
             host_arch: Architecture::X64,
         };
 
-        let script = generate_activation_script(&env, ShellType::Bash);
+        let script = generate_activation_script(&env, ShellType::Bash).unwrap();
 
         assert!(script.contains("#!/bin/bash"));
         assert!(script.contains("export "));
