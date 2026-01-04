@@ -110,7 +110,7 @@ impl BundleLayout {
         }
 
         let mut versions: Vec<String> = std::fs::read_dir(dir)
-            .map_err(|e| MsvcKitError::Io(e))?
+            .map_err(MsvcKitError::Io)?
             .filter_map(|entry| {
                 entry.ok().and_then(|e| {
                     let path = e.path();

@@ -76,6 +76,7 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 msvc-kit download
 
 # 指定版本/目录/架构
+# MSVC 版本可以是短格式 (14.44) 或完整格式 (14.44.34823)
 msvc-kit download \
   --msvc-version 14.44 \
   --sdk-version 10.0.26100.0 \
@@ -96,6 +97,18 @@ msvc-kit download --parallel-downloads 8
 msvc-kit download --no-verify
 ```
 
+> **注意：** MSVC 版本可以使用短格式（如 `14.44`），会自动解析到最新构建版本；也可以使用完整格式（如 `14.44.34823`）指定特定构建。
+
+**版本兼容性速查：**
+
+| 场景 | MSVC | SDK | 命令 |
+|------|------|-----|------|
+| 最新版（推荐） | `14.44` | `10.0.26100.0` | `msvc-kit download` |
+| Windows 11 开发 | `14.42`+ | `10.0.22621.0`+ | `msvc-kit download --sdk-version 10.0.22621.0` |
+| 最大 Win10 兼容性 | `14.40` | `10.0.19041.0` | `msvc-kit download --msvc-version 14.40 --sdk-version 10.0.19041.0` |
+
+详见 [版本兼容性指南](docs/guide/cli-download.md#version-compatibility-guide)。
+
 ### 配置环境
 
 ```bash
@@ -115,6 +128,7 @@ eval "$(msvc-kit setup --script --shell bash)"
 msvc-kit setup --persistent
 ```
 
+
 ### 创建可移植 Bundle
 
 创建包含 MSVC 工具链的独立 bundle，可在任何地方使用：
@@ -126,6 +140,9 @@ msvc-kit bundle --accept-license
 # 指定输出目录和架构
 msvc-kit bundle --accept-license --output ./my-msvc-bundle --arch x64
 
+# 交叉编译 bundle（x64 主机编译 ARM64 目标）
+msvc-kit bundle --accept-license --host-arch x64 --arch arm64
+
 # 同时创建 zip 压缩包
 msvc-kit bundle --accept-license --zip
 
@@ -135,10 +152,12 @@ msvc-kit bundle --accept-license --msvc-version 14.44 --sdk-version 10.0.26100.0
 
 Bundle 包含：
 - `msvc-kit.exe` - CLI 工具
-- `runtime/` - 已下载的 MSVC + Windows SDK
+- `VC/Tools/MSVC/{version}/` - MSVC 编译器和工具
+- `Windows Kits/10/` - Windows SDK
 - `setup.bat` - CMD 激活脚本
 - `setup.ps1` - PowerShell 激活脚本
 - `setup.sh` - Bash/WSL 激活脚本
+- `README.txt` - 使用说明
 
 使用方法：
 ```bash
@@ -211,64 +230,31 @@ msvc-kit = "0.1"
 
 ```rust
 use msvc_kit::{download_msvc, download_sdk, setup_environment, DownloadOptions};
-use msvc_kit::version::Architecture;
+use msvc_kit::{list_available_versions, Architecture};
 
 #[tokio::main]
 async fn main() -> msvc_kit::Result<()> {
-    // 使用 Builder 模式配置
+    // 列出微软可用版本
+    let versions = list_available_versions().await?;
+    println!("最新 MSVC: {:?}", versions.latest_msvc);
+    println!("最新 SDK: {:?}", versions.latest_sdk);
+
+    // 使用 Builder 模式下载
     let options = DownloadOptions::builder()
         .target_dir("C:/msvc-kit")
         .arch(Architecture::X64)
-        .host_arch(Architecture::X64)
-        .verify_hashes(true)
-        .parallel_downloads(4)
         .build();
 
     let msvc = download_msvc(&options).await?;
     let sdk = download_sdk(&options).await?;
     let env = setup_environment(&msvc, Some(&sdk))?;
 
-    // 获取安装路径
-    println!("MSVC 安装路径: {:?}", msvc.install_path);
-    println!("SDK 安装路径: {:?}", sdk.install_path);
-
-    // 获取目录路径
-    println!("MSVC bin 目录: {:?}", msvc.bin_dir());
-    println!("MSVC include 目录: {:?}", msvc.include_dir());
-    println!("MSVC lib 目录: {:?}", msvc.lib_dir());
-
-    // 获取工具路径
     println!("cl.exe: {:?}", env.cl_exe_path());
-    println!("link.exe: {:?}", env.link_exe_path());
-
-    // 获取环境变量字符串
-    println!("INCLUDE: {}", env.include_path_string());
-    println!("LIB: {}", env.lib_path_string());
-
-    // 导出为 JSON（用于外部工具）
-    let json = env.to_json();
-    std::fs::write("msvc-env.json", serde_json::to_string_pretty(&json)?)?;
-
     Ok(())
 }
 ```
 
-## 设置的环境变量
-
-执行 `setup_environment()` 或 `msvc-kit setup` 后：
-
-| 变量 | 说明 |
-|------|------|
-| `VCINSTALLDIR` | VC 安装目录 |
-| `VCToolsInstallDir` | VC 工具安装目录 |
-| `VCToolsVersion` | VC 工具版本 |
-| `WindowsSdkDir` | Windows SDK 目录 |
-| `WindowsSDKVersion` | Windows SDK 版本 |
-| `WindowsSdkBinPath` | Windows SDK bin 路径 |
-| `INCLUDE` | 编译器包含路径 |
-| `LIB` | 链接器库路径 |
-| `PATH` | 更新后的路径（包含编译器/SDK bin 目录） |
-| `Platform` | 目标平台 (x64, x86 等) |
+详见 [库 API 文档](docs/api/library.md)。
 
 ## 架构支持
 
@@ -282,6 +268,16 @@ async fn main() -> msvc_kit::Result<()> {
 ## 许可证
 
 MIT 许可证 - 参见 `LICENSE`。
+
+**重要：微软软件许可声明**
+
+本工具下载的 MSVC 编译器和 Windows SDK 是微软的财产，
+受 [Microsoft Visual Studio 许可条款](https://visualstudio.microsoft.com/license-terms/) 约束。
+
+- **msvc-kit** 本身采用 MIT 许可证
+- MSVC Build Tools 和 Windows SDK **不可再分发** - 用户必须直接下载
+- 使用 `msvc-kit download` 或 `msvc-kit bundle --accept-license` 即表示您同意微软的许可条款
+- 本工具仅自动化下载过程，不分发微软软件
 
 **重要：微软软件许可声明**
 

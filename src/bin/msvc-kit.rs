@@ -6,12 +6,12 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use msvc_kit::bundle::{generate_bundle_scripts, save_bundle_scripts, BundleLayout};
-use msvc_kit::env::ShellType;
+use msvc_kit::env::generate_activation_script;
 use msvc_kit::installer::{install_msvc, install_sdk};
 use msvc_kit::version::{list_installed_msvc, list_installed_sdk, Architecture};
 use msvc_kit::{
-    download_msvc, download_sdk, generate_activation_script, generate_activation_script_with_vars,
-    get_env_vars, load_config, save_config, setup_environment, DownloadOptions, MsvcKitConfig,
+    download_msvc, download_sdk, generate_script, get_env_vars, load_config, save_config,
+    setup_environment, DownloadOptions, MsvcKitConfig, ScriptContext, ShellType,
 };
 
 /// Portable MSVC Build Tools installer and manager
@@ -171,6 +171,11 @@ enum Commands {
         #[arg(short, long, default_value = "x64")]
         arch: String,
 
+        /// Host architecture for cross-compilation (x64, x86, arm64)
+        /// Defaults to current system architecture
+        #[arg(long)]
+        host_arch: Option<String>,
+
         /// MSVC version to download (default: latest)
         #[arg(long)]
         msvc_version: Option<String>,
@@ -329,15 +334,27 @@ async fn main() -> anyhow::Result<()> {
                     _ => ShellType::detect(),
                 };
 
-                let mut vars = get_env_vars(&env);
-                if let Some(portable_root) = portable_root {
-                    let install_root = install_dir.display().to_string();
-                    for value in vars.values_mut() {
-                        *value = value.replace(&install_root, &portable_root);
-                    }
-                }
+                // Create script context based on whether portable root is specified
+                let ctx = if let Some(ref _portable_root) = portable_root {
+                    // Use portable mode with relative paths
+                    ScriptContext::portable(
+                        &env.vc_tools_version,
+                        &env.windows_sdk_version,
+                        arch,
+                        arch,
+                    )
+                } else {
+                    // Use absolute mode with actual paths
+                    ScriptContext::absolute(
+                        install_dir.clone(),
+                        &env.vc_tools_version,
+                        &env.windows_sdk_version,
+                        arch,
+                        arch,
+                    )
+                };
 
-                let script_content = generate_activation_script_with_vars(&vars, shell_type);
+                let script_content = generate_script(&ctx, shell_type)?;
                 println!("{}", script_content);
             } else if persistent {
                 #[cfg(windows)]
@@ -353,7 +370,7 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 // Print instructions for temporary setup
                 let shell_type = ShellType::detect();
-                let _script = generate_activation_script(&env, shell_type);
+                let _script = generate_activation_script(&env, shell_type)?;
 
                 println!("📋 MSVC Environment Setup\n");
                 println!("To activate the MSVC environment, run:\n");
@@ -529,6 +546,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Bundle {
             output,
             arch,
+            host_arch,
             msvc_version,
             sdk_version,
             accept_license,
@@ -550,10 +568,15 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let arch: Architecture = arch.parse().map_err(|e: String| anyhow::anyhow!(e))?;
+            let host_arch: Architecture = host_arch
+                .map(|s| s.parse().map_err(|e: String| anyhow::anyhow!(e)))
+                .transpose()?
+                .unwrap_or_else(Architecture::host);
 
             println!("📦 msvc-kit - Creating Portable MSVC Bundle\n");
             println!("Output directory: {}", output.display());
-            println!("Architecture: {}", arch);
+            println!("Target architecture: {}", arch);
+            println!("Host architecture: {}", host_arch);
             println!();
 
             // Create output directory
@@ -565,7 +588,7 @@ async fn main() -> anyhow::Result<()> {
                 sdk_version: sdk_version.clone(),
                 target_dir: output.clone(),
                 arch,
-                host_arch: Some(Architecture::host()),
+                host_arch: Some(host_arch),
                 verify_hashes: true,
                 parallel_downloads: config.parallel_downloads,
                 http_client: None,
@@ -591,20 +614,12 @@ async fn main() -> anyhow::Result<()> {
 
             // Create bundle layout
             let layout = BundleLayout::from_root_with_versions(
-                &output,
-                &msvc_ver,
-                &sdk_ver,
-                arch,
-                Architecture::host(),
+                &output, &msvc_ver, &sdk_ver, arch, host_arch,
             )?;
 
-            // Generate and save activation scripts
+            // Generate and save activation scripts (includes README)
             let scripts = generate_bundle_scripts(&layout)?;
             save_bundle_scripts(&layout, &scripts).await?;
-
-            // Generate README
-            let readme_content = msvc_kit::bundle::scripts::generate_bundle_readme(&layout);
-            tokio::fs::write(output.join("README.txt"), &readme_content).await?;
 
             // Copy msvc-kit executable
             let exe_name = if cfg!(windows) {

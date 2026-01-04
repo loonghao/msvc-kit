@@ -5,7 +5,7 @@
 //!
 //! # Directory Structure
 //!
-//! The bundle follows a structure similar to msvc-wine for compatibility:
+//! The bundle follows the standard Visual Studio Build Tools installation layout:
 //!
 //! ```text
 //! {bundle_root}/
@@ -158,7 +158,7 @@ pub async fn create_bundle(options: BundleOptions) -> Result<BundleResult> {
     // Create output directory
     tokio::fs::create_dir_all(&options.output_dir)
         .await
-        .map_err(|e| MsvcKitError::Io(e))?;
+        .map_err(MsvcKitError::Io)?;
 
     // Download options - download directly to bundle root
     let download_opts = DownloadOptions {

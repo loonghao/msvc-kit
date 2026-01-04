@@ -513,7 +513,7 @@ mod windows_env_tests {
 // ============================================================================
 
 mod shell_script_tests {
-    use msvc_kit::env::ShellType;
+    use msvc_kit::ShellType;
 
     #[test]
     fn test_shell_type_script_extension() {

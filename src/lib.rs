@@ -83,21 +83,23 @@ pub mod downloader;
 pub mod env;
 pub mod error;
 pub mod installer;
+pub mod scripts;
 pub mod version;
 
 // Re-export main types and functions
 pub use config::{load_config, save_config, MsvcKitConfig};
 pub use downloader::{
-    download_msvc, download_sdk, BoxedCacheManager, BoxedProgressHandler, CacheManager,
-    ComponentDownloader, ComponentType, DownloadOptions, DownloadOptionsBuilder,
-    FileSystemCacheManager, ProgressHandler,
+    download_msvc, download_sdk, list_available_versions, AvailableVersions, BoxedCacheManager,
+    BoxedProgressHandler, CacheManager, ComponentDownloader, ComponentType, DownloadOptions,
+    DownloadOptionsBuilder, FileSystemCacheManager, ProgressHandler,
 };
-pub use env::{
-    generate_activation_script, generate_activation_script_with_vars, get_env_vars,
-    setup_environment, MsvcEnvironment, ShellType, ToolPaths,
-};
+pub use env::{get_env_vars, setup_environment, MsvcEnvironment, ToolPaths};
 pub use error::{MsvcKitError, Result};
 pub use installer::InstallInfo;
+pub use scripts::{
+    generate_absolute_scripts, generate_portable_scripts, generate_script, save_scripts,
+    GeneratedScripts, ScriptContext, ShellType,
+};
 pub use version::{Architecture, MsvcVersion, SdkVersion};
 
 // Re-export bundle types
