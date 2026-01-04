@@ -11,7 +11,14 @@ on:
   pull_request:
     paths:
       - "src/bin/msvc-kit.rs"
+      - "src/bundle/**"
+      - "src/downloader/**"
+      - "src/installer/**"
       - "src/env/**"
+      - "src/version/**"
+      - "src/lib.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/bundle.yml"
 
 permissions:
