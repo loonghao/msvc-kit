@@ -8,7 +8,7 @@ use super::{
     common::CommonDownloader, DownloadOptions, DownloadPreview, PackagePreview, VsManifest,
 };
 use crate::error::{MsvcKitError, Result};
-use crate::installer::{extract_packages_with_progress, InstallInfo};
+use crate::installer::InstallInfo;
 use crate::version::Architecture;
 
 /// MSVC downloader
@@ -195,44 +195,14 @@ impl MsvcDownloader {
             .download_packages(&packages, &download_dir, "MSVC")
             .await?;
 
-        // Extract packages
-        let install_path = self.downloader.options.target_dir.clone();
-        tracing::info!("Extracting MSVC packages to {:?}", install_path);
+        tracing::info!("Downloaded {} MSVC packages", downloaded_files.len());
 
-        extract_packages_with_progress(&downloaded_files, &install_path, "MSVC").await?;
-
-        // Find the actual MSVC version directory and extract the full version number
-        let vc_tools_path = install_path.join("VC").join("Tools").join("MSVC");
-        let (msvc_version_dir, actual_version) = if vc_tools_path.exists() {
-            // Find the version directory - this contains the full version number (e.g., 14.44.34823)
-            let mut entries = tokio::fs::read_dir(&vc_tools_path).await?;
-            let mut version_dir = None;
-            let mut full_version = version.clone();
-            while let Some(entry) = entries.next_entry().await? {
-                if entry.file_type().await?.is_dir() {
-                    let dir_name = entry.file_name();
-                    if let Some(name) = dir_name.to_str() {
-                        // The directory name is the full version (e.g., "14.44.34823")
-                        full_version = name.to_string();
-                        version_dir = Some(entry.path());
-                        tracing::info!(
-                            "Found MSVC version directory: {} (full version: {})",
-                            entry.path().display(),
-                            full_version
-                        );
-                        break;
-                    }
-                }
-            }
-            (version_dir.unwrap_or(vc_tools_path), full_version)
-        } else {
-            (install_path.clone(), version.clone())
-        };
-
+        // Return InstallInfo with target_dir as install_path (not extracted yet)
+        // The version is a prefix (e.g., "14.44"), full version will be determined after extraction
         Ok(InstallInfo {
             component_type: "msvc".to_string(),
-            version: actual_version,
-            install_path: msvc_version_dir,
+            version: version.clone(),
+            install_path: self.downloader.options.target_dir.clone(),
             downloaded_files,
             arch: self.downloader.options.arch,
         })

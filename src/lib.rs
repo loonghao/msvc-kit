@@ -17,7 +17,7 @@
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use msvc_kit::{download_msvc, DownloadOptions, Architecture};
+//! use msvc_kit::{download_msvc, extract_and_finalize_msvc, DownloadOptions, Architecture};
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
@@ -28,8 +28,13 @@
 //!         .parallel_downloads(8)
 //!         .build();
 //!
-//!     let install_info = download_msvc(&options).await?;
-//!     println!("Installed MSVC to: {:?}", install_info.install_path);
+//!     // Download MSVC packages
+//!     let mut msvc_info = download_msvc(&options).await?;
+//!     
+//!     // Extract and finalize (determines full version number)
+//!     extract_and_finalize_msvc(&mut msvc_info).await?;
+//!     
+//!     println!("Installed MSVC {} to: {:?}", msvc_info.version, msvc_info.install_path);
 //!     Ok(())
 //! }
 //! ```
@@ -95,7 +100,7 @@ pub use downloader::{
 };
 pub use env::{get_env_vars, setup_environment, MsvcEnvironment, ToolPaths};
 pub use error::{MsvcKitError, Result};
-pub use installer::InstallInfo;
+pub use installer::{extract_and_finalize_msvc, extract_and_finalize_sdk, InstallInfo};
 pub use scripts::{
     generate_absolute_scripts, generate_portable_scripts, generate_script, save_scripts,
     GeneratedScripts, ScriptContext, ShellType,

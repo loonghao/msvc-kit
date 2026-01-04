@@ -64,11 +64,6 @@ pub async fn extract_packages_with_progress(
     // cache marker dir
     let marker_dir = target_dir.join(".msvc-kit-extracted");
     tokio::fs::create_dir_all(&marker_dir).await.ok();
-    // Migration: if target already has contents from a previous run (before markers), treat as cached
-    let has_existing_content = match tokio::fs::read_dir(target_dir).await {
-        Ok(mut rd) => matches!(rd.next_entry().await, Ok(Some(_))),
-        Err(_) => false,
-    };
 
     for (idx, file) in files.iter().enumerate() {
         let name = file
@@ -84,18 +79,6 @@ pub async fn extract_packages_with_progress(
                 idx + 1,
                 total
             ));
-            pb.inc(0);
-            continue;
-        }
-
-        if has_existing_content {
-            pb.set_message(format!(
-                "{} extracting {}/{} (cached-existing)",
-                label,
-                idx + 1,
-                total
-            ));
-            let _ = std::fs::write(&marker, b"ok");
             pb.inc(0);
             continue;
         }
@@ -209,7 +192,65 @@ impl InstallInfo {
     }
 }
 
+/// Extract MSVC packages and finalize InstallInfo with actual version
+///
+/// This function:
+/// 1. Extracts downloaded packages to the target directory
+/// 2. Scans for the MSVC version directory to get the full version number
+/// 3. Updates InstallInfo with the complete version and correct paths
+pub async fn extract_and_finalize_msvc(info: &mut InstallInfo) -> Result<()> {
+    let target_dir = &info.install_path;
+
+    tracing::info!("Extracting MSVC packages to {:?}", target_dir);
+
+    // Extract all packages
+    extract_packages_with_progress(&info.downloaded_files, target_dir, "MSVC").await?;
+
+    // Find the actual MSVC version directory and extract the full version number
+    let vc_tools_path = target_dir.join("VC").join("Tools").join("MSVC");
+    if vc_tools_path.exists() {
+        // Find the version directory - this contains the full version number (e.g., 14.44.34823)
+        let mut entries = tokio::fs::read_dir(&vc_tools_path).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            if entry.file_type().await?.is_dir() {
+                let dir_name = entry.file_name();
+                if let Some(name) = dir_name.to_str() {
+                    // The directory name is the full version (e.g., "14.44.34823")
+                    info.version = name.to_string();
+                    tracing::info!(
+                        "Found MSVC version directory: {} (full version: {})",
+                        entry.path().display(),
+                        info.version
+                    );
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract SDK packages and finalize InstallInfo
+///
+/// This function:
+/// 1. Extracts downloaded packages to the target directory
+/// 2. Verifies the SDK installation path
+pub async fn extract_and_finalize_sdk(info: &InstallInfo) -> Result<()> {
+    let target_dir = &info.install_path;
+
+    tracing::info!("Extracting Windows SDK packages to {:?}", target_dir);
+
+    // Extract all packages
+    extract_packages_with_progress(&info.downloaded_files, target_dir, "Windows SDK").await?;
+
+    Ok(())
+}
+
 /// Install MSVC components from downloaded files
+///
+/// This is a legacy function that extracts packages to install_path.
+/// For new code, use extract_and_finalize_msvc() instead.
 pub async fn install_msvc(info: &InstallInfo) -> Result<PathBuf> {
     tracing::info!(
         "Installing MSVC {} to {:?}",
@@ -224,6 +265,9 @@ pub async fn install_msvc(info: &InstallInfo) -> Result<PathBuf> {
 }
 
 /// Install Windows SDK components from downloaded files
+///
+/// This is a legacy function that extracts packages to install_path.
+/// For new code, use extract_and_finalize_sdk() instead.
 pub async fn install_sdk(info: &InstallInfo) -> Result<PathBuf> {
     tracing::info!(
         "Installing Windows SDK {} to {:?}",

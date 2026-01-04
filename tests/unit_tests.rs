@@ -6,12 +6,12 @@ use msvc_kit::downloader::{
     FileSystemCacheManager, HttpClientConfig, NoopProgressHandler, PackagePreview, ProgressHandler,
 };
 use msvc_kit::env::{generate_activation_script, get_env_vars, MsvcEnvironment};
-use msvc_kit::ShellType;
 use msvc_kit::error::MsvcKitError;
 use msvc_kit::installer::InstallInfo;
 use msvc_kit::version::{
     is_msvc_installed, is_sdk_installed, Architecture, InstalledVersion, MsvcVersion, SdkVersion,
 };
+use msvc_kit::ShellType;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
