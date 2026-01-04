@@ -7,7 +7,6 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use msvc_kit::bundle::{generate_bundle_scripts, save_bundle_scripts, BundleLayout};
 use msvc_kit::env::generate_activation_script;
-use msvc_kit::installer::{install_msvc, install_sdk};
 use msvc_kit::version::{list_installed_msvc, list_installed_sdk, Architecture};
 use msvc_kit::{
     download_msvc, download_sdk, generate_script, get_env_vars, load_config, save_config,
@@ -259,25 +258,25 @@ async fn main() -> anyhow::Result<()> {
 
             if !no_msvc {
                 println!("⬇️  Downloading MSVC compiler...");
-                let msvc_info = download_msvc(&options).await?;
-                println!("📁 Installing MSVC...");
-                install_msvc(&msvc_info).await?;
+                let mut msvc_info = download_msvc(&options).await?;
+                println!("📁 Extracting MSVC packages...");
+                msvc_kit::extract_and_finalize_msvc(&mut msvc_info).await?;
                 println!(
                     "✅ MSVC {} installed to {}",
                     msvc_info.version,
-                    msvc_info.install_path.display()
+                    target_dir.display()
                 );
             }
 
             if !no_sdk {
                 println!("\n⬇️  Downloading Windows SDK...");
                 let sdk_info = download_sdk(&options).await?;
-                println!("📁 Installing Windows SDK...");
-                install_sdk(&sdk_info).await?;
+                println!("📁 Extracting SDK packages...");
+                msvc_kit::extract_and_finalize_sdk(&sdk_info).await?;
                 println!(
                     "✅ Windows SDK {} installed to {}",
                     sdk_info.version,
-                    sdk_info.install_path.display()
+                    target_dir.display()
                 );
             }
 
@@ -596,19 +595,19 @@ async fn main() -> anyhow::Result<()> {
                 dry_run: false,
             };
 
-            // Download MSVC
+            // Download and extract MSVC
             println!("⬇️  Downloading MSVC compiler...");
-            let msvc_info = download_msvc(&options).await?;
-            println!("📁 Installing MSVC...");
-            install_msvc(&msvc_info).await?;
+            let mut msvc_info = download_msvc(&options).await?;
+            println!("📁 Extracting MSVC packages...");
+            msvc_kit::extract_and_finalize_msvc(&mut msvc_info).await?;
             let msvc_ver = msvc_info.version.clone();
             println!("✅ MSVC {} installed", msvc_ver);
 
-            // Download SDK
+            // Download and extract SDK
             println!("\n⬇️  Downloading Windows SDK...");
             let sdk_info = download_sdk(&options).await?;
-            println!("📁 Installing Windows SDK...");
-            install_sdk(&sdk_info).await?;
+            println!("📁 Extracting SDK packages...");
+            msvc_kit::extract_and_finalize_sdk(&sdk_info).await?;
             let sdk_ver = sdk_info.version.clone();
             println!("✅ Windows SDK {} installed", sdk_ver);
 

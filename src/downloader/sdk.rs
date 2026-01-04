@@ -8,7 +8,7 @@ use super::{
     common::CommonDownloader, DownloadOptions, DownloadPreview, PackagePreview, VsManifest,
 };
 use crate::error::{MsvcKitError, Result};
-use crate::installer::{extract_packages_with_progress, InstallInfo};
+use crate::installer::InstallInfo;
 
 /// Windows SDK downloader
 pub struct SdkDownloader {
@@ -173,19 +173,13 @@ impl SdkDownloader {
             .download_packages(&packages, &download_dir, "Windows SDK")
             .await?;
 
-        // Extract packages
-        let install_path = self.downloader.options.target_dir.clone();
-        tracing::info!("Extracting SDK packages to {:?}", install_path);
+        tracing::info!("Downloaded {} SDK packages", downloaded_files.len());
 
-        extract_packages_with_progress(&downloaded_files, &install_path, "Windows SDK").await?;
-
-        // Determine the actual SDK install path
-        let sdk_path = install_path.join("Windows Kits").join("10");
-
+        // Return InstallInfo with target_dir as install_path (not extracted yet)
         Ok(InstallInfo {
             component_type: "sdk".to_string(),
             version,
-            install_path: sdk_path,
+            install_path: self.downloader.options.target_dir.clone(),
             downloaded_files,
             arch: self.downloader.options.arch,
         })

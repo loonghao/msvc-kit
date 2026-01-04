@@ -75,7 +75,7 @@ pub use scripts::{generate_bundle_scripts, save_bundle_scripts, BundleScripts};
 
 use crate::downloader::{download_msvc, download_sdk, DownloadOptions};
 use crate::error::{MsvcKitError, Result};
-use crate::installer::{install_msvc, install_sdk, InstallInfo};
+use crate::installer::InstallInfo;
 use crate::version::Architecture;
 use std::path::{Path, PathBuf};
 
@@ -174,13 +174,13 @@ pub async fn create_bundle(options: BundleOptions) -> Result<BundleResult> {
         dry_run: false,
     };
 
-    // Download and install MSVC
-    let msvc_info = download_msvc(&download_opts).await?;
-    install_msvc(&msvc_info).await?;
+    // Download and extract MSVC
+    let mut msvc_info = download_msvc(&download_opts).await?;
+    crate::installer::extract_and_finalize_msvc(&mut msvc_info).await?;
 
-    // Download and install SDK
+    // Download and extract SDK
     let sdk_info = download_sdk(&download_opts).await?;
-    install_sdk(&sdk_info).await?;
+    crate::installer::extract_and_finalize_sdk(&sdk_info).await?;
 
     // Create bundle layout from the installed files
     let layout = BundleLayout::from_root_with_versions(
