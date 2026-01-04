@@ -69,6 +69,66 @@ msvc-kit 会根据您指定的架构智能过滤下载的包，显著减少下�
 | 单一架构（x64） | ~300-500 MB |
 | 最小化（仅工具） | ~150-250 MB |
 
+## 可用工具
+
+### MSVC 编译器工具
+
+下载并设置环境后，以下 MSVC 工具可用：
+
+| 工具 | 描述 |
+|------|------|
+| `cl.exe` | C/C++ 编译器 |
+| `link.exe` | 链接器 |
+| `lib.exe` | 静态库管理器 |
+| `ml64.exe` | MASM 汇编器（x64） |
+| `ml.exe` | MASM 汇编器（x86） |
+| `nmake.exe` | Microsoft make 工具 |
+
+### Windows SDK 工具
+
+Windows SDK 包含用于开发和部署的额外工具：
+
+| 工具 | 描述 |
+|------|------|
+| `rc.exe` | 资源编译器 |
+| `signtool.exe` | 代码签名工具 |
+| `mt.exe` | 清单工具 |
+| `makecat.exe` | 目录创建工具 |
+| `makecert.exe` | 证书创建工具 |
+| `certutil.exe` | 证书工具 |
+| `mc.exe` | 消息编译器 |
+| `midl.exe` | MIDL 编译器 |
+
+### 使用 SDK 工具
+
+激活环境后，SDK 工具在 PATH 中可用：
+
+```bash
+# 激活环境
+msvc-kit setup --script --shell powershell | Invoke-Expression
+
+# 签名可执行文件
+signtool sign /a /t http://timestamp.digicert.com myapp.exe
+
+# 编译资源
+rc /fo resources.res resources.rc
+
+# 创建清单
+mt -manifest app.manifest -outputresource:myapp.exe;1
+```
+
+### 工具路径
+
+工具位于以下位置：
+
+```
+# MSVC 工具
+{install_dir}/VC/Tools/MSVC/{version}/bin/Host{host_arch}/{target_arch}/
+
+# SDK 工具
+{install_dir}/Windows Kits/10/bin/{sdk_version}/{arch}/
+```
+
 ## 目录结构
 
 MSVC 使用特定的目录结构进行交叉编译：

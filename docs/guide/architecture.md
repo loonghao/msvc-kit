@@ -69,6 +69,66 @@ The following are automatically excluded to minimize download size:
 | Single architecture (x64) | ~300-500 MB |
 | Minimal (tools only) | ~150-250 MB |
 
+## Available Tools
+
+### MSVC Compiler Tools
+
+After downloading and setting up the environment, the following MSVC tools are available:
+
+| Tool | Description |
+|------|-------------|
+| `cl.exe` | C/C++ compiler |
+| `link.exe` | Linker |
+| `lib.exe` | Static library manager |
+| `ml64.exe` | MASM assembler (x64) |
+| `ml.exe` | MASM assembler (x86) |
+| `nmake.exe` | Microsoft make utility |
+
+### Windows SDK Tools
+
+The Windows SDK includes additional tools for development and deployment:
+
+| Tool | Description |
+|------|-------------|
+| `rc.exe` | Resource compiler |
+| `signtool.exe` | Code signing tool |
+| `mt.exe` | Manifest tool |
+| `makecat.exe` | Catalog creation tool |
+| `makecert.exe` | Certificate creation tool |
+| `certutil.exe` | Certificate utility |
+| `mc.exe` | Message compiler |
+| `midl.exe` | MIDL compiler |
+
+### Using SDK Tools
+
+After activating the environment, SDK tools are available in PATH:
+
+```bash
+# Activate environment
+msvc-kit setup --script --shell powershell | Invoke-Expression
+
+# Sign an executable
+signtool sign /a /t http://timestamp.digicert.com myapp.exe
+
+# Compile resources
+rc /fo resources.res resources.rc
+
+# Create manifest
+mt -manifest app.manifest -outputresource:myapp.exe;1
+```
+
+### Tool Paths
+
+The tools are located in:
+
+```
+# MSVC tools
+{install_dir}/VC/Tools/MSVC/{version}/bin/Host{host_arch}/{target_arch}/
+
+# SDK tools
+{install_dir}/Windows Kits/10/bin/{sdk_version}/{arch}/
+```
+
 ## Directory Structure
 
 MSVC uses a specific directory structure for cross-compilation:
