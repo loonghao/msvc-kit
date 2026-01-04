@@ -191,4 +191,122 @@ mod tests {
         assert!(script.contains("LIB"));
         assert!(script.contains("PATH"));
     }
+
+    #[test]
+    fn test_generate_activation_script_powershell() {
+        let env = sample_env();
+        let script = generate_activation_script(&env, ShellType::PowerShell).unwrap();
+
+        assert!(script.contains("$env:"));
+        assert!(script.contains("14.40.0"));
+    }
+
+    #[test]
+    fn test_generate_activation_script_bash() {
+        let env = sample_env();
+        let script = generate_activation_script(&env, ShellType::Bash).unwrap();
+
+        assert!(script.contains("export"));
+        assert!(script.contains("14.40.0"));
+    }
+
+    #[test]
+    fn test_generate_all_activation_scripts() {
+        let env = sample_env();
+        let scripts = generate_all_activation_scripts(&env).unwrap();
+
+        assert!(!scripts.cmd.is_empty());
+        assert!(!scripts.powershell.is_empty());
+        assert!(!scripts.bash.is_empty());
+        // Absolute scripts don't have readme
+        assert!(scripts.readme.is_none());
+    }
+
+    #[test]
+    fn test_apply_environment() {
+        let env = sample_env();
+
+        // Save original PATH
+        let original_path = std::env::var("PATH").ok();
+
+        // Apply environment
+        apply_environment(&env).unwrap();
+
+        // Verify some env vars are set
+        assert!(std::env::var("VCToolsVersion").is_ok());
+        assert!(std::env::var("WindowsSDKVersion").is_ok());
+
+        // Restore original PATH if it existed
+        if let Some(path) = original_path {
+            std::env::set_var("PATH", path);
+        }
+
+        // Clean up test env vars
+        std::env::remove_var("VCToolsVersion");
+        std::env::remove_var("WindowsSDKVersion");
+    }
+
+    #[test]
+    fn test_create_script_context() {
+        let env = sample_env();
+        let ctx = create_script_context(&env);
+
+        assert!(!ctx.portable);
+        assert!(ctx.root.is_some());
+        assert_eq!(ctx.msvc_version, "14.40.0");
+        assert_eq!(ctx.sdk_version, "10.0.22621.0");
+        assert_eq!(ctx.arch, Architecture::X64);
+        assert_eq!(ctx.host_arch, Architecture::X64);
+    }
+
+    #[tokio::test]
+    async fn test_save_activation_script() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let env = sample_env();
+
+        let path = save_activation_script(&env, ShellType::Cmd, &temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
+
+        assert!(path.exists());
+        assert!(path.to_string_lossy().ends_with("activate.bat"));
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("14.40.0"));
+    }
+
+    #[tokio::test]
+    async fn test_save_activation_script_powershell() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let env = sample_env();
+
+        let path =
+            save_activation_script(&env, ShellType::PowerShell, &temp_dir.path().to_path_buf())
+                .await
+                .unwrap();
+
+        assert!(path.exists());
+        assert!(path.to_string_lossy().ends_with("activate.ps1"));
+    }
+
+    #[tokio::test]
+    async fn test_save_activation_script_bash() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let env = sample_env();
+
+        let path = save_activation_script(&env, ShellType::Bash, &temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
+
+        assert!(path.exists());
+        assert!(path.to_string_lossy().ends_with("activate.sh"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_write_to_registry_unsupported() {
+        let env = sample_env();
+        let result = write_to_registry(&env);
+        assert!(result.is_err());
+    }
 }
