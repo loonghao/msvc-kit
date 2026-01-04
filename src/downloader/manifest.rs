@@ -932,9 +932,7 @@ mod tests {
             .any(|p| p.id == "Microsoft.VC.14.44.Tools.HostX64.TargetX64.base"));
 
         // Should NOT include ARM64 or x86 tools
-        assert!(!x64_packages
-            .iter()
-            .any(|p| p.id.contains("TargetARM64")));
+        assert!(!x64_packages.iter().any(|p| p.id.contains("TargetARM64")));
         assert!(!x64_packages.iter().any(|p| p.id.contains("TargetX86")));
 
         // Should include x64 CRT
@@ -1002,12 +1000,8 @@ mod tests {
             .any(|p| p.id == "Microsoft.VC.14.44.Tools.HostX64.TargetARM64.base"));
 
         // Should NOT include x64 or x86 tools
-        assert!(!arm64_packages
-            .iter()
-            .any(|p| p.id.contains("TargetX64")));
-        assert!(!arm64_packages
-            .iter()
-            .any(|p| p.id.contains("TargetX86")));
+        assert!(!arm64_packages.iter().any(|p| p.id.contains("TargetX64")));
+        assert!(!arm64_packages.iter().any(|p| p.id.contains("TargetX86")));
 
         // Should include ARM64 CRT, MFC, ATL
         assert!(arm64_packages
@@ -1046,9 +1040,7 @@ mod tests {
         let x64_packages = manifest.find_sdk_packages("10.0.26100.0", "x64");
 
         // Should include x64 SDK
-        assert!(x64_packages
-            .iter()
-            .any(|p| p.id == "Win11SDK_10.0.26100"));
+        assert!(x64_packages.iter().any(|p| p.id == "Win11SDK_10.0.26100"));
 
         // Should NOT include ARM64 SDK
         assert!(!x64_packages
