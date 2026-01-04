@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.1](https://github.com/loonghao/msvc-kit/compare/v0.2.0...v0.2.1) (2026-01-04)
+
+
+### Bug Fixes
+
+* architecture filtering for MSVC and SDK packages ([1f23da7](https://github.com/loonghao/msvc-kit/commit/1f23da73e7f7c92295b42cceafecde875805c573))
+* update deploy-pages action from v5 to v6 ([0de2a0f](https://github.com/loonghao/msvc-kit/commit/0de2a0f62341b2c8277e8ac76cd686fe3e3fe256))
+
+
+### Documentation
+
+* add SDK tools documentation (signtool, rc, mt, etc.) ([5af4398](https://github.com/loonghao/msvc-kit/commit/5af4398078b29df2000a38b164ed5eecb4559ead))
+
 ## [0.2.0](https://github.com/loonghao/msvc-kit/compare/v0.1.4...v0.2.0) (2026-01-04)
 
 

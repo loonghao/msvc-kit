@@ -1,6 +1,6 @@
 [package]
 name = "msvc-kit"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["loonghao <hal.long@outlook.com>"]
 description = "A portable MSVC Build Tools installer and manager for Rust development"
