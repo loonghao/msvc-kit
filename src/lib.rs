@@ -12,6 +12,7 @@
 //! - Configure environment variables for cc-rs compatibility
 //! - Support version selection (defaults to latest)
 //! - Generate activation scripts for shell environments
+//! - Create portable bundles with all dependencies
 //!
 //! ## Quick Start
 //!
@@ -33,6 +34,31 @@
 //! }
 //! ```
 //!
+//! ## Bundle Creation
+//!
+//! ```rust,no_run
+//! use msvc_kit::bundle::{create_bundle, BundleOptions, BundleLayout};
+//! use msvc_kit::Architecture;
+//!
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     // Create a portable bundle
+//!     let options = BundleOptions {
+//!         output_dir: "./msvc-bundle".into(),
+//!         arch: Architecture::X64,
+//!         ..Default::default()
+//!     };
+//!     
+//!     let result = create_bundle(options).await?;
+//!     println!("Bundle created with MSVC {}", result.msvc_info.version);
+//!     
+//!     // Later, discover an existing bundle
+//!     let layout = BundleLayout::from_root("./msvc-bundle")?;
+//!     println!("cl.exe at: {:?}", layout.cl_exe_path());
+//!     Ok(())
+//! }
+//! ```
+//!
 //! ## Advanced Configuration
 //!
 //! ```rust,no_run
@@ -50,6 +76,7 @@
 //!     .build();
 //! ```
 
+pub mod bundle;
 pub mod config;
 pub mod constants;
 pub mod downloader;
@@ -72,3 +99,6 @@ pub use env::{
 pub use error::{MsvcKitError, Result};
 pub use installer::InstallInfo;
 pub use version::{Architecture, MsvcVersion, SdkVersion};
+
+// Re-export bundle types
+pub use bundle::{create_bundle, discover_bundle, BundleLayout, BundleOptions, BundleResult};
