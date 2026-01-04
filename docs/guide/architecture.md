@@ -37,6 +37,38 @@ msvc-kit download --host-arch x64 --arch arm64
 msvc-kit download --host-arch x64 --arch x86
 ```
 
+## Architecture Filtering
+
+msvc-kit intelligently filters downloaded packages based on your specified architecture, significantly reducing download size and installation time.
+
+### What Gets Downloaded
+
+When you specify an architecture (e.g., `--arch x64`), msvc-kit downloads only:
+
+| Package Type | Filtering Behavior |
+|--------------|-------------------|
+| **Tools** | Only matching host/target combination (e.g., `HostX64.TargetX64`) |
+| **CRT Libraries** | Only matching architecture (e.g., `CRT.x64.Desktop`) |
+| **MFC/ATL** | Only matching architecture (e.g., `MFC.x64`, `ATL.x64`) |
+| **Headers** | Always included (architecture-neutral) |
+| **Spectre Libraries** | Excluded by default (rarely needed) |
+
+### What Gets Excluded
+
+The following are automatically excluded to minimize download size:
+
+- **Other architectures**: ARM64, x86, ARM packages when targeting x64
+- **Spectre-mitigated libraries**: `.Spectre` suffix packages
+- **Redundant packages**: Duplicate architecture variants
+
+### Download Size Comparison
+
+| Configuration | Approximate Size |
+|--------------|------------------|
+| All architectures (old behavior) | ~2.5 GB |
+| Single architecture (x64) | ~300-500 MB |
+| Minimal (tools only) | ~150-250 MB |
+
 ## Directory Structure
 
 MSVC uses a specific directory structure for cross-compilation:
@@ -104,9 +136,28 @@ msvc-kit download --arch arm64
 ```rust
 use msvc_kit::{DownloadOptions, Architecture};
 
-let options = DownloadOptions {
-    arch: Architecture::Arm64,
-    host_arch: Some(Architecture::X64),
-    ..Default::default()
-};
+let options = DownloadOptions::builder()
+    .arch(Architecture::X64)
+    .host_arch(Architecture::X64)
+    .target_dir("C:/msvc-kit")
+    .build();
+
+// Only x64 packages will be downloaded
+let info = msvc_kit::download_msvc(&options).await?;
+```
+
+### Cross-Compilation Example
+
+```rust
+use msvc_kit::{DownloadOptions, Architecture};
+
+// Build ARM64 binaries on x64 host
+let options = DownloadOptions::builder()
+    .arch(Architecture::Arm64)
+    .host_arch(Architecture::X64)
+    .target_dir("C:/msvc-kit")
+    .build();
+
+// Downloads: HostX64.TargetARM64 tools + ARM64 CRT/MFC/ATL
+let info = msvc_kit::download_msvc(&options).await?;
 ```

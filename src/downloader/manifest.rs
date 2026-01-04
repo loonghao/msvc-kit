@@ -304,6 +304,10 @@ impl VsManifest {
     }
 
     /// Find MSVC packages (tools, CRT, ATL, MFC) for target architecture
+    ///
+    /// This function filters packages based on the specified host and target architectures.
+    /// Only packages matching the requested architecture will be returned, avoiding
+    /// unnecessary downloads of other architecture variants (ARM64, x86, Spectre, etc.).
     pub fn find_msvc_packages(
         &self,
         version_prefix: &str,
@@ -314,6 +318,9 @@ impl VsManifest {
         let host = host_arch.to_lowercase();
         let target = target_arch.to_lowercase();
 
+        // Define all known architectures for exclusion filtering
+        let all_archs = ["x64", "x86", "arm64", "arm"];
+
         self.packages
             .iter()
             .filter(|pkg| {
@@ -323,21 +330,81 @@ impl VsManifest {
             })
             .filter(|pkg| {
                 let id = pkg.id.to_lowercase();
+
+                // Skip Spectre-mitigated libraries unless explicitly requested
+                // These add significant download size and are rarely needed
+                if id.contains(".spectre") {
+                    return false;
+                }
+
+                // Tool packages: must match both host and target architecture
+                // e.g., Microsoft.VC.14.44.Tools.HostX64.TargetX64
                 let is_tool = id.contains("tools")
                     && id.contains(&format!("host{}", host))
                     && id.contains(&format!("target{}", target));
-                let is_crt = id.contains(".crt.") || id.contains(".crt") || id.contains("ucrt");
+
+                if is_tool {
+                    return true;
+                }
+
+                // CRT packages: need architecture filtering
+                // e.g., Microsoft.VC.14.44.CRT.x64.Desktop, Microsoft.VC.14.44.CRT.Headers
+                let is_crt = id.contains(".crt.");
+
+                // Runtime packages (MFC, ATL, ASAN): need architecture filtering
+                // e.g., Microsoft.VC.14.44.MFC.x64, Microsoft.VC.14.44.ATL.x64
                 let is_runtime = id.contains(".mfc") || id.contains(".atl") || id.contains(".asan");
-                is_tool || is_crt || is_runtime
+
+                if is_crt || is_runtime {
+                    // Check if package ID contains architecture suffix
+                    // Architecture-neutral packages (like CRT.Headers, CRT.Source) should be included
+                    let has_arch_in_id = all_archs.iter().any(|arch| {
+                        id.contains(&format!(".{}", arch))
+                            || id.contains(&format!(".{}.desktop", arch))
+                            || id.contains(&format!(".{}.store", arch))
+                            || id.contains(&format!(".{}.uwp", arch))
+                    });
+
+                    if has_arch_in_id {
+                        // Package has architecture in ID - must match target
+                        let matches_target = id.contains(&format!(".{}", target))
+                            || id.contains(&format!(".{}.desktop", target))
+                            || id.contains(&format!(".{}.store", target))
+                            || id.contains(&format!(".{}.uwp", target));
+                        return matches_target;
+                    }
+
+                    // Also check chip field if present
+                    if let Some(ref chip) = pkg.chip {
+                        let chip_lower = chip.to_lowercase();
+                        // Allow: matching target, neutral, or x86 when targeting x64 (for compatibility)
+                        let chip_matches = chip_lower == target
+                            || chip_lower == "neutral"
+                            || (chip_lower == "x86" && target == "x64");
+                        return chip_matches;
+                    }
+
+                    // Architecture-neutral package (e.g., CRT.Headers, CRT.Source)
+                    return true;
+                }
+
+                false
             })
             .map(|pkg| self.vs_package_to_package(pkg))
             .collect()
     }
 
     /// Find Windows SDK packages matching version and architecture
+    ///
+    /// This function filters SDK packages based on the specified target architecture.
+    /// It uses both the `chip` field and package ID patterns to ensure only
+    /// relevant architecture packages are downloaded.
     pub fn find_sdk_packages(&self, version: &str, target_arch: &str) -> Vec<Package> {
         let target = target_arch.to_lowercase();
         let build_number = version.split('.').nth(2).unwrap_or(version);
+
+        // Define all known architectures for exclusion filtering
+        let all_archs = ["x64", "x86", "arm64", "arm"];
 
         self.packages
             .iter()
@@ -347,13 +414,36 @@ impl VsManifest {
                     && id.contains(build_number)
             })
             .filter(|pkg| {
+                let id = pkg.id.to_lowercase();
+
+                // Check if package ID contains architecture suffix (e.g., _x64, _arm64)
+                let has_arch_in_id = all_archs
+                    .iter()
+                    .any(|arch| id.contains(&format!("_{}", arch)));
+
+                if has_arch_in_id {
+                    // Package has architecture in ID - must match target
+                    // Allow x86 packages when targeting x64 (needed for 32-bit compatibility)
+                    let matches_target = id.contains(&format!("_{}", target))
+                        || (target == "x64" && id.contains("_x86"));
+                    if !matches_target {
+                        return false;
+                    }
+                }
+
+                // Check chip field for additional filtering
                 pkg.chip
                     .as_ref()
                     .map(|chip| {
                         let chip = chip.to_lowercase();
+                        // Allow: matching target, neutral, or x86 when targeting x64
                         chip == target || chip == "neutral" || (chip == "x86" && target == "x64")
                     })
-                    .unwrap_or(true)
+                    .unwrap_or_else(|| {
+                        // If no chip field, check if package ID has architecture info
+                        // If ID also has no architecture, it's likely a neutral/common package
+                        !has_arch_in_id
+                    })
             })
             .map(|pkg| self.vs_package_to_package(pkg))
             .collect()
@@ -543,6 +633,30 @@ mod tests {
                     machine_arch: None,
                     product_arch: None,
                 },
+                // Tools for other architectures (should be filtered out for x64)
+                VsPackage {
+                    id: "Microsoft.VC.14.44.Tools.HostX64.TargetARM64.base".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("arm64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                VsPackage {
+                    id: "Microsoft.VC.14.44.Tools.HostX64.TargetX86.base".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("x86".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                // CRT Headers (architecture-neutral, should always be included)
                 VsPackage {
                     id: "Microsoft.VC.14.44.CRT.Headers".to_string(),
                     version: "14.44.34823".to_string(),
@@ -554,6 +668,110 @@ mod tests {
                     machine_arch: None,
                     product_arch: None,
                 },
+                // CRT with architecture suffix (should be filtered)
+                VsPackage {
+                    id: "Microsoft.VC.14.44.CRT.x64.Desktop".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("x64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                VsPackage {
+                    id: "Microsoft.VC.14.44.CRT.ARM64.Desktop".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("arm64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                VsPackage {
+                    id: "Microsoft.VC.14.44.CRT.x86.Desktop".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("x86".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                // MFC packages with architecture
+                VsPackage {
+                    id: "Microsoft.VC.14.44.MFC.x64".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("x64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                VsPackage {
+                    id: "Microsoft.VC.14.44.MFC.ARM64".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("arm64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                // ATL packages with architecture
+                VsPackage {
+                    id: "Microsoft.VC.14.44.ATL.x64".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("x64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                VsPackage {
+                    id: "Microsoft.VC.14.44.ATL.ARM64".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("arm64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                // Spectre-mitigated libraries (should be filtered out)
+                VsPackage {
+                    id: "Microsoft.VC.14.44.CRT.x64.Desktop.Spectre".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("x64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                VsPackage {
+                    id: "Microsoft.VC.14.44.MFC.x64.Spectre".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("x64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                // Older version tools
                 VsPackage {
                     id: "Microsoft.VC.14.43.Tools.HostX64.TargetX64.base".to_string(),
                     version: "14.43.34607".to_string(),
@@ -565,7 +783,7 @@ mod tests {
                     machine_arch: None,
                     product_arch: None,
                 },
-                // SDK packages
+                // SDK packages with different architectures
                 VsPackage {
                     id: "Win11SDK_10.0.26100".to_string(),
                     version: "26100.1742".to_string(),
@@ -578,10 +796,33 @@ mod tests {
                     product_arch: None,
                 },
                 VsPackage {
+                    id: "Win11SDK_10.0.26100_arm64".to_string(),
+                    version: "26100.1742".to_string(),
+                    package_type: "Msi".to_string(),
+                    chip: Some("arm64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                VsPackage {
                     id: "Win10SDK_10.0.22621".to_string(),
                     version: "22621.3233".to_string(),
                     package_type: "Msi".to_string(),
                     chip: Some("x64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                // SDK neutral package (should always be included)
+                VsPackage {
+                    id: "Win11SDK_10.0.26100_Headers".to_string(),
+                    version: "26100.1742".to_string(),
+                    package_type: "Msi".to_string(),
+                    chip: Some("neutral".to_string()),
                     language: None,
                     payloads: vec![],
                     dependencies: HashMap::new(),
@@ -679,6 +920,113 @@ mod tests {
     }
 
     #[test]
+    fn test_find_msvc_packages_architecture_filtering() {
+        let manifest = create_test_manifest();
+
+        // Find packages for x64 target
+        let x64_packages = manifest.find_msvc_packages("14.44", "x64", "x64");
+
+        // Should include x64 tools
+        assert!(x64_packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.Tools.HostX64.TargetX64.base"));
+
+        // Should NOT include ARM64 or x86 tools
+        assert!(!x64_packages
+            .iter()
+            .any(|p| p.id.contains("TargetARM64")));
+        assert!(!x64_packages.iter().any(|p| p.id.contains("TargetX86")));
+
+        // Should include x64 CRT
+        assert!(x64_packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.CRT.x64.Desktop"));
+
+        // Should NOT include ARM64 or x86 CRT
+        assert!(!x64_packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.CRT.ARM64.Desktop"));
+        assert!(!x64_packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.CRT.x86.Desktop"));
+
+        // Should include x64 MFC and ATL
+        assert!(x64_packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.MFC.x64"));
+        assert!(x64_packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.ATL.x64"));
+
+        // Should NOT include ARM64 MFC and ATL
+        assert!(!x64_packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.MFC.ARM64"));
+        assert!(!x64_packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.ATL.ARM64"));
+
+        // Should include architecture-neutral CRT.Headers
+        assert!(x64_packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.CRT.Headers"));
+    }
+
+    #[test]
+    fn test_find_msvc_packages_spectre_filtering() {
+        let manifest = create_test_manifest();
+
+        // Find packages for x64 target
+        let packages = manifest.find_msvc_packages("14.44", "x64", "x64");
+
+        // Should NOT include Spectre-mitigated libraries
+        assert!(!packages.iter().any(|p| p.id.contains(".Spectre")));
+        assert!(!packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.CRT.x64.Desktop.Spectre"));
+        assert!(!packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.MFC.x64.Spectre"));
+    }
+
+    #[test]
+    fn test_find_msvc_packages_arm64_target() {
+        let manifest = create_test_manifest();
+
+        // Find packages for ARM64 target
+        let arm64_packages = manifest.find_msvc_packages("14.44", "x64", "arm64");
+
+        // Should include ARM64 tools (cross-compilation from x64 host)
+        assert!(arm64_packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.Tools.HostX64.TargetARM64.base"));
+
+        // Should NOT include x64 or x86 tools
+        assert!(!arm64_packages
+            .iter()
+            .any(|p| p.id.contains("TargetX64")));
+        assert!(!arm64_packages
+            .iter()
+            .any(|p| p.id.contains("TargetX86")));
+
+        // Should include ARM64 CRT, MFC, ATL
+        assert!(arm64_packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.CRT.ARM64.Desktop"));
+        assert!(arm64_packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.MFC.ARM64"));
+        assert!(arm64_packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.ATL.ARM64"));
+
+        // Should still include architecture-neutral headers
+        assert!(arm64_packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.CRT.Headers"));
+    }
+
+    #[test]
     fn test_find_sdk_packages() {
         let manifest = create_test_manifest();
 
@@ -688,5 +1036,52 @@ mod tests {
         // Should find the SDK package
         assert!(!packages.is_empty());
         assert!(packages.iter().any(|p| p.id.contains("Win11SDK")));
+    }
+
+    #[test]
+    fn test_find_sdk_packages_architecture_filtering() {
+        let manifest = create_test_manifest();
+
+        // Find SDK packages for x64 target
+        let x64_packages = manifest.find_sdk_packages("10.0.26100.0", "x64");
+
+        // Should include x64 SDK
+        assert!(x64_packages
+            .iter()
+            .any(|p| p.id == "Win11SDK_10.0.26100"));
+
+        // Should NOT include ARM64 SDK
+        assert!(!x64_packages
+            .iter()
+            .any(|p| p.id == "Win11SDK_10.0.26100_arm64"));
+
+        // Should include neutral packages
+        assert!(x64_packages
+            .iter()
+            .any(|p| p.id == "Win11SDK_10.0.26100_Headers"));
+    }
+
+    #[test]
+    fn test_find_sdk_packages_arm64_target() {
+        let manifest = create_test_manifest();
+
+        // Find SDK packages for ARM64 target
+        let arm64_packages = manifest.find_sdk_packages("10.0.26100.0", "arm64");
+
+        // Should include ARM64 SDK
+        assert!(arm64_packages
+            .iter()
+            .any(|p| p.id == "Win11SDK_10.0.26100_arm64"));
+
+        // Should NOT include x64 SDK (no _x64 suffix, but chip is x64)
+        // Note: Win11SDK_10.0.26100 has chip=x64, so it should be excluded
+        assert!(!arm64_packages
+            .iter()
+            .any(|p| p.id == "Win11SDK_10.0.26100" && p.chip == Some("x64".to_string())));
+
+        // Should include neutral packages
+        assert!(arm64_packages
+            .iter()
+            .any(|p| p.id == "Win11SDK_10.0.26100_Headers"));
     }
 }
