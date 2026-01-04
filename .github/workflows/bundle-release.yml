@@ -96,7 +96,7 @@ jobs:
 
   # Build bundles for each architecture combination
   build-bundle:
-    name: Bundle (${{ matrix.host_arch }}-${{ matrix.target_arch }})
+    name: Bundle (${{ matrix.target_arch }})
     runs-on: windows-latest
     needs: get-versions
     timeout-minutes: 120
@@ -104,16 +104,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Native builds
-          - host_arch: x64
-            target_arch: x64
-          - host_arch: x86
-            target_arch: x86
-          # Cross-compilation from x64
-          - host_arch: x64
-            target_arch: x86
-          - host_arch: x64
-            target_arch: arm64
+          # Each platform builds for itself as the primary target
+          # x64 is the most common host/target combination
+          - target_arch: x64
+          # x86 support (for legacy 32-bit development)
+          - target_arch: x86
+          # ARM64 is typically cross-compiled from x64
+          - target_arch: arm64
     steps:
       - uses: actions/checkout@v6
 
@@ -123,7 +120,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: bundle-${{ matrix.host_arch }}-${{ matrix.target_arch }}
+          shared-key: bundle-${{ matrix.target_arch }}
 
       - name: Build msvc-kit
         run: cargo build --release
@@ -138,19 +135,23 @@ jobs:
           $bundleDir = Join-Path $env:GITHUB_WORKSPACE "msvc-bundle"
           $msvcVersion = $env:MSVC_VERSION
           $sdkVersion = $env:SDK_VERSION
+          $targetArch = "${{ matrix.target_arch }}"
+          
+          # Determine host architecture for cross-compilation
+          $hostArch = if ($targetArch -eq "x86") { "x86" } else { "x64" }
           
           Write-Host "Creating bundle with:"
           Write-Host "  MSVC: $msvcVersion"
           Write-Host "  SDK: $sdkVersion"
-          Write-Host "  Host: ${{ matrix.host_arch }}"
-          Write-Host "  Target: ${{ matrix.target_arch }}"
+          Write-Host "  Host: $hostArch"
+          Write-Host "  Target: $targetArch"
           
           & ".\target\release\msvc-kit.exe" bundle `
             --accept-license `
             --msvc-version $msvcVersion `
             --sdk-version $sdkVersion `
-            --host-arch ${{ matrix.host_arch }} `
-            --arch ${{ matrix.target_arch }} `
+            --host-arch $hostArch `
+            --arch $targetArch `
             --output $bundleDir
           
           if ($LASTEXITCODE -ne 0) {
@@ -173,6 +174,7 @@ jobs:
           
           echo "actual_msvc_version=$actualMsvcVersion" >> $env:GITHUB_OUTPUT
           echo "actual_sdk_version=$actualSdkVersion" >> $env:GITHUB_OUTPUT
+          echo "host_arch=$hostArch" >> $env:GITHUB_OUTPUT
 
       - name: Verify bundle
         shell: cmd
@@ -189,11 +191,10 @@ jobs:
         run: |
           $msvcVersion = "${{ steps.bundle.outputs.actual_msvc_version }}"
           $sdkVersion = "${{ steps.bundle.outputs.actual_sdk_version }}"
-          $hostArch = "${{ matrix.host_arch }}"
           $targetArch = "${{ matrix.target_arch }}"
           
-          # Format: msvc-bundle-<msvc>-<sdk>-<host>-<target>.zip
-          $zipName = "msvc-bundle-${msvcVersion}-${sdkVersion}-${hostArch}-${targetArch}.zip"
+          # Format: msvc-bundle-<msvc>-<sdk>-<target-arch>.zip
+          $zipName = "msvc-bundle-${msvcVersion}-${sdkVersion}-${targetArch}.zip"
           
           Write-Host "Creating archive: $zipName"
           
@@ -247,14 +248,13 @@ jobs:
             - Windows SDK (headers, libraries, tools)
             - Activation scripts (setup.bat, setup.ps1, setup.sh)
             
-            **Bundle naming:** `msvc-bundle-<msvc-version>-<sdk-version>-<host-arch>-<target-arch>.zip`
+            **Bundle naming:** `msvc-bundle-<msvc-version>-<sdk-version>-<target-arch>.zip`
             
-            | Host | Target | Use Case |
-            |------|--------|----------|
-            | x64 | x64 | Native 64-bit development |
-            | x64 | x86 | Cross-compile 32-bit from 64-bit host |
-            | x64 | arm64 | Cross-compile ARM64 from 64-bit host |
-            | x86 | x86 | Native 32-bit development |
+            | Target Arch | Use Case |
+            |-------------|----------|
+            | x64 | Native 64-bit development (native or cross-compile target) |
+            | x86 | Native 32-bit development |
+            | arm64 | ARM64 development (typically cross-compiled from x64 host) |
             
             **Usage:**
             ```bash
