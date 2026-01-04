@@ -142,7 +142,7 @@ jobs:
           - msvc-kit-aarch64-windows
     steps:
       - name: Download artifact from PR workflow
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: dist/
@@ -291,7 +291,7 @@ jobs:
             {{__unknown__}}
 
       - name: Download artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           pattern: msvc-kit-*
           path: release-artifacts
