@@ -32,11 +32,8 @@ fn get_binary_path() -> std::path::PathBuf {
 
 /// Helper function to run msvc-kit command and capture output
 fn run_command(args: &[&str]) -> std::io::Result<std::process::Output> {
-    Command::new(get_binary_path())
-        .args(args)
-        .output()
+    Command::new(get_binary_path()).args(args).output()
 }
-
 
 #[test]
 fn test_no_subcommand_exits_zero() {
@@ -49,7 +46,7 @@ fn test_no_subcommand_exits_zero() {
         "Expected exit code 0 when no subcommand is provided, got: {:?}",
         output.status.code()
     );
-    
+
     // Verify help text is printed
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -71,6 +68,19 @@ fn test_help_flag_exits_zero() {
 }
 
 #[test]
+fn test_verbose_help_exits_zero() {
+    // --verbose --help should also exit with code 0 and exercise debug filter path
+    let output =
+        run_command(&["--verbose", "--help"]).expect("Failed to run msvc-kit --verbose --help");
+
+    assert!(
+        output.status.success(),
+        "Expected exit code 0 for --verbose --help, got: {:?}",
+        output.status.code()
+    );
+}
+
+#[test]
 fn test_version_flag_exits_zero() {
     // --version should exit with code 0
     let output = run_command(&["--version"]).expect("Failed to run msvc-kit --version");
@@ -80,7 +90,7 @@ fn test_version_flag_exits_zero() {
         "Expected exit code 0 for --version, got: {:?}",
         output.status.code()
     );
-    
+
     // Verify version is printed
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -92,7 +102,9 @@ fn test_version_flag_exits_zero() {
 #[test]
 fn test_subcommand_help_exits_zero() {
     // Subcommand help should exit with code 0
-    let commands = ["download", "setup", "list", "clean", "config", "env", "bundle"];
+    let commands = [
+        "download", "setup", "list", "clean", "config", "env", "bundle",
+    ];
 
     for cmd in commands {
         let output = run_command(&[cmd, "--help"])
@@ -155,7 +167,7 @@ fn test_bundle_without_license_exits_nonzero() {
         "Expected non-zero exit code for bundle without license acceptance, got: {:?}",
         output.status.code()
     );
-    
+
     // Verify error message mentions license
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -179,7 +191,7 @@ fn test_setup_without_installation_exits_nonzero() {
         "Expected non-zero exit code for setup without installation, got: {:?}",
         output.status.code()
     );
-    
+
     // Verify error message mentions missing installation
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -223,7 +235,7 @@ fn test_list_empty_dir_exits_zero() {
         "Expected exit code 0 for list with empty directory, got: {:?}",
         output.status.code()
     );
-    
+
     // Verify appropriate message is printed
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -253,7 +265,7 @@ fn test_invalid_architecture_exits_nonzero() {
         "Expected non-zero exit code for invalid architecture, got: {:?}",
         output.status.code()
     );
-    
+
     // Verify error message mentions architecture
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
