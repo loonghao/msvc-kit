@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use msvc_kit::bundle::{generate_bundle_scripts, save_bundle_scripts, BundleLayout};
