@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/loonghao/msvc-kit/compare/v0.2.1...v0.2.2) (2026-01-05)
+
+
+### Bug Fixes
+
+* add missing CommandFactory import and update deploy-pages action version ([7584634](https://github.com/loonghao/msvc-kit/commit/7584634d414b34434bc13e8769a1b7ad53d34b7d))
+
 ## [0.2.1](https://github.com/loonghao/msvc-kit/compare/v0.2.0...v0.2.1) (2026-01-04)
 
 
