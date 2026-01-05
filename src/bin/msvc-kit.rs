@@ -29,7 +29,7 @@ struct Cli {
     config: Option<PathBuf>,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -224,7 +224,17 @@ async fn main() -> anyhow::Result<()> {
     // Load configuration
     let mut config = load_config().unwrap_or_default();
 
-    match cli.command {
+    // Handle the case where no subcommand is provided (for winget compatibility)
+    let command = match cli.command {
+        Some(cmd) => cmd,
+        None => {
+            // Print help and exit with code 0 for winget validation
+            Cli::command().print_help().unwrap();
+            std::process::exit(0);
+        }
+    };
+
+    match command {
         Commands::Download {
             msvc_version,
             sdk_version,
