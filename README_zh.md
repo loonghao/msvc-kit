@@ -66,7 +66,12 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
   cargo install --path .
   ```
 
+## 发布的 Bundle
+- 每次打 tag（或 release-please 生成的发布）时，CI 会为 `x64`、`x86`、`arm64` 架构构建并上传 `msvc-bundle-<msvc>-<sdk>-<arch>.zip` 到对应的 GitHub Release。
+- Bundle 由 `msvc-kit bundle --accept-license` 创建，下载即表示你接受 [Microsoft Visual Studio License Terms](https://visualstudio.microsoft.com/license-terms/)。
+
 ## 快速开始 (CLI)
+
 
 
 ### 下载
