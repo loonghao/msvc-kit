@@ -396,12 +396,14 @@ jobs:
 
       - name: Determine tag name
         id: bundle-tag
+        shell: bash
         run: |
           if [ "${{ needs.release-please.outputs.tag_name }}" != "" ]; then
             echo "TAG_NAME=${{ needs.release-please.outputs.tag_name }}" >> $GITHUB_OUTPUT
           else
             echo "TAG_NAME=${{ needs.check-tag.outputs.tag_name }}" >> $GITHUB_OUTPUT
           fi
+
 
       - name: Get versions from manifest
         id: versions

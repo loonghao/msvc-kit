@@ -157,4 +157,11 @@ mod tests {
         assert_eq!(parsed.verify_hashes, config.verify_hashes);
         assert_eq!(parsed.parallel_downloads, config.parallel_downloads);
     }
+
+    #[test]
+    fn test_default_cache_dir_is_set() {
+        let config = MsvcKitConfig::default();
+        let cache = config.cache_dir.as_ref().expect("cache dir should be set");
+        assert!(cache.to_string_lossy().contains("cache"));
+    }
 }

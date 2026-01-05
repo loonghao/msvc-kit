@@ -66,7 +66,12 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
   cargo install --path .
   ```
 
+### Release bundles
+- On every tagged release (or release-please cut), CI builds and uploads `msvc-bundle-<msvc>-<sdk>-<arch>.zip` for `x64`, `x86`, and `arm64` directly to the GitHub Release.
+- Bundles are created via `msvc-kit bundle --accept-license`; by downloading you agree to the Microsoft Visual Studio License Terms.
+
 ### Quick Start (CLI)
+
 
 #### Download
 
