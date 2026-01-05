@@ -364,8 +364,128 @@ jobs:
           updateOnlyUnreleased: false
           makeLatest: true
 
+  build-bundles:
+    name: Bundle (${{ matrix.target_arch }})
+    runs-on: windows-latest
+    needs: [release-please, check-tag, github-release]
+    if: |
+      always() &&
+      ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') ||
+       (needs.check-tag.result == 'success' && needs.check-tag.outputs.is_tag == 'true'))
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_arch: x64
+          - target_arch: x86
+          - target_arch: arm64
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: bundle-${{ matrix.target_arch }}
+
+      - name: Build msvc-kit
+        run: cargo build --release
+
+      - name: Determine tag name
+        id: bundle-tag
+        run: |
+          if [ "${{ needs.release-please.outputs.tag_name }}" != "" ]; then
+            echo "TAG_NAME=${{ needs.release-please.outputs.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "TAG_NAME=${{ needs.check-tag.outputs.tag_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get versions from manifest
+        id: versions
+        shell: pwsh
+        run: |
+          $output = & ".\target\release\msvc-kit.exe" list --available 2>&1
+          Write-Host "Available versions output:"
+          Write-Host $output
+
+          $msvcVersion = ($output | Select-String "Latest MSVC version: (.+)").Matches.Groups[1].Value
+          $sdkVersion = ($output | Select-String "Latest Windows SDK version: (.+)").Matches.Groups[1].Value
+
+          if (-not $msvcVersion) { throw "MSVC version not detected" }
+          if (-not $sdkVersion) { throw "SDK version not detected" }
+
+          Write-Host "Selected MSVC version: $msvcVersion"
+          Write-Host "Selected SDK version: $sdkVersion"
+
+          echo "msvc_version=$msvcVersion" >> $env:GITHUB_OUTPUT
+          echo "sdk_version=$sdkVersion" >> $env:GITHUB_OUTPUT
+
+      - name: Create bundle
+        id: bundle
+        shell: pwsh
+        env:
+          MSVC_VERSION: ${{ steps.versions.outputs.msvc_version }}
+          SDK_VERSION: ${{ steps.versions.outputs.sdk_version }}
+        run: |
+          $bundleDir = Join-Path $env:GITHUB_WORKSPACE "msvc-bundle"
+          $msvcVersion = $env:MSVC_VERSION
+          $sdkVersion = $env:SDK_VERSION
+          $targetArch = "${{ matrix.target_arch }}"
+
+          $hostArch = if ($targetArch -eq "x86") { "x86" } else { "x64" }
+
+          Write-Host "Creating bundle with:"
+          Write-Host "  MSVC: $msvcVersion"
+          Write-Host "  SDK: $sdkVersion"
+          Write-Host "  Host: $hostArch"
+          Write-Host "  Target: $targetArch"
+
+          & ".\target\release\msvc-kit.exe" bundle `
+            --accept-license `
+            --msvc-version $msvcVersion `
+            --sdk-version $sdkVersion `
+            --host-arch $hostArch `
+            --arch $targetArch `
+            --output $bundleDir
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Bundle creation failed"
+          }
+
+      - name: Create zip archive
+        id: zip
+        shell: pwsh
+        run: |
+          $msvcVersion = "${{ steps.versions.outputs.msvc_version }}"
+          $sdkVersion = "${{ steps.versions.outputs.sdk_version }}"
+          $targetArch = "${{ matrix.target_arch }}"
+
+          $zipName = "msvc-bundle-${msvcVersion}-${sdkVersion}-${targetArch}.zip"
+
+          Write-Host "Creating archive: $zipName"
+
+          Compress-Archive -Path "msvc-bundle\*" -DestinationPath $zipName -Force
+
+          $size = (Get-Item $zipName).Length / 1MB
+          Write-Host "Archive size: $([math]::Round($size, 2)) MB"
+
+          echo "zip_name=$zipName" >> $env:GITHUB_OUTPUT
+          echo "zip_path=$zipName" >> $env:GITHUB_OUTPUT
+
+      - name: Upload bundle to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.bundle-tag.outputs.TAG_NAME }}
+          files: ${{ steps.zip.outputs.zip_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # Update WinGet manifest
   update-winget:
+
     name: Update WinGet
     runs-on: ubuntu-latest
     needs: [release-please, check-tag, github-release]
