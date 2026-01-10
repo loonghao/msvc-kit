@@ -4,11 +4,12 @@
 
 use std::time::Duration;
 
-use reqwest::Client;
+use reqwest::{header, Client};
 
 use crate::constants::USER_AGENT;
 
 /// HTTP client configuration options
+
 #[derive(Debug, Clone)]
 pub struct HttpClientConfig {
     /// User agent string
@@ -126,4 +127,29 @@ mod tests {
         // Just verify it doesn't panic
         drop(client);
     }
+
+    #[test]
+    fn test_build_applies_config() {
+        let config = HttpClientConfig::with_user_agent("msvc-kit/test")
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(15));
+
+        let client = config.build();
+        let request = client
+            .get("http://example.com")
+            .build()
+            .expect("request build");
+
+        let user_agent = request
+            .headers()
+            .get(header::USER_AGENT)
+            .and_then(|value| value.to_str().ok())
+            .unwrap();
+
+        assert_eq!(user_agent, "msvc-kit/test");
+
+        assert_eq!(client.connect_timeout(), Some(Duration::from_secs(5)));
+        assert_eq!(client.timeout(), Some(Duration::from_secs(15)));
+    }
 }
+

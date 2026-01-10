@@ -36,8 +36,10 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 - **提供库 API** - 可编程使用
 - **断点续传** - 基于 redb 索引快速跳过
 - **清单缓存** - 支持 ETag/Last-Modified 条件请求
+- **TLS 后端** - 使用 `native-tls`（Windows schannel），避免 `rustls`/`awslc-sys` 构建问题
 - **多格式解压** - 支持 VSIX、MSI、CAB
 - **哈希校验** - SHA256 验证
+
 
 ## 安装
 
