@@ -36,8 +36,10 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 - **Library API** for programmatic usage
 - **Resumable downloads** with redb-based index for fast skip
 - **Manifest caching** with ETag/Last-Modified conditional requests
+- **TLS backend** uses `native-tls` (Windows schannel) to avoid `rustls`/`awslc-sys` build issues
 - **Multi-format extraction** (VSIX, MSI, CAB)
 - **Hash verification** with SHA256
+
 
 ### Installation
 
