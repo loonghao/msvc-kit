@@ -147,10 +147,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(user_agent, "msvc-kit/test");
-        
+
         // Test that config values were applied by verifying the config itself
         assert_eq!(config.connect_timeout, Some(Duration::from_secs(5)));
         assert_eq!(config.timeout, Some(Duration::from_secs(15)));
     }
 }
-
