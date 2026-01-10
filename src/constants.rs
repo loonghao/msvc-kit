@@ -46,12 +46,15 @@ pub mod progress {
 
 /// Hash computation configuration
 pub mod hash {
-    /// Buffer size for file hash computation (1 MB)
-    pub const HASH_BUFFER_SIZE: usize = 1024 * 1024;
+    /// Buffer size for file hash computation (4 MB for better throughput)
+    pub const HASH_BUFFER_SIZE: usize = 4 * 1024 * 1024;
 }
 
 /// Extraction configuration
 pub mod extraction {
-    /// Buffer size for file extraction (128 KB)
-    pub const EXTRACT_BUFFER_SIZE: usize = 128 * 1024;
+    /// Buffer size for file extraction (256 KB for better throughput)
+    pub const EXTRACT_BUFFER_SIZE: usize = 256 * 1024;
+
+    /// Default number of parallel extractions (based on CPU cores)
+    pub const DEFAULT_PARALLEL_EXTRACTIONS: usize = 4;
 }

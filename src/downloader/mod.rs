@@ -297,9 +297,13 @@ pub async fn download_sdk(options: &DownloadOptions) -> Result<InstallInfo> {
 /// Download both MSVC and Windows SDK
 ///
 /// Convenience function to download both components in one call.
+/// Downloads are performed in parallel for better performance.
 pub async fn download_all(options: &DownloadOptions) -> Result<(InstallInfo, InstallInfo)> {
-    let msvc_info = download_msvc(options).await?;
-    let sdk_info = download_sdk(options).await?;
+    // Run MSVC and SDK downloads in parallel for better performance
+    let (msvc_result, sdk_result) = tokio::join!(download_msvc(options), download_sdk(options));
+
+    let msvc_info = msvc_result?;
+    let sdk_info = sdk_result?;
     Ok((msvc_info, sdk_info))
 }
 
