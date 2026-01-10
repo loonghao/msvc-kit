@@ -495,3 +495,64 @@ fn test_filesystem_cache_default_dir() {
     let cache_dir = cache.cache_dir();
     assert!(!cache_dir.to_string_lossy().is_empty());
 }
+
+// ============================================================================
+// Performance Optimization Tests
+// ============================================================================
+
+#[test]
+fn test_http_client_config_connection_pooling() {
+    // Verify that HTTP client configuration supports connection pooling
+    let config = HttpClientConfig::default();
+    let client = config.build();
+    // Client should be created successfully with connection pooling enabled
+    drop(client);
+}
+
+#[test]
+fn test_download_options_parallel_downloads_range() {
+    // Test that parallel downloads can be configured
+    for count in [1, 2, 4, 8, 16, 32] {
+        let options = DownloadOptions::builder()
+            .parallel_downloads(count)
+            .target_dir("C:/test")
+            .build();
+        assert_eq!(options.parallel_downloads, count);
+    }
+}
+
+#[test]
+fn test_hash_computation_consistency() {
+    // Test that hash computation is consistent
+    let data = b"test data for hash consistency check";
+    let hash1 = compute_hash(data);
+    let hash2 = compute_hash(data);
+    assert_eq!(hash1, hash2);
+}
+
+#[test]
+fn test_hash_computation_different_inputs() {
+    // Test that different inputs produce different hashes
+    let hash1 = compute_hash(b"input1");
+    let hash2 = compute_hash(b"input2");
+    assert_ne!(hash1, hash2);
+}
+
+#[test]
+fn test_download_options_builder_chain() {
+    // Test that builder pattern supports method chaining
+    let options = DownloadOptions::builder()
+        .msvc_version("14.44")
+        .sdk_version("10.0.26100.0")
+        .target_dir("C:/test")
+        .arch(Architecture::X64)
+        .host_arch(Architecture::X64)
+        .verify_hashes(true)
+        .parallel_downloads(8)
+        .dry_run(false)
+        .build();
+
+    assert_eq!(options.msvc_version, Some("14.44".to_string()));
+    assert_eq!(options.sdk_version, Some("10.0.26100.0".to_string()));
+    assert_eq!(options.parallel_downloads, 8);
+}

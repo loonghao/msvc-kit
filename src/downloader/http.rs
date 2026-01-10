@@ -86,7 +86,11 @@ pub fn create_http_client() -> Client {
 ///
 /// Panics if the client cannot be created
 pub fn create_http_client_with_config(config: &HttpClientConfig) -> Client {
-    let mut builder = Client::builder().user_agent(&config.user_agent);
+    let mut builder = Client::builder()
+        .user_agent(&config.user_agent)
+        // Enable connection pooling for better performance
+        .pool_max_idle_per_host(10)
+        .pool_idle_timeout(std::time::Duration::from_secs(90));
 
     if let Some(timeout) = config.connect_timeout {
         builder = builder.connect_timeout(timeout);

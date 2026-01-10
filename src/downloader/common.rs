@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 
 use futures::{stream, StreamExt};
 use reqwest::{Client, StatusCode};
-use tokio::{io::AsyncWriteExt, sync::Mutex, time::sleep};
+use sha2::{Digest, Sha256};
+use tokio::{io::AsyncWriteExt, sync::RwLock, time::sleep};
 use tracing::debug;
 
 use super::hash::compute_file_hash;
@@ -30,9 +31,6 @@ enum PayloadOutcome {
     Skipped,
     Downloaded,
 }
-
-#[derive(Debug, Clone, Copy)]
-pub(super) struct DownloadFileResult;
 
 #[derive(Debug)]
 struct PayloadResult {
@@ -78,7 +76,7 @@ impl CommonDownloader {
 
         let index_path = download_dir.join("index.db");
         let index = DownloadIndex::load(&index_path).await?;
-        let index = Arc::new(Mutex::new(index));
+        let index = Arc::new(RwLock::new(index));
 
         // Calculate completed files from index
         let (completed_bytes, completed_count) = self
@@ -215,7 +213,7 @@ impl CommonDownloader {
         &self,
         payloads: &[PackagePayload],
         download_dir: &Path,
-        index: &Arc<Mutex<DownloadIndex>>,
+        index: &Arc<RwLock<DownloadIndex>>,
     ) -> Result<(u64, usize)> {
         let mut completed_bytes = 0u64;
         let mut completed_count = 0usize;
@@ -223,7 +221,7 @@ impl CommonDownloader {
 
         for payload in payloads {
             let cached = {
-                let idx = index.lock().await;
+                let idx = index.read().await;
                 idx.get_entry(&payload.file_name).await?
             };
             let path = download_dir.join(&payload.file_name);
@@ -315,7 +313,7 @@ async fn download_single_payload_with_handler(
     client: &Client,
     payload: &PackagePayload,
     download_dir: &Path,
-    index: &Arc<Mutex<DownloadIndex>>,
+    index: &Arc<RwLock<DownloadIndex>>,
     progress: &BoxedProgressHandler,
     verify_hashes: bool,
 ) -> Result<PayloadResult> {
@@ -323,7 +321,7 @@ async fn download_single_payload_with_handler(
 
     // Fast path: check index for completed file with computed hash
     let cached = {
-        let idx = index.lock().await;
+        let idx = index.read().await;
         idx.get_entry(&payload.file_name).await?
     };
 
@@ -345,7 +343,7 @@ async fn download_single_payload_with_handler(
                                     payload.file_name
                                 );
                                 {
-                                    let mut idx = index.lock().await;
+                                    let mut idx = index.write().await;
                                     let _ = idx.remove(&payload.file_name).await;
                                 }
                                 let _ = tokio::fs::remove_file(&check_path).await;
@@ -406,7 +404,7 @@ async fn download_single_payload_with_handler(
                         let _ = tokio::fs::remove_file(&file_path).await;
                     } else {
                         {
-                            let mut idx = index.lock().await;
+                            let mut idx = index.write().await;
                             idx.mark_completed(payload, file_path.clone(), Some(computed_hash))
                                 .await?;
                         }
@@ -420,7 +418,7 @@ async fn download_single_payload_with_handler(
                     }
                 } else {
                     {
-                        let mut idx = index.lock().await;
+                        let mut idx = index.write().await;
                         idx.mark_completed(payload, file_path.clone(), Some(computed_hash))
                             .await?;
                     }
@@ -437,7 +435,7 @@ async fn download_single_payload_with_handler(
                 }
             } else {
                 {
-                    let mut idx = index.lock().await;
+                    let mut idx = index.write().await;
                     idx.mark_completed(payload, file_path.clone(), Some(computed_hash))
                         .await?;
                 }
@@ -454,18 +452,19 @@ async fn download_single_payload_with_handler(
         // File exists but incomplete - delete and restart
         if existing_size > 0 {
             let _ = tokio::fs::remove_file(&file_path).await;
-            let mut idx = index.lock().await;
+            let mut idx = index.write().await;
             let _ = idx.remove(&payload.file_name).await;
         }
     }
 
-    // Download the file (full download, no resume)
+    // Download the file with streaming hash computation
     debug!("Downloading: {}", payload.file_name);
     progress.on_file_start(&payload.file_name, payload.size);
-    download_file_with_handler(client, payload, &file_path, progress).await?;
+    let download_result =
+        download_file_with_streaming_hash(client, payload, &file_path, progress).await?;
 
-    // Compute hash after download and store it
-    let computed_hash = compute_file_hash(&file_path).await?;
+    // Use the hash computed during download (no need to re-read the file)
+    let computed_hash = download_result.computed_hash;
 
     if verify_hashes {
         if let Some(expected_hash) = &payload.sha256 {
@@ -481,7 +480,7 @@ async fn download_single_payload_with_handler(
 
     // Store completed with computed hash
     {
-        let mut idx = index.lock().await;
+        let mut idx = index.write().await;
         idx.mark_completed(payload, file_path.clone(), Some(computed_hash))
             .await?;
     }
@@ -495,13 +494,20 @@ async fn download_single_payload_with_handler(
     })
 }
 
-/// Download a single file with progress handler (no resume)
-async fn download_file_with_handler(
+/// Result of streaming download with computed hash
+struct StreamingDownloadResult {
+    /// SHA256 hash computed during download
+    computed_hash: String,
+}
+
+/// Download a single file with progress handler and streaming hash computation
+/// This computes the SHA256 hash while downloading, avoiding a second file read.
+async fn download_file_with_streaming_hash(
     client: &Client,
     payload: &PackagePayload,
     path: &Path,
     progress: &BoxedProgressHandler,
-) -> Result<DownloadFileResult> {
+) -> Result<StreamingDownloadResult> {
     for attempt in 0..=dl_const::MAX_RETRIES {
         let response = match client.get(&payload.url).send().await {
             Ok(resp) => resp,
@@ -558,13 +564,15 @@ async fn download_file_with_handler(
         }
 
         let mut file = tokio::fs::File::create(path).await?;
-
+        let mut hasher = Sha256::new();
         let mut stream = response.bytes_stream();
 
         while let Some(item) = stream.next().await {
             match item {
                 Ok(chunk) => {
+                    // Write to file and update hash simultaneously
                     file.write_all(&chunk).await?;
+                    hasher.update(&chunk);
                     progress.on_progress(chunk.len() as u64);
                 }
                 Err(e) => {
@@ -594,7 +602,10 @@ async fn download_file_with_handler(
         }
 
         file.flush().await?;
-        return Ok(DownloadFileResult);
+
+        // Compute final hash
+        let computed_hash = hex::encode(hasher.finalize());
+        return Ok(StreamingDownloadResult { computed_hash });
     }
 
     Err(MsvcKitError::Other(format!(

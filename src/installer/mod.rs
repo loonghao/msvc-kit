@@ -2,12 +2,15 @@
 
 mod extractor;
 
+use futures::{stream, StreamExt};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-use crate::constants::progress as progress_const;
+use crate::constants::{extraction as ext_const, progress as progress_const};
 use crate::error::Result;
 use crate::version::Architecture;
 
@@ -44,7 +47,7 @@ async fn extract_package_with_progress(
     }
 }
 
-/// Extract multiple packages with a unified progress bar
+/// Extract multiple packages with a unified progress bar (parallel extraction)
 pub async fn extract_packages_with_progress(
     files: &[PathBuf],
     target_dir: &Path,
@@ -65,7 +68,21 @@ pub async fn extract_packages_with_progress(
     let marker_dir = target_dir.join(".msvc-kit-extracted");
     tokio::fs::create_dir_all(&marker_dir).await.ok();
 
-    for (idx, file) in files.iter().enumerate() {
+    // Determine parallel extraction count (use CPU cores, capped by constant)
+    let num_cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    let parallel_count = num_cpus.min(ext_const::DEFAULT_PARALLEL_EXTRACTIONS);
+
+    // Counters for progress tracking
+    let extracted_count = Arc::new(AtomicUsize::new(0));
+    let skipped_count = Arc::new(AtomicUsize::new(0));
+
+    // Filter files that need extraction (not cached)
+    let mut files_to_extract = Vec::new();
+    let mut cached_files = Vec::new();
+
+    for file in files.iter() {
         let name = file
             .file_name()
             .and_then(|n| n.to_str())
@@ -73,29 +90,84 @@ pub async fn extract_packages_with_progress(
         let marker = marker_dir.join(format!("{}.done", name));
 
         if marker.exists() {
-            pb.set_message(format!(
-                "{} extracting {}/{} (cached)",
-                label,
-                idx + 1,
-                total
-            ));
-            pb.inc(0);
-            continue;
+            cached_files.push(file.clone());
+        } else {
+            files_to_extract.push(file.clone());
         }
-
-        pb.set_message(format!(
-            "{} extracting {}/{}: {}",
-            label,
-            idx + 1,
-            total,
-            name
-        ));
-        extract_package_with_progress(file, target_dir, false).await?;
-        // mark extracted
-        let _ = std::fs::write(&marker, b"ok");
     }
 
-    pb.finish_with_message(format!("{} extraction done ({} files)", label, total));
+    // Update progress for cached files
+    let cached_count = cached_files.len();
+    if cached_count > 0 {
+        skipped_count.fetch_add(cached_count, Ordering::Relaxed);
+        pb.set_message(format!(
+            "{} extracting {}/{} (skipped {} cached)",
+            label,
+            0,
+            files_to_extract.len(),
+            cached_count
+        ));
+    }
+
+    // Extract files in parallel
+    let target_dir = target_dir.to_path_buf();
+    let label = label.to_string();
+    let pb = Arc::new(pb);
+
+    let results: Vec<Result<PathBuf>> = stream::iter(files_to_extract.into_iter())
+        .map(|file| {
+            let target_dir = target_dir.clone();
+            let marker_dir = marker_dir.clone();
+            let extracted_count = extracted_count.clone();
+            let skipped_count = skipped_count.clone();
+            let pb = pb.clone();
+            let label = label.clone();
+            let total = total as usize;
+
+            async move {
+                let name = file
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                // Extract the package
+                extract_package_with_progress(&file, &target_dir, false).await?;
+
+                // Mark as extracted
+                let marker = marker_dir.join(format!("{}.done", name));
+                let _ = tokio::fs::write(&marker, b"ok").await;
+
+                // Update progress
+                let done = extracted_count.fetch_add(1, Ordering::Relaxed) + 1;
+                let skip = skipped_count.load(Ordering::Relaxed);
+                pb.set_message(format!(
+                    "{} extracting {}/{} (done {}, cached {})",
+                    label,
+                    done + skip,
+                    total,
+                    done,
+                    skip
+                ));
+
+                Ok(file)
+            }
+        })
+        .buffer_unordered(parallel_count)
+        .collect()
+        .await;
+
+    // Check for errors
+    for result in results {
+        result?;
+    }
+
+    let final_extracted = extracted_count.load(Ordering::Relaxed);
+    let final_skipped = skipped_count.load(Ordering::Relaxed);
+    pb.finish_with_message(format!(
+        "{} extraction done ({} extracted, {} cached)",
+        label, final_extracted, final_skipped
+    ));
     Ok(())
 }
 

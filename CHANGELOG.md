@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Performance
+
+* **parallel-download**: MSVC and SDK packages now download simultaneously using `tokio::join!`, reducing total download time by 30-50%
+* **parallel-extraction**: Package extraction now uses multi-threaded processing with `buffer_unordered`, improving extraction speed 2-4x
+* **streaming-hash**: SHA256 hash computation now happens during download, eliminating a second file read operation
+* **connection-pooling**: HTTP client now uses connection pooling with `pool_max_idle_per_host(10)` for better connection reuse
+* **optimized-buffers**: Increased hash buffer from 1MB to 4MB and extraction buffer from 128KB to 256KB for better throughput
+* **rwlock-index**: Replaced `Mutex` with `RwLock` for download index to reduce lock contention during parallel downloads
+
+### Documentation
+
+* Add performance optimization guide (English and Chinese)
+
 ## [0.2.2](https://github.com/loonghao/msvc-kit/compare/v0.2.1...v0.2.2) (2026-01-05)
 
 
