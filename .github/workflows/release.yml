@@ -487,7 +487,6 @@ jobs:
 
   # Update WinGet manifest
   update-winget:
-
     name: Update WinGet
     runs-on: ubuntu-latest
     needs: [release-please, check-tag, github-release]
@@ -497,20 +496,28 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Determine version
+      - name: Determine version and tag
         id: version
         run: |
           if [ "${{ needs.release-please.outputs.version }}" != "" ]; then
             echo "VERSION=${{ needs.release-please.outputs.version }}" >> $GITHUB_OUTPUT
+            echo "TAG_NAME=${{ needs.release-please.outputs.tag_name }}" >> $GITHUB_OUTPUT
           else
             echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+            echo "TAG_NAME=${{ needs.check-tag.outputs.tag_name }}" >> $GITHUB_OUTPUT
           fi
+
+      - name: Wait for release assets to be available
+        run: |
+          echo "Waiting for release assets to be fully available..."
+          sleep 30
 
       - name: Update WinGet manifest
         uses: vedantmgoyal2009/winget-releaser@v2
         with:
           identifier: loonghao.msvc-kit
-          installers-regex: "msvc-kit-x86_64-windows\\.exe$"
+          installers-regex: "msvc-kit-.*-x86_64-windows\\.exe$"
           version: ${{ steps.version.outputs.VERSION }}
+          release-tag: ${{ steps.version.outputs.TAG_NAME }}
           token: ${{ secrets.WINGET_TOKEN }}
         continue-on-error: true
