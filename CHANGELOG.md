@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.3](https://github.com/loonghao/msvc-kit/compare/v0.2.2...v0.2.3) (2026-01-11)
+
+
+### Bug Fixes
+
+* **msi:** prevent concurrent msiexec invocations causing error 1618 ([d6aea13](https://github.com/loonghao/msvc-kit/commit/d6aea13c4f0455fe52b26608ed08a8c068cd8010))
+* remove dead links and fix clippy warnings ([76cc8c7](https://github.com/loonghao/msvc-kit/commit/76cc8c7234b3e47731edc535eba76d0f5f804ebd))
+* resolve lint warnings in http.rs ([54a5239](https://github.com/loonghao/msvc-kit/commit/54a523980117ee5e2fc2e98262b09baadfc82365))
+* update test expectations for optimized buffer sizes and fix formatting ([dfa8989](https://github.com/loonghao/msvc-kit/commit/dfa8989036b76d047a128095769c61084b3f159d))
+* use native-tls backend for reqwest ([242e454](https://github.com/loonghao/msvc-kit/commit/242e454ca5cd416eab47ecb9ea8526e51f340132))
+
+
+### Performance Improvements
+
+* add comprehensive performance optimizations for download and extraction ([e0787b4](https://github.com/loonghao/msvc-kit/commit/e0787b4d97352adfc789f55cc1845c3d5ccf85a0))
+
 ## [Unreleased]
 
 ### Performance
