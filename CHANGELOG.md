@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.4](https://github.com/loonghao/msvc-kit/compare/v0.2.3...v0.2.4) (2026-01-11)
+
+
+### Bug Fixes
+
+* **ci:** add release-tag parameter to winget-releaser to fix 404 error ([3d23c2a](https://github.com/loonghao/msvc-kit/commit/3d23c2ab0b8166fad9c6f4236c211c132f9cbf17))
+
 ## [0.2.3](https://github.com/loonghao/msvc-kit/compare/v0.2.2...v0.2.3) (2026-01-11)
 
 
