@@ -213,11 +213,13 @@ fn test_progress_constants() {
 #[test]
 fn test_hash_constants() {
     use msvc_kit::constants::hash;
-    assert_eq!(hash::HASH_BUFFER_SIZE, 1024 * 1024);
+    // Hash buffer optimized to 4 MB for better throughput
+    assert_eq!(hash::HASH_BUFFER_SIZE, 4 * 1024 * 1024);
 }
 
 #[test]
 fn test_extraction_constants() {
     use msvc_kit::constants::extraction;
-    assert_eq!(extraction::EXTRACT_BUFFER_SIZE, 128 * 1024);
+    // Extract buffer optimized to 256 KB for better throughput
+    assert_eq!(extraction::EXTRACT_BUFFER_SIZE, 256 * 1024);
 }
