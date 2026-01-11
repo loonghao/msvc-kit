@@ -125,5 +125,3 @@ msvc-kit uses multiple caching layers:
 1. **Manifest Cache**: VS manifests cached with ETag/Last-Modified
 2. **Download Index**: SQLite database tracking downloaded files
 3. **Extraction Markers**: `.done` files marking extracted packages
-
-See [Caching Guide](./caching.md) for more details.
