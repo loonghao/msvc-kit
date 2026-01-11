@@ -11,6 +11,11 @@
 * **optimized-buffers**: Increased hash buffer from 1MB to 4MB and extraction buffer from 128KB to 256KB for better throughput
 * **rwlock-index**: Replaced `Mutex` with `RwLock` for download index to reduce lock contention during parallel downloads
 
+### Bug Fixes
+
+* **msi-extraction**: Add global mutex lock to prevent concurrent `msiexec` invocations (error 1618)
+* **msi-extraction**: Add retry mechanism with exponential backoff for handling system-level installer conflicts
+
 ### Documentation
 
 * Add performance optimization guide (English and Chinese)
