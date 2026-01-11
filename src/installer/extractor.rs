@@ -4,12 +4,23 @@ use std::env;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 
 use crate::constants::{extraction as ext_const, progress as progress_const};
 use crate::error::{MsvcKitError, Result};
+
+/// Global mutex for MSI extraction.
+/// Windows Installer (msiexec) can only run one instance at a time globally.
+/// Error 1618 = "Another installation is already in progress"
+static MSI_EXTRACT_LOCK: Mutex<()> = Mutex::new(());
+
+/// Maximum retries for MSI extraction when encountering error 1618
+const MSI_MAX_RETRIES: u32 = 5;
+/// Delay between retries in milliseconds
+const MSI_RETRY_DELAY_MS: u64 = 2000;
 
 pub(crate) fn inner_progress_enabled() -> bool {
     matches!(
@@ -162,6 +173,12 @@ pub async fn extract_msi(msi_path: &Path, target_dir: &Path) -> Result<()> {
 }
 
 fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> Result<()> {
+    let file_name = msi_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown.msi")
+        .to_string();
+
     let pb = if show_progress {
         let pb = ProgressBar::new_spinner();
         pb.set_draw_target(ProgressDrawTarget::stderr_with_hz(4));
@@ -170,42 +187,75 @@ fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> 
                 .unwrap()
                 .tick_chars("⠁⠃⠇⠋⠙⠸⠴⠦"),
         );
-        pb.set_message(
-            msi_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| format!("msiexec extracting {}", n))
-                .unwrap_or_else(|| "msiexec extracting".to_string()),
-        );
+        pb.set_message(format!("msiexec extracting {}", file_name));
         pb.enable_steady_tick(Duration::from_millis(progress_const::PROGRESS_TICK_MS));
         Some(pb)
     } else {
         None
     };
 
+    // Acquire global MSI lock to prevent concurrent msiexec invocations.
+    // Windows Installer can only run one instance at a time (error 1618).
+    let _lock = MSI_EXTRACT_LOCK
+        .lock()
+        .map_err(|e| MsvcKitError::Other(format!("Failed to acquire MSI lock: {}", e)))?;
+
     #[cfg(windows)]
     {
         use std::process::Command;
 
-        // Use msiexec to extract MSI contents
-        let status = Command::new("msiexec")
-            .args([
-                "/a",
-                msi_path
-                    .to_str()
-                    .ok_or_else(|| MsvcKitError::Other("Invalid MSI path".to_string()))?,
-                "/qn",
-                &format!("TARGETDIR={}", target_dir.display()),
-            ])
-            .status()?;
+        let msi_path_str = msi_path
+            .to_str()
+            .ok_or_else(|| MsvcKitError::Other("Invalid MSI path".to_string()))?;
+        let target_dir_str = format!("TARGETDIR={}", target_dir.display());
 
-        if !status.success() {
+        // Retry loop for handling error 1618 (another installation in progress)
+        // This can happen if system Windows Installer is busy with other operations
+        let mut last_error = None;
+        for attempt in 1..=MSI_MAX_RETRIES {
+            let status = Command::new("msiexec")
+                .args(["/a", msi_path_str, "/qn", &target_dir_str])
+                .status()?;
+
+            if status.success() {
+                if let Some(pb) = pb {
+                    pb.finish_with_message(format!("MSI extracted: {}", file_name));
+                }
+                return Ok(());
+            }
+
+            // Check for error 1618 (another installation in progress)
+            // This can still happen if system-level installers are running
+            if let Some(code) = status.code() {
+                if code == 1618 && attempt < MSI_MAX_RETRIES {
+                    tracing::warn!(
+                        "msiexec returned 1618 (another installation in progress) for {}, retry {}/{}",
+                        file_name,
+                        attempt,
+                        MSI_MAX_RETRIES
+                    );
+                    if let Some(pb) = pb.as_ref() {
+                        pb.set_message(format!(
+                            "msiexec waiting (retry {}/{}) {}",
+                            attempt, MSI_MAX_RETRIES, file_name
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(MSI_RETRY_DELAY_MS));
+                    continue;
+                }
+            }
+
+            last_error = Some(status);
+            break;
+        }
+
+        if let Some(status) = last_error {
             if let Some(pb) = pb.as_ref() {
-                pb.abandon_with_message("msiexec failed");
+                pb.abandon_with_message(format!("msiexec failed: {}", file_name));
             }
             return Err(MsvcKitError::Other(format!(
-                "msiexec failed with status: {}",
-                status
+                "msiexec failed with status: {} for {}",
+                status, file_name
             )));
         }
     }
@@ -228,7 +278,12 @@ fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> 
             .status();
 
         match status {
-            Ok(s) if s.success() => {}
+            Ok(s) if s.success() => {
+                if let Some(pb) = pb {
+                    pb.finish_with_message(format!("MSI extracted: {}", file_name));
+                }
+                return Ok(());
+            }
             Ok(s) => {
                 if let Some(pb) = pb.as_ref() {
                     pb.abandon_with_message("msiextract failed");
@@ -250,10 +305,13 @@ fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> 
         }
     }
 
-    if let Some(pb) = pb {
-        pb.finish_with_message("MSI extracted");
+    #[cfg(windows)]
+    {
+        if let Some(pb) = pb {
+            pb.finish_with_message(format!("MSI extracted: {}", file_name));
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 /// Extract a CAB file with a simple file-count progress bar
