@@ -42,7 +42,7 @@ chrono = { version = "0.4", features = ["serde"] }
 toml = "0.9"
 
 # Compression
-zip = "2.2"
+zip = "7.0"
 cab = "0.6"
 
 # Progress display
