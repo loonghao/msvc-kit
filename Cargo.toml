@@ -42,7 +42,7 @@ chrono = { version = "0.4", features = ["serde"] }
 toml = "0.9"
 
 # Compression
-zip = "2.2"
+zip = "7"
 cab = "0.6"
 
 # Progress display
@@ -77,14 +77,14 @@ hex = "0.4"
 self_update = { version = "0.42", features = ["archive-zip"], optional = true }
 
 # Embedded KV database
-redb = "1.5"
-bincode = "1.3"
+redb = "3"
+bincode = { version = "2", features = ["serde"] }
 
 # Template engine
 askama = "0.15"
 
 [dev-dependencies]
-rstest = "0.24"
+rstest = "0.26"
 tempfile = "3.15"
 mockito = "1.6"
 
