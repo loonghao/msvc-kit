@@ -44,7 +44,7 @@ pub enum MsvcKitError {
 
     /// Serialization errors
     #[error("Serialization error: {0}")]
-    Serialization(#[from] bincode::Error),
+    Serialization(String),
 
     /// ZIP extraction errors
     #[error("ZIP extraction error: {0}")]
