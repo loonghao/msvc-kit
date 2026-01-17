@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use redb::{Database, ReadableTable, TableDefinition};
+use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 use serde::{Deserialize, Serialize};
 use tokio::task;
 
@@ -139,7 +139,10 @@ impl DownloadIndex {
                     .map_err(|e| MsvcKitError::Database(e.to_string()))?
                 {
                     let (_, val) = item.map_err(|e| MsvcKitError::Database(e.to_string()))?;
-                    let entry: IndexEntry = bincode::deserialize(val.value())?;
+                    let entry: IndexEntry =
+                        bincode::serde::decode_from_slice(val.value(), bincode::config::standard())
+                            .map_err(|e| MsvcKitError::Database(e.to_string()))?
+                            .0;
                     if entry.computed_hash.is_some() {
                         with_hash += 1;
                     } else {
@@ -185,7 +188,10 @@ impl DownloadIndex {
             drop(table);
             drop(tx);
             if let Some(bytes) = maybe_bytes {
-                let entry: IndexEntry = bincode::deserialize(&bytes)?;
+                let entry: IndexEntry =
+                    bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
+                        .map_err(|e| MsvcKitError::Database(e.to_string()))?
+                        .0;
                 Ok(Some(entry))
             } else {
                 Ok(None)
@@ -207,7 +213,8 @@ impl DownloadIndex {
                 let mut table = tx
                     .open_table(TABLE)
                     .map_err(|e| MsvcKitError::Database(e.to_string()))?;
-                let bytes = bincode::serialize(&entry)?;
+                let bytes = bincode::serde::encode_to_vec(&entry, bincode::config::standard())
+                    .map_err(|e| MsvcKitError::Database(e.to_string()))?;
                 table
                     .insert(entry.file_name.as_str(), bytes.as_slice())
                     .map_err(|e| MsvcKitError::Database(e.to_string()))?;
