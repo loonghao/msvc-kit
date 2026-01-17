@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.5](https://github.com/loonghao/msvc-kit/compare/v0.2.4...v0.2.5) (2026-01-17)
+
+
+### Bug Fixes
+
+* enable chore commits to trigger releases ([937c6b5](https://github.com/loonghao/msvc-kit/commit/937c6b5eb8def7cb0cbba05e603729ac6661a864))
+
+
+### Miscellaneous
+
+* **deps:** update rust crate chrono to v0.4.43 ([92019db](https://github.com/loonghao/msvc-kit/commit/92019dbcf4d5f50785d5c487f762d6b7ed6227f6))
+* **deps:** upgrade dependencies ([66f739a](https://github.com/loonghao/msvc-kit/commit/66f739a4291c40513e554076c7df59b09b105024))
+* **deps:** upgrade dependencies ([ad4ed70](https://github.com/loonghao/msvc-kit/commit/ad4ed70612219478c370049071cd2a5107edc20b))
+
 ## [0.2.4](https://github.com/loonghao/msvc-kit/compare/v0.2.3...v0.2.4) (2026-01-11)
 
 
