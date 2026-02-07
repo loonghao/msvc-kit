@@ -39,6 +39,7 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 - **TLS backend** uses `native-tls` (Windows schannel) to avoid `rustls`/`awslc-sys` build issues
 - **Multi-format extraction** (VSIX, MSI, CAB)
 - **Hash verification** with SHA256
+- **Self-update** via [axoupdater](https://github.com/axodotdev/axoupdater), compatible with cargo-dist releases
 
 
 ### Installation
@@ -211,6 +212,21 @@ msvc-kit config --reset                # Reset to defaults
 msvc-kit env                  # Print as shell script
 msvc-kit env --format json    # Print as JSON
 ```
+
+#### Self-Update
+
+```bash
+# Check for updates without installing
+msvc-kit update --check
+
+# Update to the latest version
+msvc-kit update
+
+# Update to a specific version
+msvc-kit update --version 0.2.5
+```
+
+The self-update feature is powered by [axoupdater](https://github.com/axodotdev/axoupdater) and queries GitHub Releases directly. It is compatible with both cargo-dist and custom release workflows. The `self-update` feature is enabled by default and can be disabled with `--no-default-features` at build time.
 
 ### Caching & Progress
 

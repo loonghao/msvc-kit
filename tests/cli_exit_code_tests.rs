@@ -103,7 +103,7 @@ fn test_version_flag_exits_zero() {
 fn test_subcommand_help_exits_zero() {
     // Subcommand help should exit with code 0
     let commands = [
-        "download", "setup", "list", "clean", "config", "env", "bundle",
+        "download", "setup", "list", "clean", "config", "env", "bundle", "update",
     ];
 
     for cmd in commands {

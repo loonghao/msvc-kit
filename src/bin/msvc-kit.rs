@@ -737,39 +737,46 @@ async fn main() -> anyhow::Result<()> {
         Commands::Update { check, version } => {
             let current_version = env!("CARGO_PKG_VERSION");
 
-            // Determine target based on architecture
-            let target = if cfg!(target_arch = "x86_64") {
-                "x86_64-windows"
-            } else if cfg!(target_arch = "x86") {
-                "i686-windows"
-            } else if cfg!(target_arch = "aarch64") {
-                "aarch64-windows"
-            } else {
-                anyhow::bail!("Unsupported architecture for self-update");
+            // Configure axoupdater with GitHub release source (no cargo-dist receipt needed)
+            let source = axoupdater::ReleaseSource {
+                release_type: axoupdater::ReleaseSourceType::GitHub,
+                owner: "loonghao".to_string(),
+                name: "msvc-kit".to_string(),
+                app_name: "msvc-kit".to_string(),
             };
 
-            let status = self_update::backends::github::Update::configure()
-                .repo_owner("loonghao")
-                .repo_name("msvc-kit")
-                .bin_name("msvc-kit")
-                .target(target)
-                .current_version(current_version)
-                .build()?;
+            let mut updater = axoupdater::AxoUpdater::new_for("msvc-kit");
+            updater.set_release_source(source);
+            updater
+                .set_current_version(
+                    current_version
+                        .parse()
+                        .map_err(|e| anyhow::anyhow!("Failed to parse current version: {}", e))?,
+                )
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+            // Disable installer output noise
+            updater.disable_installer_output();
+
+            if let Some(ref target_version) = version {
+                updater.configure_version_specifier(
+                    axoupdater::UpdateRequest::SpecificVersion(target_version.clone()),
+                );
+                updater.always_update(true);
+            }
 
             if check {
                 println!("🔍 Checking for updates...\n");
                 println!("Current version: v{}", current_version);
 
-                match status.get_latest_release() {
-                    Ok(release) => {
-                        let latest = &release.version;
-                        if latest != current_version {
-                            println!("Latest version:  v{}", latest);
-                            println!("\n📦 A new version is available!");
-                            println!("Run 'msvc-kit update' to upgrade.");
-                        } else {
-                            println!("\n✅ You are running the latest version.");
-                        }
+                match updater.query_new_version().await {
+                    Ok(Some(new_version)) => {
+                        println!("Latest version:  v{}", new_version);
+                        println!("\n📦 A new version is available!");
+                        println!("Run 'msvc-kit update' to upgrade.");
+                    }
+                    Ok(None) => {
+                        println!("\n✅ You are running the latest version.");
                     }
                     Err(e) => {
                         println!("⚠️  Failed to check for updates: {}", e);
@@ -779,33 +786,16 @@ async fn main() -> anyhow::Result<()> {
                 println!("🔄 Updating msvc-kit...\n");
                 println!("Current version: v{}", current_version);
 
-                let update_result = if let Some(target_version) = version {
-                    // Update to specific version
-                    self_update::backends::github::Update::configure()
-                        .repo_owner("loonghao")
-                        .repo_name("msvc-kit")
-                        .bin_name("msvc-kit")
-                        .target(target)
-                        .current_version(current_version)
-                        .target_version_tag(&format!("v{}", target_version))
-                        .build()?
-                        .update()
-                } else {
-                    // Update to latest
-                    status.update()
-                };
-
-                match update_result {
-                    Ok(update_status) => {
-                        if update_status.updated() {
-                            println!("\n✅ Updated to v{}!", update_status.version());
-                            println!("Please restart msvc-kit to use the new version.");
-                        } else {
-                            println!(
-                                "\n✅ Already running the latest version (v{}).",
-                                current_version
-                            );
-                        }
+                match updater.run().await {
+                    Ok(Some(result)) => {
+                        println!("\n✅ Updated to v{}!", result.new_version);
+                        println!("Please restart msvc-kit to use the new version.");
+                    }
+                    Ok(None) => {
+                        println!(
+                            "\n✅ Already running the latest version (v{}).",
+                            current_version
+                        );
                     }
                     Err(e) => {
                         anyhow::bail!("Failed to update: {}", e);

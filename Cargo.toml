@@ -21,7 +21,7 @@ required-features = ["self-update"]
 
 [features]
 default = ["self-update"]
-self-update = ["dep:self_update"]
+self-update = ["dep:axoupdater"]
 
 [dependencies]
 # CLI framework
@@ -73,8 +73,8 @@ futures = "0.3"
 sha2 = "0.10"
 hex = "0.4"
 
-# Self-update (optional)
-self_update = { version = "0.42", features = ["archive-zip"], optional = true }
+# Self-update via axoupdater (optional, compatible with cargo-dist releases)
+axoupdater = { version = "0.9", default-features = false, features = ["github_releases"], optional = true }
 
 # Embedded KV database
 redb = "3"
