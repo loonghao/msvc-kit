@@ -39,6 +39,7 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 - **TLS 后端** - 使用 `native-tls`（Windows schannel），避免 `rustls`/`awslc-sys` 构建问题
 - **多格式解压** - 支持 VSIX、MSI、CAB
 - **哈希校验** - SHA256 验证
+- **自动更新** - 基于 [axoupdater](https://github.com/axodotdev/axoupdater)，兼容 cargo-dist 发布流程
 
 
 ## 安装
@@ -214,6 +215,21 @@ msvc-kit env                  # 输出为 shell 脚本
 msvc-kit env --format json    # 输出为 JSON
 ```
 
+### 自动更新
+
+```bash
+# 仅检查更新，不安装
+msvc-kit update --check
+
+# 更新到最新版本
+msvc-kit update
+
+# 更新到指定版本
+msvc-kit update --version 0.2.5
+```
+
+自动更新功能由 [axoupdater](https://github.com/axodotdev/axoupdater) 驱动，直接查询 GitHub Releases。兼容 cargo-dist 和自定义发布流程。`self-update` 特性默认启用，构建时可通过 `--no-default-features` 禁用。
+
 ## 缓存机制
 
 | 缓存类型 | 位置 | 说明 |
@@ -283,15 +299,5 @@ MIT 许可证 - 参见 `LICENSE`。
 
 - **msvc-kit** 本身采用 MIT 许可证
 - MSVC Build Tools 和 Windows SDK **不可再分发** - 用户必须直接下载
-- 使用 `msvc-kit download` 或 `msvc-kit bundle --accept-license` 即表示您同意微软的许可条款
-- 本工具仅自动化下载过程，不分发微软软件
-
-**重要：微软软件许可声明**
-
-本工具下载的 MSVC 编译器和 Windows SDK 是微软的财产，
-受 [Microsoft Visual Studio 许可条款](https://visualstudio.microsoft.com/license-terms/) 约束。
-
-- **msvc-kit** 本身采用 MIT 许可证
-- MSVC Build Tools 和 Windows SDK **不可再分发** - 用户必须自行下载
 - 使用 `msvc-kit download` 或 `msvc-kit bundle --accept-license` 即表示您同意微软的许可条款
 - 本工具仅自动化下载过程，不分发微软软件
