@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+env:
+  VX_VERSION: "0.4.1"
+
+
 jobs:
   cargo-audit:
     name: Cargo Audit
@@ -16,13 +20,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Setup Rust (bootstrap for vx)
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install vx
-        uses: taiki-e/install-action@v2
-        with:
-          tool: vx
+        run: cargo install vx --locked --version ${{ env.VX_VERSION }} --force
 
       - name: Setup tools (vx)
         run: vx setup
+
 
       - name: Install cargo-audit
         run: vx cargo install cargo-audit --locked

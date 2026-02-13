@@ -19,6 +19,10 @@ permissions:
   pages: write
   id-token: write
 
+env:
+  VX_VERSION: "0.4.1"
+
+
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -31,13 +35,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Rust (bootstrap for vx)
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install vx
-        uses: taiki-e/install-action@v2
-        with:
-          tool: vx
+        run: cargo install vx --locked --version ${{ env.VX_VERSION }} --force
 
       - name: Setup tools (vx)
         run: vx setup
+
 
       - name: Install dependencies
         run: vx just docs-install

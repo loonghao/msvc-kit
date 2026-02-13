@@ -19,6 +19,8 @@ env:
   CARGO_HTTP_TIMEOUT: "600"
   CARGO_NET_RETRY: "10"
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+  VX_VERSION: "0.4.1"
+
 
 jobs:
   # Pre-build binaries for all targets
@@ -39,13 +41,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Setup Rust (bootstrap for vx)
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install vx
-        uses: taiki-e/install-action@v2
-        with:
-          tool: vx
+        run: cargo install vx --locked --version ${{ env.VX_VERSION }} --force
+
 
       - name: Setup tools (vx)
         run: vx setup
+
 
       - name: Add Rust target
         run: vx rustup target add ${{ matrix.target }}
@@ -74,13 +79,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Setup Rust (bootstrap for vx)
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install vx
-        uses: taiki-e/install-action@v2
-        with:
-          tool: vx
+        run: cargo install vx --locked --version ${{ env.VX_VERSION }} --force
+
 
       - name: Setup tools (vx)
         run: vx setup
+
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -100,13 +108,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Setup Rust (bootstrap for vx)
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install vx
-        uses: taiki-e/install-action@v2
-        with:
-          tool: vx
+        run: cargo install vx --locked --version ${{ env.VX_VERSION }} --force
+
 
       - name: Setup tools (vx)
         run: vx setup
+
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -124,13 +135,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Setup Rust (bootstrap for vx)
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install vx
-        uses: taiki-e/install-action@v2
-        with:
-          tool: vx
+        run: cargo install vx --locked --version ${{ env.VX_VERSION }} --force
+
 
       - name: Setup tools (vx)
         run: vx setup
+
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -150,13 +164,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Setup Rust (bootstrap for vx)
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install vx
-        uses: taiki-e/install-action@v2
-        with:
-          tool: vx
+        run: cargo install vx --locked --version ${{ env.VX_VERSION }} --force
+
 
       - name: Setup tools (vx)
         run: vx setup
+
 
       - name: Install dependencies
         run: vx just docs-install
