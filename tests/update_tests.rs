@@ -120,7 +120,10 @@ mod axoupdater_config_tests {
 
         // Setting current version should not error for valid semver
         let result = updater.set_current_version("0.2.5".parse().unwrap());
-        assert!(result.is_ok(), "set_current_version should succeed for valid semver");
+        assert!(
+            result.is_ok(),
+            "set_current_version should succeed for valid semver"
+        );
     }
 
     #[test]
