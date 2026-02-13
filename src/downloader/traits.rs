@@ -4,6 +4,7 @@
 //! enabling unified handling and easier integration with external tools like vx.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -217,7 +218,10 @@ impl CacheManager for FileSystemCacheManager {
 }
 
 /// Boxed cache manager type for dynamic dispatch
-pub type BoxedCacheManager = Box<dyn CacheManager>;
+///
+/// Uses `Arc` for shared ownership and `Clone` support, consistent with
+/// `BoxedProgressHandler`.
+pub type BoxedCacheManager = Arc<dyn CacheManager>;
 
 #[cfg(test)]
 mod tests {

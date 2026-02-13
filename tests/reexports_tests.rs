@@ -91,3 +91,40 @@ fn test_download_functions_exist() {
 fn test_config_types_reexport() {
     let _config = msvc_kit::MsvcKitConfig::default();
 }
+
+#[test]
+fn test_download_all_reexport() {
+    // Verify download_all is accessible from crate root
+    // Just verify the function exists and is callable (type check)
+    let _fn_ptr = msvc_kit::download_all;
+}
+
+#[test]
+fn test_cache_manager_reexport() {
+    // Verify CacheManager and FileSystemCacheManager are accessible
+    let _: Option<msvc_kit::BoxedCacheManager> = None;
+
+    // Verify the type exists and can be referenced
+    fn _check_trait(_: &dyn msvc_kit::CacheManager) {}
+}
+
+#[test]
+fn test_download_options_builder_cache_manager() {
+    // Verify cache_manager builder method works
+    let options = msvc_kit::DownloadOptions::builder()
+        .arch(msvc_kit::Architecture::X64)
+        .target_dir("/tmp/test")
+        .build();
+
+    assert!(options.cache_manager.is_none());
+}
+
+#[test]
+#[allow(unreachable_code)]
+fn test_bundle_types_reexport() {
+    let _: fn(msvc_kit::BundleOptions) -> _ =
+        |_| async { Ok::<msvc_kit::BundleResult, msvc_kit::MsvcKitError>(todo!()) };
+
+    let _opts = msvc_kit::BundleOptions::default();
+    assert_eq!(_opts.arch, msvc_kit::Architecture::X64);
+}

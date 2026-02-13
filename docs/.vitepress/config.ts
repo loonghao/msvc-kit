@@ -53,6 +53,7 @@ export default defineConfig({
               items: [
                 { text: '缓存机制', link: '/zh/guide/caching' },
                 { text: '架构支持', link: '/zh/guide/architecture' },
+                { text: 'GitHub Action', link: '/zh/guide/github-action' },
                 { text: 'CI/CD 集成', link: '/zh/guide/ci-cd' },
               ],
             },
@@ -139,6 +140,7 @@ export default defineConfig({
           items: [
             { text: 'Caching Mechanism', link: '/guide/caching' },
             { text: 'Architecture Support', link: '/guide/architecture' },
+            { text: 'GitHub Action', link: '/guide/github-action' },
             { text: 'CI/CD Integration', link: '/guide/ci-cd' },
           ],
         },

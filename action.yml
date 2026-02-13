@@ -1,0 +1,313 @@
+name: "Setup MSVC Build Tools"
+description: "Download and configure MSVC compiler and Windows SDK using msvc-kit"
+author: "loonghao"
+
+branding:
+  icon: "package"
+  color: "blue"
+
+inputs:
+  msvc-version:
+    description: "MSVC version to install (default: latest)"
+    required: false
+    default: ""
+  sdk-version:
+    description: "Windows SDK version to install (default: latest)"
+    required: false
+    default: ""
+  arch:
+    description: "Target architecture (x64, x86, arm64)"
+    required: false
+    default: "x64"
+  host-arch:
+    description: "Host architecture for cross-compilation (x64, x86, arm64)"
+    required: false
+    default: ""
+  install-dir:
+    description: "Installation directory for MSVC tools"
+    required: false
+    default: ""
+  msvc-kit-version:
+    description: "msvc-kit version to use (default: latest release)"
+    required: false
+    default: "latest"
+  components:
+    description: "Components to install: 'all', 'msvc', or 'sdk'"
+    required: false
+    default: "all"
+  verify-hashes:
+    description: "Verify downloaded file hashes (true/false)"
+    required: false
+    default: "true"
+  export-env:
+    description: "Export environment variables to GITHUB_ENV (true/false)"
+    required: false
+    default: "true"
+
+outputs:
+  msvc-version:
+    description: "Installed MSVC version"
+    value: ${{ steps.setup.outputs.msvc-version }}
+  sdk-version:
+    description: "Installed Windows SDK version"
+    value: ${{ steps.setup.outputs.sdk-version }}
+  install-dir:
+    description: "Installation directory"
+    value: ${{ steps.setup.outputs.install-dir }}
+  cl-path:
+    description: "Path to cl.exe"
+    value: ${{ steps.setup.outputs.cl-path }}
+  link-path:
+    description: "Path to link.exe"
+    value: ${{ steps.setup.outputs.link-path }}
+  rc-path:
+    description: "Path to rc.exe"
+    value: ${{ steps.setup.outputs.rc-path }}
+  include-path:
+    description: "INCLUDE environment variable value"
+    value: ${{ steps.setup.outputs.include-path }}
+  lib-path:
+    description: "LIB environment variable value"
+    value: ${{ steps.setup.outputs.lib-path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Validate platform
+      shell: bash
+      run: |
+        if [[ "$RUNNER_OS" != "Windows" ]]; then
+          echo "::error::msvc-kit action only supports Windows runners"
+          exit 1
+        fi
+
+    - name: Download msvc-kit
+      id: download
+      shell: pwsh
+      env:
+        MSVC_KIT_VERSION: ${{ inputs.msvc-kit-version }}
+      run: |
+        $ErrorActionPreference = "Stop"
+
+        $installDir = if ("${{ inputs.install-dir }}" -ne "") {
+          "${{ inputs.install-dir }}"
+        } else {
+          Join-Path $env:RUNNER_TEMP "msvc-kit"
+        }
+
+        # Create install directory
+        New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+
+        $version = $env:MSVC_KIT_VERSION
+        $arch = "x86_64"
+
+        # Determine download URL
+        if ($version -eq "latest") {
+          $releaseUrl = "https://api.github.com/repos/loonghao/msvc-kit/releases/latest"
+          $release = Invoke-RestMethod -Uri $releaseUrl -Headers @{ "User-Agent" = "msvc-kit-action" }
+          $version = $release.tag_name -replace '^v', ''
+          Write-Host "Latest msvc-kit version: $version"
+        }
+
+        $assetName = "msvc-kit-${version}-${arch}-windows.exe"
+        $downloadUrl = "https://github.com/loonghao/msvc-kit/releases/download/v${version}/${assetName}"
+        $exePath = Join-Path $installDir "msvc-kit.exe"
+
+        Write-Host "Downloading msvc-kit v${version} from ${downloadUrl}"
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $exePath -UseBasicParsing
+
+        if (-not (Test-Path $exePath)) {
+          throw "Failed to download msvc-kit"
+        }
+
+        Write-Host "msvc-kit downloaded to: $exePath"
+        echo "exe-path=$exePath" >> $env:GITHUB_OUTPUT
+        echo "install-dir=$installDir" >> $env:GITHUB_OUTPUT
+
+    - name: Install MSVC Build Tools
+      id: setup
+      shell: pwsh
+      env:
+        MSVC_KIT_EXE: ${{ steps.download.outputs.exe-path }}
+        INSTALL_DIR: ${{ steps.download.outputs.install-dir }}
+      run: |
+        $ErrorActionPreference = "Stop"
+
+        $exe = $env:MSVC_KIT_EXE
+        $installDir = $env:INSTALL_DIR
+        $arch = "${{ inputs.arch }}"
+        $components = "${{ inputs.components }}"
+        $verifyHashes = "${{ inputs.verify-hashes }}"
+
+        # Build download command arguments
+        $downloadArgs = @("download", "--target", $installDir, "--arch", $arch)
+
+        if ("${{ inputs.msvc-version }}" -ne "") {
+          $downloadArgs += @("--msvc-version", "${{ inputs.msvc-version }}")
+        }
+        if ("${{ inputs.sdk-version }}" -ne "") {
+          $downloadArgs += @("--sdk-version", "${{ inputs.sdk-version }}")
+        }
+        if ($verifyHashes -eq "false") {
+          $downloadArgs += "--no-verify"
+        }
+        if ($components -eq "msvc") {
+          $downloadArgs += "--no-sdk"
+        } elseif ($components -eq "sdk") {
+          $downloadArgs += "--no-msvc"
+        }
+
+        Write-Host "Running: msvc-kit $($downloadArgs -join ' ')"
+        & $exe @downloadArgs
+        if ($LASTEXITCODE -ne 0) {
+          throw "msvc-kit download failed with exit code $LASTEXITCODE"
+        }
+
+        # Get environment info in JSON format
+        $envArgs = @("env", "--dir", $installDir, "--format", "json")
+        $envJson = & $exe @envArgs 2>$null | Out-String
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "::warning::Failed to get environment info, trying to detect manually"
+        }
+
+        # Detect installed versions
+        $vcToolsDir = Get-ChildItem -Path (Join-Path $installDir "VC\Tools\MSVC") -Directory -ErrorAction SilentlyContinue |
+          Sort-Object Name -Descending | Select-Object -First 1
+        $sdkIncludeDir = Get-ChildItem -Path (Join-Path $installDir "Windows Kits\10\Include") -Directory -ErrorAction SilentlyContinue |
+          Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+          Sort-Object Name -Descending | Select-Object -First 1
+
+        $msvcVersion = if ($vcToolsDir) { $vcToolsDir.Name } else { "unknown" }
+        $sdkVersion = if ($sdkIncludeDir) { $sdkIncludeDir.Name } else { "unknown" }
+
+        Write-Host "Installed MSVC version: $msvcVersion"
+        Write-Host "Installed SDK version: $sdkVersion"
+
+        # Determine host arch
+        $hostArch = if ("${{ inputs.host-arch }}" -ne "") { "${{ inputs.host-arch }}" } else { "x64" }
+
+        # Map architecture to MSVC directory names
+        $hostDir = switch ($hostArch) {
+          "x64"   { "Hostx64" }
+          "x86"   { "Hostx86" }
+          "arm64" { "Hostarm64" }
+          default { "Hostx64" }
+        }
+        $targetDir = $arch
+
+        # Build paths
+        $msvcBinDir = Join-Path $installDir "VC\Tools\MSVC\$msvcVersion\bin\$hostDir\$targetDir"
+        $msvcIncDir = Join-Path $installDir "VC\Tools\MSVC\$msvcVersion\include"
+        $msvcLibDir = Join-Path $installDir "VC\Tools\MSVC\$msvcVersion\lib\$arch"
+
+        $sdkBinDir = Join-Path $installDir "Windows Kits\10\bin\$sdkVersion\$arch"
+        $sdkIncludeBase = Join-Path $installDir "Windows Kits\10\Include\$sdkVersion"
+        $sdkLibBase = Join-Path $installDir "Windows Kits\10\Lib\$sdkVersion"
+
+        # INCLUDE paths
+        $includePaths = @(
+          $msvcIncDir,
+          (Join-Path $sdkIncludeBase "ucrt"),
+          (Join-Path $sdkIncludeBase "shared"),
+          (Join-Path $sdkIncludeBase "um"),
+          (Join-Path $sdkIncludeBase "winrt"),
+          (Join-Path $sdkIncludeBase "cppwinrt")
+        ) -join ";"
+
+        # LIB paths
+        $libPaths = @(
+          $msvcLibDir,
+          (Join-Path $sdkLibBase "ucrt\$arch"),
+          (Join-Path $sdkLibBase "um\$arch")
+        ) -join ";"
+
+        # PATH additions
+        $binPaths = @($msvcBinDir, $sdkBinDir) -join ";"
+
+        # Set outputs
+        echo "msvc-version=$msvcVersion" >> $env:GITHUB_OUTPUT
+        echo "sdk-version=$sdkVersion" >> $env:GITHUB_OUTPUT
+        echo "install-dir=$installDir" >> $env:GITHUB_OUTPUT
+        echo "cl-path=$(Join-Path $msvcBinDir 'cl.exe')" >> $env:GITHUB_OUTPUT
+        echo "link-path=$(Join-Path $msvcBinDir 'link.exe')" >> $env:GITHUB_OUTPUT
+        echo "rc-path=$(Join-Path $sdkBinDir 'rc.exe')" >> $env:GITHUB_OUTPUT
+        echo "include-path=$includePaths" >> $env:GITHUB_OUTPUT
+        echo "lib-path=$libPaths" >> $env:GITHUB_OUTPUT
+
+        Write-Host ""
+        Write-Host "MSVC Build Tools setup complete!"
+        Write-Host "  MSVC: $msvcVersion"
+        Write-Host "  SDK:  $sdkVersion"
+        Write-Host "  Arch: $arch"
+
+    - name: Export environment variables
+      if: inputs.export-env == 'true'
+      shell: pwsh
+      env:
+        INSTALL_DIR: ${{ steps.setup.outputs.install-dir }}
+        MSVC_VERSION: ${{ steps.setup.outputs.msvc-version }}
+        SDK_VERSION: ${{ steps.setup.outputs.sdk-version }}
+        INCLUDE_PATH: ${{ steps.setup.outputs.include-path }}
+        LIB_PATH: ${{ steps.setup.outputs.lib-path }}
+        CL_PATH: ${{ steps.setup.outputs.cl-path }}
+      run: |
+        $ErrorActionPreference = "Stop"
+
+        $installDir = $env:INSTALL_DIR
+        $msvcVersion = $env:MSVC_VERSION
+        $sdkVersion = $env:SDK_VERSION
+        $arch = "${{ inputs.arch }}"
+
+        # Determine host arch
+        $hostArch = if ("${{ inputs.host-arch }}" -ne "") { "${{ inputs.host-arch }}" } else { "x64" }
+        $hostDir = switch ($hostArch) {
+          "x64"   { "Hostx64" }
+          "x86"   { "Hostx86" }
+          "arm64" { "Hostarm64" }
+          default { "Hostx64" }
+        }
+        $targetDir = $arch
+
+        $msvcBinDir = Join-Path $installDir "VC\Tools\MSVC\$msvcVersion\bin\$hostDir\$targetDir"
+        $sdkBinDir = Join-Path $installDir "Windows Kits\10\bin\$sdkVersion\$arch"
+
+        # Export to GITHUB_ENV for subsequent steps
+        echo "VCINSTALLDIR=$installDir\VC\" >> $env:GITHUB_ENV
+        echo "VCToolsInstallDir=$installDir\VC\Tools\MSVC\$msvcVersion\" >> $env:GITHUB_ENV
+        echo "VCToolsVersion=$msvcVersion" >> $env:GITHUB_ENV
+        echo "WindowsSdkDir=$installDir\Windows Kits\10\" >> $env:GITHUB_ENV
+        echo "WindowsSDKVersion=$sdkVersion\" >> $env:GITHUB_ENV
+        echo "VSCMD_ARG_HOST_ARCH=$hostArch" >> $env:GITHUB_ENV
+        echo "VSCMD_ARG_TGT_ARCH=$arch" >> $env:GITHUB_ENV
+        echo "Platform=$arch" >> $env:GITHUB_ENV
+        echo "INCLUDE=$($env:INCLUDE_PATH)" >> $env:GITHUB_ENV
+        echo "LIB=$($env:LIB_PATH)" >> $env:GITHUB_ENV
+
+        # Add to PATH
+        echo "$msvcBinDir" >> $env:GITHUB_PATH
+        echo "$sdkBinDir" >> $env:GITHUB_PATH
+
+        # Set CC/CXX for cc-rs and cmake compatibility
+        $clExe = $env:CL_PATH
+        echo "CC=$clExe" >> $env:GITHUB_ENV
+        echo "CXX=$clExe" >> $env:GITHUB_ENV
+        echo "CC_x86_64_pc_windows_msvc=$clExe" >> $env:GITHUB_ENV
+        echo "CXX_x86_64_pc_windows_msvc=$clExe" >> $env:GITHUB_ENV
+
+        Write-Host "Environment variables exported to GITHUB_ENV and GITHUB_PATH"
+        Write-Host "  CC=$clExe"
+        Write-Host "  PATH additions: $msvcBinDir;$sdkBinDir"
+
+    - name: Verify setup
+      shell: pwsh
+      run: |
+        Write-Host "Verifying MSVC setup..."
+        $clExe = "${{ steps.setup.outputs.cl-path }}"
+        if (Test-Path $clExe) {
+          Write-Host "cl.exe found at: $clExe"
+          & $clExe 2>&1 | Select-Object -First 1
+          Write-Host "MSVC Build Tools setup verified successfully!"
+        } else {
+          Write-Host "::warning::cl.exe not found at expected path: $clExe"
+        }

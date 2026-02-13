@@ -15,6 +15,7 @@ use tracing::debug;
 
 use super::hash::compute_file_hash;
 use super::progress::{BoxedProgressHandler, IndicatifProgressHandler};
+use super::traits::BoxedCacheManager;
 use super::{DownloadIndex, DownloadOptions, DownloadStatus, Package, PackagePayload};
 use crate::constants::download as dl_const;
 use crate::error::{MsvcKitError, Result};
@@ -24,6 +25,8 @@ pub struct CommonDownloader {
     pub options: DownloadOptions,
     pub client: Client,
     pub progress_handler: Option<BoxedProgressHandler>,
+    /// Custom cache manager for manifest / payload caching
+    pub cache_manager: Option<BoxedCacheManager>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -46,6 +49,7 @@ impl CommonDownloader {
             options,
             client,
             progress_handler: None,
+            cache_manager: None,
         }
     }
 
@@ -53,6 +57,23 @@ impl CommonDownloader {
     pub fn with_progress_handler(mut self, handler: BoxedProgressHandler) -> Self {
         self.progress_handler = Some(handler);
         self
+    }
+
+    /// Set a custom cache manager for manifest and payload caching
+    pub fn with_cache_manager(mut self, manager: BoxedCacheManager) -> Self {
+        self.cache_manager = Some(manager);
+        self
+    }
+
+    /// Get the manifest cache directory.
+    /// If a custom cache manager is set, use its cache_dir/manifests;
+    /// otherwise fall back to the default location.
+    pub fn manifest_cache_dir(&self) -> PathBuf {
+        if let Some(ref cm) = self.cache_manager {
+            cm.cache_dir().join("manifests")
+        } else {
+            super::cache::default_manifest_cache_dir()
+        }
     }
 
     /// Download packages with progress display and local index for fast skip

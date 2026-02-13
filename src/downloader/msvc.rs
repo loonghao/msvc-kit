@@ -24,10 +24,14 @@ impl MsvcDownloader {
             .clone()
             .unwrap_or_else(create_http_client);
         let progress_handler = options.progress_handler.clone();
+        let cache_manager = options.cache_manager.clone();
 
         let mut downloader = CommonDownloader::with_client(options, client);
         if let Some(handler) = progress_handler {
             downloader = downloader.with_progress_handler(handler);
+        }
+        if let Some(cm) = cache_manager {
+            downloader = downloader.with_cache_manager(cm);
         }
 
         Self { downloader }
@@ -108,7 +112,9 @@ impl MsvcDownloader {
             });
         }
 
-        let manifest = VsManifest::fetch().await?;
+        // Use custom cache dir if a cache_manager was injected
+        let cache_dir = self.downloader.manifest_cache_dir();
+        let manifest = VsManifest::fetch_with_cache_dir(&cache_dir).await?;
 
         // List available versions for debugging
         let available_versions = manifest.list_msvc_versions();

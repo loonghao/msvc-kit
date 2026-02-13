@@ -171,6 +171,7 @@ pub async fn create_bundle(options: BundleOptions) -> Result<BundleResult> {
         parallel_downloads: options.parallel_downloads,
         http_client: None,
         progress_handler: None,
+        cache_manager: None,
         dry_run: false,
     };
 

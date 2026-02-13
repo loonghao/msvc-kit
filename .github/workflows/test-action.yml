@@ -1,0 +1,146 @@
+name: Test Action
+
+# Test the GitHub Action itself to ensure it works correctly.
+on:
+  pull_request:
+    paths:
+      - "action.yml"
+      - ".github/workflows/test-action.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-action:
+    name: Test Action (${{ matrix.arch }})
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, x86]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup MSVC Build Tools
+        id: msvc
+        uses: ./
+        with:
+          arch: ${{ matrix.arch }}
+
+      - name: Verify outputs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $msvcVersion = "${{ steps.msvc.outputs.msvc-version }}"
+          $sdkVersion = "${{ steps.msvc.outputs.sdk-version }}"
+          $installDir = "${{ steps.msvc.outputs.install-dir }}"
+          $clPath = "${{ steps.msvc.outputs.cl-path }}"
+
+          Write-Host "MSVC Version: $msvcVersion"
+          Write-Host "SDK Version: $sdkVersion"
+          Write-Host "Install Dir: $installDir"
+          Write-Host "cl.exe Path: $clPath"
+
+          if ([string]::IsNullOrEmpty($msvcVersion) -or $msvcVersion -eq "unknown") {
+            throw "MSVC version not detected"
+          }
+          if ([string]::IsNullOrEmpty($sdkVersion) -or $sdkVersion -eq "unknown") {
+            throw "SDK version not detected"
+          }
+          if (-not (Test-Path $installDir)) {
+            throw "Install directory does not exist: $installDir"
+          }
+
+          Write-Host "All outputs verified successfully!"
+
+      - name: Verify environment variables
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # Check that environment variables are set
+          $requiredVars = @("VCINSTALLDIR", "VCToolsVersion", "WindowsSDKVersion", "INCLUDE", "LIB", "CC", "CXX")
+          foreach ($var in $requiredVars) {
+            $value = [System.Environment]::GetEnvironmentVariable($var)
+            if ([string]::IsNullOrEmpty($value)) {
+              throw "Environment variable $var is not set"
+            }
+            Write-Host "${var}: $value"
+          }
+
+          Write-Host "All environment variables verified!"
+
+      - name: Test C compilation
+        shell: cmd
+        run: |
+          echo int main() { return 0; } > test.c
+          cl /nologo test.c
+          test.exe
+          echo Compilation test passed!
+
+      - name: Test C++ compilation
+        shell: cmd
+        run: |
+          echo #include ^<iostream^> > test.cpp
+          echo int main() { std::cout ^<^< "Hello from MSVC!" ^<^< std::endl; return 0; } >> test.cpp
+          cl /nologo /EHsc test.cpp
+          test.exe
+
+  test-action-msvc-only:
+    name: Test Action (MSVC only)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup MSVC (no SDK)
+        id: msvc
+        uses: ./
+        with:
+          arch: x64
+          components: msvc
+
+      - name: Verify MSVC installed
+        shell: pwsh
+        run: |
+          $msvcVersion = "${{ steps.msvc.outputs.msvc-version }}"
+          Write-Host "MSVC Version: $msvcVersion"
+          if ([string]::IsNullOrEmpty($msvcVersion) -or $msvcVersion -eq "unknown") {
+            throw "MSVC version not detected"
+          }
+
+  test-action-summary:
+    name: Action Test Summary
+    runs-on: ubuntu-latest
+    needs: [test-action, test-action-msvc-only]
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          echo "## Action Test Results" >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "${{ needs.test-action.result }}" == "success" ]]; then
+            echo "- ✅ Action test (multi-arch)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- ❌ Action test (multi-arch): ${{ needs.test-action.result }}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [[ "${{ needs.test-action-msvc-only.result }}" == "success" ]]; then
+            echo "- ✅ Action test (MSVC only)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- ❌ Action test (MSVC only): ${{ needs.test-action-msvc-only.result }}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [[ "${{ needs.test-action.result }}" != "success" ]] || [[ "${{ needs.test-action-msvc-only.result }}" != "success" ]]; then
+            exit 1
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "✅ **All action tests passed!**" >> "$GITHUB_STEP_SUMMARY"

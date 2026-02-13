@@ -26,6 +26,18 @@ pub struct DownloadOptions {
     
     /// Number of parallel downloads
     pub parallel_downloads: usize,
+    
+    /// Custom HTTP client (None = create default)
+    pub http_client: Option<reqwest::Client>,
+    
+    /// Custom progress handler (None = use default indicatif)
+    pub progress_handler: Option<BoxedProgressHandler>,
+    
+    /// Custom cache manager (None = use default file system cache)
+    pub cache_manager: Option<BoxedCacheManager>,
+    
+    /// Dry-run mode: preview without downloading
+    pub dry_run: bool,
 }
 ```
 
@@ -149,3 +161,64 @@ When `true`, downloaded files are verified against SHA256 hashes from the manife
 ### parallel_downloads
 
 Number of concurrent downloads. Higher values may speed up downloads but use more bandwidth.
+
+### http_client
+
+Custom `reqwest::Client` for HTTP requests. Useful for proxy configuration or custom TLS settings.
+
+### progress_handler
+
+Custom progress handler implementing `ProgressHandler` trait. Use `NoopProgressHandler` to suppress output.
+
+### cache_manager
+
+Custom cache manager implementing `CacheManager` trait. Allows shared caching across multiple instances.
+
+```rust
+use msvc_kit::{DownloadOptions, FileSystemCacheManager};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+let cache = Arc::new(FileSystemCacheManager::new(
+    PathBuf::from("/shared/cache")
+));
+
+let options = DownloadOptions::builder()
+    .target_dir("C:/msvc")
+    .cache_manager(cache)
+    .build();
+```
+
+### dry_run
+
+When `true`, shows what would be downloaded without actually downloading.
+
+## Builder Pattern
+
+The recommended way to create `DownloadOptions`:
+
+```rust
+use msvc_kit::{DownloadOptions, Architecture};
+
+let options = DownloadOptions::builder()
+    .msvc_version("14.44")
+    .sdk_version("10.0.26100.0")
+    .target_dir("C:/msvc-kit")
+    .arch(Architecture::X64)
+    .host_arch(Architecture::X64)
+    .verify_hashes(true)
+    .parallel_downloads(8)
+    .dry_run(false)
+    .build();
+```
+
+## download_all
+
+Download both MSVC and SDK in parallel:
+
+```rust
+use msvc_kit::{download_all, DownloadOptions};
+
+let options = DownloadOptions::default();
+let (msvc_info, sdk_info) = download_all(&options).await?;
+```

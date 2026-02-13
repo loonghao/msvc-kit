@@ -66,6 +66,9 @@ pub struct DownloadOptions {
     /// Custom progress handler (None = use default indicatif)
     pub progress_handler: Option<BoxedProgressHandler>,
 
+    /// Custom cache manager (None = use default file system cache)
+    pub cache_manager: Option<BoxedCacheManager>,
+
     /// Dry-run mode: preview what would be downloaded without actually downloading
     pub dry_run: bool,
 }
@@ -82,6 +85,7 @@ impl std::fmt::Debug for DownloadOptions {
             .field("parallel_downloads", &self.parallel_downloads)
             .field("http_client", &self.http_client.is_some())
             .field("progress_handler", &self.progress_handler.is_some())
+            .field("cache_manager", &self.cache_manager.is_some())
             .field("dry_run", &self.dry_run)
             .finish()
     }
@@ -122,6 +126,7 @@ impl Default for DownloadOptions {
             parallel_downloads,
             http_client: None,
             progress_handler: None,
+            cache_manager: None,
             dry_run,
         }
     }
@@ -192,6 +197,12 @@ impl DownloadOptionsBuilder {
     /// Set custom progress handler
     pub fn progress_handler(mut self, handler: BoxedProgressHandler) -> Self {
         self.options.progress_handler = Some(handler);
+        self
+    }
+
+    /// Set custom cache manager for manifest and payload caching
+    pub fn cache_manager(mut self, manager: BoxedCacheManager) -> Self {
+        self.options.cache_manager = Some(manager);
         self
     }
 
