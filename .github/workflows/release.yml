@@ -17,10 +17,6 @@ permissions:
   pull-requests: write
   issues: write
 
-env:
-  VX_VERSION: "0.7.9"
-
-
 jobs:
   # Run release-please to create releases and tags
   release-please:
@@ -63,16 +59,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Rust (bootstrap for vx)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install vx
-        run: cargo install vx --locked --version ${{ env.VX_VERSION }} --force
-
+      - name: Setup vx
+        uses: loonghao/vx@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup tools (vx)
         run: vx setup
-
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -116,16 +109,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Rust (bootstrap for vx)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install vx
-        run: cargo install vx --locked --version ${{ env.VX_VERSION }} --force
-
+      - name: Setup vx
+        uses: loonghao/vx@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup tools (vx)
         run: vx setup
-
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -134,7 +124,6 @@ jobs:
 
       - name: Build release binary
         run: vx just build-release-locked
-
 
       - name: Rename binary
         shell: pwsh
@@ -195,7 +184,6 @@ jobs:
       - name: Prepare release asset
         run: |
           mv artifacts/msvc-kit-x86_64-windows/msvc-kit-x86_64-windows.exe ./msvc-kit-x86_64-windows.exe
-
 
       - name: Generate changelog
         id: changelog

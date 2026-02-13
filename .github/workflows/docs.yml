@@ -19,10 +19,6 @@ permissions:
   pages: write
   id-token: write
 
-env:
-  VX_VERSION: "0.7.9"
-
-
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -35,22 +31,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Rust (bootstrap for vx)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install vx
-        run: cargo install vx --locked --version ${{ env.VX_VERSION }} --force
+      - name: Setup vx
+        uses: loonghao/vx@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup tools (vx)
         run: vx setup
-
 
       - name: Install dependencies
         run: vx just docs-install
 
       - name: Build documentation
         run: vx just docs-build
-
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v4

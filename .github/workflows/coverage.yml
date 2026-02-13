@@ -12,8 +12,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  VX_VERSION: "0.7.9"
-
 
 jobs:
   coverage:
@@ -23,15 +21,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Rust (bootstrap for vx)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install vx
-        run: cargo install vx --locked --version ${{ env.VX_VERSION }} --force
+      - name: Setup vx
+        uses: loonghao/vx@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup tools (vx)
         run: vx setup
-
 
       - name: Add llvm-tools-preview
         run: vx rustup component add llvm-tools-preview
@@ -44,7 +40,6 @@ jobs:
 
       - name: Generate coverage report
         run: vx just coverage
-
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

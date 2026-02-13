@@ -28,8 +28,6 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_HTTP_TIMEOUT: "600"
   CARGO_NET_RETRY: "10"
-  VX_VERSION: "0.7.9"
-
 
 jobs:
   validate-bundle:
@@ -46,15 +44,13 @@ jobs:
         with:
           arch: ${{ inputs.arch == 'x86' && 'x86' || inputs.arch == 'arm64' && 'amd64_arm64' || 'amd64' }}
 
-      - name: Setup Rust (bootstrap for vx)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install vx
-        run: cargo install vx --locked --version ${{ env.VX_VERSION }} --force
+      - name: Setup vx
+        uses: loonghao/vx@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup tools (vx)
         run: vx setup
-
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -63,7 +59,6 @@ jobs:
 
       - name: Build msvc-kit (release)
         run: vx just build-release-locked
-
 
       - name: Create bundle with msvc-kit
         shell: pwsh

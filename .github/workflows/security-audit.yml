@@ -9,10 +9,6 @@ on:
 permissions:
   contents: read
 
-env:
-  VX_VERSION: "0.7.9"
-
-
 jobs:
   cargo-audit:
     name: Cargo Audit
@@ -20,19 +16,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Rust (bootstrap for vx)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install vx
-        run: cargo install vx --locked --version ${{ env.VX_VERSION }} --force
+      - name: Setup vx
+        uses: loonghao/vx@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup tools (vx)
         run: vx setup
-
 
       - name: Install cargo-audit
         run: vx cargo install cargo-audit --locked
 
       - name: Run cargo audit
         run: vx just audit
-
