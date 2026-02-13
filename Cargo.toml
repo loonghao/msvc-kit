@@ -27,7 +27,7 @@ rustls-tls = ["reqwest/rustls"]
 
 [dependencies]
 # CLI framework
-clap = { version = "4.5", features = ["derive", "env"] }
+clap = { version = "4.5.58", features = ["derive", "env"] }
 
 # Async runtime
 tokio = { version = "1.43", features = ["full"] }
@@ -36,7 +36,7 @@ tokio = { version = "1.43", features = ["full"] }
 # TLS backend is selected via feature flags: `native-tls` (default) or `rustls-tls`.
 # Using `native-tls` avoids the cmake/NASM build dependency required by `rustls`/`aws-lc-sys`.
 # See: https://github.com/loonghao/msvc-kit/issues/44
-reqwest = { version = "0.13", default-features = false, features = ["json", "stream"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["json", "stream"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -44,10 +44,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 simd-json = "0.17"
 chrono = { version = "0.4", features = ["serde"] }
-toml = "0.9"
+toml = "0.9.12"
 
 # Compression
-zip = "7"
+zip = "7.4"
 cab = "0.6"
 
 # Progress display
@@ -60,8 +60,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Error handling
-thiserror = "2.0"
-anyhow = "1.0"
+thiserror = "2.0.18"
+anyhow = "1.0.101"
 
 # Path utilities
 directories = "6.0"
@@ -83,15 +83,15 @@ axoupdater = { version = "0.9", default-features = false, features = ["github_re
 
 # Embedded KV database
 redb = "3"
-bincode = { version = "2", features = ["serde"] }
+bincode = { version = "2.0.1", features = ["serde"] }
 
 # Template engine
-askama = "0.15"
+askama = "0.15.4"
 
 [dev-dependencies]
 rstest = "0.26"
-tempfile = "3.15"
-mockito = "1.6"
+tempfile = "3.25"
+mockito = "1.7"
 
 [profile.release]
 lto = true

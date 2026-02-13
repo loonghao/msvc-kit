@@ -223,3 +223,68 @@ fn test_extraction_constants() {
     // Extract buffer optimized to 256 KB for better throughput
     assert_eq!(extraction::EXTRACT_BUFFER_SIZE, 256 * 1024);
 }
+
+// ============================================================================
+// Config TOML Roundtrip Tests (validates toml crate upgrade compatibility)
+// ============================================================================
+
+#[test]
+fn test_config_toml_roundtrip_all_fields() {
+    let config = MsvcKitConfig {
+        install_dir: PathBuf::from("C:/msvc-kit"),
+        default_msvc_version: Some("14.44".to_string()),
+        default_sdk_version: Some("10.0.26100.0".to_string()),
+        default_arch: Architecture::Arm64,
+        verify_hashes: false,
+        parallel_downloads: 16,
+        cache_dir: Some(PathBuf::from("C:/cache")),
+    };
+
+    // Serialize to TOML string and back
+    let toml_str = toml::to_string_pretty(&config).unwrap();
+    let restored: MsvcKitConfig = toml::from_str(&toml_str).unwrap();
+
+    assert_eq!(restored.install_dir, config.install_dir);
+    assert_eq!(restored.default_msvc_version, config.default_msvc_version);
+    assert_eq!(restored.default_sdk_version, config.default_sdk_version);
+    assert_eq!(restored.default_arch, config.default_arch);
+    assert_eq!(restored.verify_hashes, config.verify_hashes);
+    assert_eq!(restored.parallel_downloads, config.parallel_downloads);
+    assert_eq!(restored.cache_dir, config.cache_dir);
+}
+
+#[test]
+fn test_config_toml_roundtrip_minimal() {
+    // Only default values — test backward compatibility with upgraded toml crate
+    let config = MsvcKitConfig::default();
+
+    let toml_str = toml::to_string(&config).unwrap();
+    let restored: MsvcKitConfig = toml::from_str(&toml_str).unwrap();
+
+    assert_eq!(restored.verify_hashes, config.verify_hashes);
+    assert_eq!(restored.parallel_downloads, config.parallel_downloads);
+    assert_eq!(restored.default_arch, config.default_arch);
+}
+
+#[test]
+fn test_config_toml_deserialize_from_raw_string() {
+    // Simulate reading a hand-written config file
+    let raw = r#"
+install_dir = "C:\\msvc-kit"
+default_msvc_version = "14.40"
+default_sdk_version = "10.0.22621"
+default_arch = "x64"
+verify_hashes = true
+parallel_downloads = 8
+cache_dir = "C:\\msvc-kit\\cache"
+"#;
+
+    let config: MsvcKitConfig = toml::from_str(raw).unwrap();
+    assert_eq!(config.install_dir, PathBuf::from("C:\\msvc-kit"));
+    assert_eq!(config.default_msvc_version, Some("14.40".to_string()));
+    assert_eq!(config.default_sdk_version, Some("10.0.22621".to_string()));
+    assert_eq!(config.default_arch, Architecture::X64);
+    assert!(config.verify_hashes);
+    assert_eq!(config.parallel_downloads, 8);
+    assert_eq!(config.cache_dir, Some(PathBuf::from("C:\\msvc-kit\\cache")));
+}

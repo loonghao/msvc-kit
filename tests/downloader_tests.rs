@@ -556,3 +556,94 @@ fn test_download_options_builder_chain() {
     assert_eq!(options.sdk_version, Some("10.0.26100.0".to_string()));
     assert_eq!(options.parallel_downloads, 8);
 }
+
+// ============================================================================
+// FileSystemCacheManager Extended Tests (validates tempfile/hash crate upgrades)
+// ============================================================================
+
+#[test]
+fn test_filesystem_cache_overwrite_existing_key() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let cache = FileSystemCacheManager::new(temp_dir.path());
+
+    cache.set("key", b"original").unwrap();
+    assert_eq!(cache.get("key"), Some(b"original".to_vec()));
+
+    // Overwrite with new value
+    cache.set("key", b"updated").unwrap();
+    assert_eq!(cache.get("key"), Some(b"updated".to_vec()));
+}
+
+#[test]
+fn test_filesystem_cache_empty_value() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let cache = FileSystemCacheManager::new(temp_dir.path());
+
+    cache.set("empty_key", b"").unwrap();
+    assert_eq!(cache.get("empty_key"), Some(b"".to_vec()));
+    assert!(cache.contains("empty_key"));
+}
+
+#[test]
+fn test_filesystem_cache_large_value() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let cache = FileSystemCacheManager::new(temp_dir.path());
+
+    // 1 MB value to exercise buffered I/O paths
+    let large_value = vec![0xABu8; 1024 * 1024];
+    cache.set("large_key", &large_value).unwrap();
+    assert_eq!(cache.get("large_key"), Some(large_value));
+}
+
+#[test]
+fn test_filesystem_cache_invalidate_nonexistent_key() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let cache = FileSystemCacheManager::new(temp_dir.path());
+
+    // Should not panic when invalidating a key that doesn't exist
+    cache.invalidate("nonexistent").unwrap();
+}
+
+#[test]
+fn test_filesystem_cache_get_nonexistent_key() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let cache = FileSystemCacheManager::new(temp_dir.path());
+
+    assert_eq!(cache.get("missing_key"), None);
+}
+
+#[test]
+fn test_filesystem_cache_clear_empty_cache() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let cache = FileSystemCacheManager::new(temp_dir.path());
+
+    // Should not panic when clearing an empty cache
+    cache.clear().unwrap();
+}
+
+// ============================================================================
+// Hash Computation Extended Tests (validates sha2 crate upgrade)
+// ============================================================================
+
+#[test]
+fn test_compute_hash_large_payload() {
+    // 256 KB payload to exercise multi-block hashing
+    let data = vec![0x42u8; 256 * 1024];
+    let hash1 = compute_hash(&data);
+    let hash2 = compute_hash(&data);
+    assert_eq!(hash1, hash2);
+    // SHA256 output is always 64 hex chars
+    assert_eq!(hash1.len(), 64);
+}
+
+#[test]
+fn test_hashes_match_empty_strings() {
+    assert!(hashes_match("", ""));
+}
+
+#[test]
+fn test_hashes_match_whitespace_tolerance() {
+    // Hashes should NOT match if whitespace differs
+    assert!(!hashes_match("abc ", "abc"));
+    assert!(!hashes_match(" abc", "abc"));
+}
