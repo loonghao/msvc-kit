@@ -19,15 +19,22 @@ cache_duration = "7d"
 # Build commands
 build = "just build"
 build-release = "just build-release"
+build-release-locked = "just build-release-locked"
+build-target-release = "just build-target-release"
 
 # Quality commands
 check = "just check"
 fmt = "just fmt"
 lint = "just lint"
+check-workspace = "just check-workspace"
+
 test = "just test"
+test-all-features = "just test-all-features"
+test-doc = "just test-doc"
 
 # Documentation
 doc = "just doc"
+doc-ci = "just doc-ci"
 docs-dev = "just docs-dev"
 docs-build = "just docs-build"
 
@@ -38,3 +45,5 @@ ci = "just ci"
 # Release
 release-check = "just release-check"
 publish = "just publish"
+publish-ci = "just publish-ci"
+

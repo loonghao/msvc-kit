@@ -31,20 +31,20 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Install vx
+        uses: taiki-e/install-action@v2
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: docs/package-lock.json
+          tool: vx
+
+      - name: Setup tools (vx)
+        run: vx setup
 
       - name: Install dependencies
-        working-directory: docs
-        run: npm ci
+        run: vx just docs-install
 
       - name: Build documentation
-        working-directory: docs
-        run: npm run build
+        run: vx just docs-build
+
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v4

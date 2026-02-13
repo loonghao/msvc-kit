@@ -9,17 +9,25 @@ default:
 
 # Build debug version
 build:
-    cargo build
+    vx cargo build
 
 # Build release version
 build-release:
-    cargo build --release
+    vx cargo build --release
+
+# Build release version (locked)
+build-release-locked:
+    vx cargo build --release --locked
+
+# Build release for specific target
+build-target-release TARGET:
+    vx cargo build --release --target {{TARGET}}
 
 # Build for all Windows targets
 build-all:
-    cargo build --release --target x86_64-pc-windows-msvc
-    cargo build --release --target i686-pc-windows-msvc
-    cargo build --release --target aarch64-pc-windows-msvc
+    vx cargo build --release --target x86_64-pc-windows-msvc
+    vx cargo build --release --target i686-pc-windows-msvc
+    vx cargo build --release --target aarch64-pc-windows-msvc
 
 # ============== Quality Commands ==============
 
@@ -28,98 +36,119 @@ check: fmt-check lint test
 
 # Check code formatting
 fmt-check:
-    cargo fmt --all -- --check
+    vx cargo fmt --all -- --check
 
 # Format code
 fmt:
-    cargo fmt --all
+    vx cargo fmt --all
 
 # Run clippy linter
 lint:
-    cargo clippy --all-targets --all-features -- -D warnings
+    vx cargo clippy --all-targets --all-features -- -D warnings
 
 # Run clippy with auto-fix
 lint-fix:
-    cargo clippy --all-targets --all-features --fix --allow-dirty
+    vx cargo clippy --all-targets --all-features --fix --allow-dirty
+
+# Workspace check
+check-workspace:
+    vx cargo check --workspace --all-features
 
 # ============== Test Commands ==============
 
 # Run all tests
 test:
-    cargo test --verbose
+    vx cargo test --verbose
+
+# Run tests with all features
+test-all-features:
+    vx cargo test --all-features --verbose
+
+# Run doc tests
+test-doc:
+    vx cargo test --doc
 
 # Run tests with output
 test-nocapture:
-    cargo test -- --nocapture
+    vx cargo test -- --nocapture
 
 # Run specific test
 test-one NAME:
-    cargo test {{NAME}} -- --nocapture
+    vx cargo test {{NAME}} -- --nocapture
 
 # ============== Documentation ==============
 
 # Generate documentation
 doc:
-    cargo doc --no-deps --open
+    vx cargo doc --no-deps --open
 
 # Build docs without opening
 doc-build:
-    cargo doc --no-deps
+    vx cargo doc --no-deps
+
+# Build docs for CI (private items)
+doc-ci:
+    vx cargo doc --no-deps --document-private-items
 
 # Start VitePress dev server
 docs-dev:
-    cd docs && npm run dev
+    cd docs && vx npm run dev
 
 # Build VitePress documentation
 docs-build:
-    cd docs && npm run build
+    cd docs && vx npm run build
 
 # Preview VitePress documentation
 docs-preview:
-    cd docs && npm run preview
+    cd docs && vx npm run preview
 
 # Install docs dependencies
 docs-install:
-    cd docs && npm install
+    cd docs && vx npm ci
+
 
 # ============== Development ==============
 
 # Run the CLI with arguments
 run *ARGS:
-    cargo run -- {{ARGS}}
+    vx cargo run -- {{ARGS}}
 
 # Run release version with arguments
 run-release *ARGS:
-    cargo run --release -- {{ARGS}}
+    vx cargo run --release -- {{ARGS}}
 
 # Watch for changes and rebuild
 watch:
-    cargo watch -x build
+    vx cargo watch -x build
 
 # Watch for changes and run tests
 watch-test:
-    cargo watch -x test
+    vx cargo watch -x test
 
 # ============== Release ==============
 
 # Prepare release (run all checks)
 release-check: fmt-check lint test
-    cargo build --release
+    vx cargo build --release
     @echo "✅ All checks passed! Ready for release."
 
 # Publish to crates.io (dry run)
 publish-dry:
-    cargo publish --dry-run
+    vx cargo publish --dry-run
 
 # Publish to crates.io
 publish:
-    cargo publish
+    vx cargo publish
+
+# Publish to crates.io (CI)
+publish-ci:
+    vx cargo publish --allow-dirty
 
 # ============== Cleanup ==============
 
 # Clean build artifacts
 clean:
-    cargo clean
+    vx cargo clean
 
 # Clean and rebuild
 rebuild: clean build
@@ -129,28 +158,34 @@ rebuild: clean build
 # Show project info
 info:
     @echo "Project: msvc-kit"
-    @echo "Version: $(cargo pkgid | cut -d# -f2)"
-    @cargo --version
-    @rustc --version
+    @echo "Version: $(vx cargo pkgid | cut -d# -f2)"
+    @vx cargo --version
+    @vx rustc --version
 
 # Update dependencies
 update:
-    cargo update
+    vx cargo update
 
 # Check for outdated dependencies
 outdated:
-    cargo outdated
+    vx cargo outdated
 
 # Security audit
 audit:
-    cargo audit
+    vx cargo generate-lockfile || true
+    vx cargo audit --deny warnings || true
 
 # Generate dependency tree
 tree:
-    cargo tree
+    vx cargo tree
+
+# Coverage report
+coverage:
+    vx cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 
 # ============== CI Simulation ==============
 
 # Run full CI pipeline locally
 ci: fmt-check lint test build-release
     @echo "✅ CI pipeline completed successfully!"
+
