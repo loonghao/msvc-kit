@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.6](https://github.com/loonghao/msvc-kit/compare/v0.2.5...v0.2.6) (2026-02-13)
+
+
+### Features
+
+* add TLS backend feature flags to avoid cmake/NASM dependency on Windows ([#44](https://github.com/loonghao/msvc-kit/issues/44)) ([ee8c05f](https://github.com/loonghao/msvc-kit/commit/ee8c05f4c14f252052da06937bcd06cc0c67b62f))
+* migrate self-update from self_update to axoupdater 0.9 ([3fcb74c](https://github.com/loonghao/msvc-kit/commit/3fcb74cf80365bc3861d9d7638c2a8a17708f1e0))
+
+
+### Dependencies
+
+* update Rust crate clap to v4.5.56 ([9895d6a](https://github.com/loonghao/msvc-kit/commit/9895d6a27340b81262c936161181a418bdc6c50c))
+
 ## [0.2.5](https://github.com/loonghao/msvc-kit/compare/v0.2.4...v0.2.5) (2026-01-17)
 
 
