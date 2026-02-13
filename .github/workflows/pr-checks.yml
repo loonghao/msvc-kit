@@ -39,10 +39,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup vx
+        uses: loonghao/vx@main
         with:
-          targets: ${{ matrix.target }}
+          version: '0.7.9'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup tools (vx)
+        run: vx setup
+
+      - name: Add Rust target
+        run: vx rustup target add ${{ matrix.target }}
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -50,7 +57,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: vx just build-target-release ${{ matrix.target }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
@@ -67,19 +74,24 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup vx
+        uses: loonghao/vx@main
         with:
-          components: rustfmt, clippy
+          version: '0.7.9'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup tools (vx)
+        run: vx setup
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
       - name: Check Rust formatting
-        run: cargo fmt --all -- --check
+        run: vx just fmt-check
 
       - name: Cargo check
-        run: cargo check --workspace --all-features
+        run: vx just check-workspace
+
 
   # Clippy lints
   clippy:
@@ -89,16 +101,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup vx
+        uses: loonghao/vx@main
         with:
-          components: clippy
+          version: '0.7.9'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup tools (vx)
+        run: vx setup
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: vx just lint
+
 
   # Rust tests
   rust-tests:
@@ -109,17 +126,24 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup vx
+        uses: loonghao/vx@main
+        with:
+          version: '0.7.9'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup tools (vx)
+        run: vx setup
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
       - name: Run tests
-        run: cargo test --all-features --verbose
+        run: vx just test-all-features
 
       - name: Run doc tests
-        run: cargo test --doc
+        run: vx just test-doc
+
 
   # Documentation build test
   docs-build:
@@ -129,20 +153,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Setup vx
+        uses: loonghao/vx@main
         with:
-          node-version: "24"
-          cache: 'npm'
-          cache-dependency-path: docs/package-lock.json
+          version: '0.7.9'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup tools (vx)
+        run: vx setup
 
       - name: Install dependencies
-        working-directory: docs
-        run: npm ci
+        run: vx just docs-install
 
       - name: Build documentation
-        working-directory: docs
-        run: npm run build
+        run: vx just docs-build
+
 
   # Final gate
   pr-ready:

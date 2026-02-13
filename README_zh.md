@@ -69,7 +69,23 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
   cargo install --path .
   ```
 
+## 开发（vx）
+
+本项目使用 `vx` 管理工具链，所有命令统一通过 `justfile` 运行。
+
+```bash
+# 安装 vx.toml 中声明的工具
+vx setup
+
+# 查看所有可用命令
+vx just --list
+
+# 本地执行完整 CI 流程
+vx just ci
+```
+
 ## 发布的 Bundle
+
 - 每次打 tag（或 release-please 生成的发布）时，CI 会为 `x64`、`x86`、`arm64` 架构构建并上传 `msvc-bundle-<msvc>-<sdk>-<arch>.zip` 到对应的 GitHub Release。
 - Bundle 由 `msvc-kit bundle --accept-license` 创建，下载即表示你接受 [Microsoft Visual Studio License Terms](https://visualstudio.microsoft.com/license-terms/)。
 
