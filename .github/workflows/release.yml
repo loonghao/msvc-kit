@@ -72,7 +72,16 @@ jobs:
           # Check if package version already exists on crates.io
           $packageVersion = (Select-String -Path "Cargo.toml" -Pattern '^version = "([^"]+)"').Matches.Groups[1].Value
           $packageName = "msvc-kit"
-          $existingVersion = (cargo search $packageName 2>$null | Select-String -Pattern "^$packageName = ""([^""]+)""").Matches.Groups[1].Value
+          
+          # Use crates.io API for reliable version check (cargo search output parsing is fragile)
+          try {
+            $response = Invoke-RestMethod -Uri "https://crates.io/api/v1/crates/$packageName" -Headers @{ "User-Agent" = "msvc-kit-ci" }
+            $existingVersion = $response.crate.newest_version
+            Write-Host "Current version on crates.io: $existingVersion"
+          } catch {
+            Write-Host "Warning: Could not fetch version from crates.io: $_"
+            $existingVersion = $null
+          }
           
           if ($existingVersion -eq $packageVersion) {
             Write-Host "Package $packageName v$packageVersion already exists on crates.io, skipping publish"
