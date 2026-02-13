@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.7](https://github.com/loonghao/msvc-kit/compare/v0.2.6...v0.2.7) (2026-02-13)
+
+
+### Features
+
+* add GitHub Action, enhance library API with cache_manager support ([#70](https://github.com/loonghao/msvc-kit/issues/70), [#573](https://github.com/loonghao/msvc-kit/issues/573)) ([b132277](https://github.com/loonghao/msvc-kit/commit/b132277011c78a4c8729c2c2c88f42e8d6930b8a))
+
 ## [0.2.6](https://github.com/loonghao/msvc-kit/compare/v0.2.5...v0.2.6) (2026-02-13)
 
 
