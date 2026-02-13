@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.9](https://github.com/loonghao/msvc-kit/compare/v0.2.8...v0.2.9) (2026-02-13)
+
+
+### Dependencies
+
+* update GitHub Artifact Actions ([54d56c3](https://github.com/loonghao/msvc-kit/commit/54d56c35f4e6641df6b797b6002c114c18475cd7))
+
 ## [0.2.8](https://github.com/loonghao/msvc-kit/compare/v0.2.7...v0.2.8) (2026-02-13)
 
 
