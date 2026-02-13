@@ -47,7 +47,10 @@ chrono = { version = "0.4", features = ["serde"] }
 toml = "1.0.0"
 
 # Compression
-zip = "7.4"
+# Disable default features to avoid pulling in lzma, bzip2, zstd, aes, etc.
+# VSIX files use deflate compression; no other algorithms are needed.
+# See: https://github.com/loonghao/msvc-kit/issues/70
+zip = { version = "7.4", default-features = false, features = ["deflate"] }
 cab = "0.6"
 
 # Progress display
