@@ -759,9 +759,9 @@ async fn main() -> anyhow::Result<()> {
             updater.disable_installer_output();
 
             if let Some(ref target_version) = version {
-                updater.configure_version_specifier(
-                    axoupdater::UpdateRequest::SpecificVersion(target_version.clone()),
-                );
+                updater.configure_version_specifier(axoupdater::UpdateRequest::SpecificVersion(
+                    target_version.clone(),
+                ));
                 updater.always_update(true);
             }
 
