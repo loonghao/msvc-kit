@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  VX_VERSION: "0.4.1"
+  VX_VERSION: "0.7.9"
 
 
 jobs:
