@@ -69,7 +69,18 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          cargo publish --allow-dirty || echo "Package may already exist"
+          # Check if package version already exists on crates.io
+          $packageVersion = (Select-String -Path "Cargo.toml" -Pattern '^version = "([^"]+)"').Matches.Groups[1].Value
+          $packageName = "msvc-kit"
+          $existingVersion = (cargo search $packageName 2>$null | Select-String -Pattern "^$packageName = ""([^""]+)""").Matches.Groups[1].Value
+          
+          if ($existingVersion -eq $packageVersion) {
+            Write-Host "Package $packageName v$packageVersion already exists on crates.io, skipping publish"
+            exit 0
+          }
+          
+          Write-Host "Publishing $packageName v$packageVersion to crates.io..."
+          cargo publish --allow-dirty
 
   # Build release binary for Windows x64 (single architecture to avoid duplicate winget entries)
   build-release-binary:
