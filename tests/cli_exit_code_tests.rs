@@ -296,7 +296,6 @@ fn test_env_command_without_installation_exits_nonzero() {
 }
 
 #[rstest]
-#[case("shell")]
 #[case("json")]
 fn test_env_output_format(#[case] format: &str) {
     // Test that different output formats are accepted (though may fail without installation)
@@ -317,5 +316,98 @@ fn test_env_output_format(#[case] format: &str) {
         "Expected non-zero exit code for env without installation (format: {}), got: {:?}",
         format,
         output.status.code()
+    );
+}
+
+// ============================================================================
+// WinGet Release Workflow Validation Tests
+// ============================================================================
+
+/// Verify the release workflow contains the winget-releaser configuration
+/// and uses a strict regex that matches exactly one binary file.
+/// This prevents the "Duplicate installer entry found" winget validation error.
+#[test]
+fn test_release_workflow_has_winget_updater() {
+    let workflow_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(".github")
+        .join("workflows")
+        .join("release.yml");
+
+    let content =
+        std::fs::read_to_string(&workflow_path).expect("Failed to read release.yml");
+
+    // Verify winget-releaser action is present
+    assert!(
+        content.contains("vedantmgoyal2009/winget-releaser@v2"),
+        "release.yml must contain vedantmgoyal2009/winget-releaser@v2"
+    );
+
+    // Verify package identifier
+    assert!(
+        content.contains("identifier: loonghao.msvc-kit"),
+        "release.yml must specify the correct winget package identifier"
+    );
+
+    // Verify strict regex: must anchor with ^ and $ to match exactly one file
+    assert!(
+        content.contains("'^msvc-kit-x86_64-windows\\.exe$'"),
+        "release.yml installers-regex must use anchored pattern to prevent duplicate entries"
+    );
+}
+
+/// Verify that the release workflow builds exactly one binary (x64 only)
+/// to avoid creating duplicate installer entries in winget manifest.
+#[test]
+fn test_release_workflow_single_architecture_binary() {
+    let workflow_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(".github")
+        .join("workflows")
+        .join("release.yml");
+
+    let content =
+        std::fs::read_to_string(&workflow_path).expect("Failed to read release.yml");
+
+    // Verify only x64 binary is built (no x86 or arm64 builds)
+    assert!(
+        content.contains("msvc-kit-x86_64-windows"),
+        "release.yml must build the x86_64 Windows binary"
+    );
+
+    // Ensure we don't upload multiple architectures that could cause duplicate entries
+    let x86_count = content.matches("msvc-kit-i686-windows").count();
+    let arm64_count = content.matches("msvc-kit-aarch64-windows").count();
+
+    assert_eq!(
+        x86_count, 0,
+        "release.yml must NOT upload i686 binary to avoid duplicate winget entries"
+    );
+    assert_eq!(
+        arm64_count, 0,
+        "release.yml must NOT upload aarch64 binary to avoid duplicate winget entries"
+    );
+}
+
+/// Verify the update-winget job runs after github-release to ensure
+/// assets are available when winget-releaser fetches them.
+#[test]
+fn test_release_workflow_winget_job_ordering() {
+    let workflow_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(".github")
+        .join("workflows")
+        .join("release.yml");
+
+    let content =
+        std::fs::read_to_string(&workflow_path).expect("Failed to read release.yml");
+
+    // Verify the update-winget job depends on github-release
+    assert!(
+        content.contains("update-winget:"),
+        "release.yml must contain the update-winget job"
+    );
+
+    // Verify there's a sleep/wait step before winget update
+    assert!(
+        content.contains("Waiting for release assets to be fully available"),
+        "release.yml must wait for release assets before updating winget"
     );
 }

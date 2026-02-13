@@ -114,8 +114,26 @@ When adding new commands or modifying existing ones:
    - Add entries to the exit code matrix above
    - Note any special cases or requirements
 
+## WinGet Manifest Publishing
+
+The release workflow automatically publishes the WinGet manifest using [`vedantmgoyal2009/winget-releaser@v2`](https://github.com/vedantmgoyal2009/winget-releaser).
+
+### Avoiding Duplicate Installer Entries
+
+The WinGet validation pipeline rejects manifests with duplicate installer entries (same Architecture + InstallerType). To prevent this:
+
+1. **Single architecture binary**: Only the x64 Windows binary (`msvc-kit-x86_64-windows.exe`) is uploaded to GitHub Releases
+2. **Strict regex matching**: The `installers-regex` is set to `^msvc-kit-x86_64-windows\.exe$` to match exactly one file
+3. **Sequential workflow**: The `update-winget` job runs only after the GitHub Release is fully created with assets available
+
+If the error "Duplicate installer entry found" occurs:
+- Verify that only one `.exe` file is attached to the GitHub Release
+- Check that the `installers-regex` does not match multiple files
+- Ensure no manual manifest was submitted to winget-pkgs with the same version
+
 ## References
 
 - [winget Manifest Authoring](https://github.com/microsoft/winget-pkgs/blob/master/AUTHORING_MANIFESTS.md)
+- [winget-releaser Action](https://github.com/vedantmgoyal2009/winget-releaser)
 - [Exit Status (Unix)](https://en.wikipedia.org/wiki/Exit_status)
 - [Windows Exit Codes](https://docs.microsoft.com/en-us/windows/win32/debug/system-error-codes)

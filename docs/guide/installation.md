@@ -29,6 +29,16 @@ irm https://github.com/loonghao/msvc-kit/releases/latest/download/install.ps1 | 
 
 This script automatically downloads the latest release and installs it to your PATH.
 
+### Direct Download
+
+Download the pre-built binary from the [latest GitHub Release](https://github.com/loonghao/msvc-kit/releases/latest):
+
+| Platform | Download |
+|----------|----------|
+| Windows x64 | [msvc-kit-x86_64-windows.exe](https://github.com/loonghao/msvc-kit/releases/latest/download/msvc-kit-x86_64-windows.exe) |
+
+Place the downloaded `.exe` anywhere in your `PATH`.
+
 ### Via Cargo
 
 If you have Rust installed:

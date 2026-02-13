@@ -29,6 +29,16 @@ irm https://github.com/loonghao/msvc-kit/releases/latest/download/install.ps1 | 
 
 此脚本会自动下载最新版本并安装到你的 PATH 中。
 
+### 直接下载
+
+从 [最新 GitHub Release](https://github.com/loonghao/msvc-kit/releases/latest) 下载预编译二进制文件：
+
+| 平台 | 下载链接 |
+|------|----------|
+| Windows x64 | [msvc-kit-x86_64-windows.exe](https://github.com/loonghao/msvc-kit/releases/latest/download/msvc-kit-x86_64-windows.exe) |
+
+将下载的 `.exe` 文件放到系统 `PATH` 中的任意目录。
+
 ### 通过 Cargo
 
 如果你已安装 Rust：
