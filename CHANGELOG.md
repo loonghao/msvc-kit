@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.8](https://github.com/loonghao/msvc-kit/compare/v0.2.7...v0.2.8) (2026-02-13)
+
+
+### Bug Fixes
+
+* resolve winget duplicate installer entry validation error ([b200632](https://github.com/loonghao/msvc-kit/commit/b20063224cf7c3e3dd87c46f23710c8a3321e058))
+
+
+### Dependencies
+
+* update Rust crate mockito to v1.7.2 ([62f859c](https://github.com/loonghao/msvc-kit/commit/62f859cd0750b3f62f3cd3bcd505c8fc81c8e90d))
+* update Rust crate toml to v1 ([5f00c4a](https://github.com/loonghao/msvc-kit/commit/5f00c4a556e70bc81a6d01a07c857cd8c90d4809))
+
+
+### Miscellaneous
+
+* **deps:** bump bytes from 1.11.0 to 1.11.1 ([2a807b5](https://github.com/loonghao/msvc-kit/commit/2a807b5f8367e9eb9974f6772ab572abafc68df4))
+
 ## [0.2.7](https://github.com/loonghao/msvc-kit/compare/v0.2.6...v0.2.7) (2026-02-13)
 
 
