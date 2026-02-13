@@ -59,8 +59,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install vx
+        uses: taiki-e/install-action@v2
+        with:
+          tool: vx
+
+      - name: Setup tools (vx)
+        run: vx setup
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -89,7 +94,8 @@ jobs:
           }
           
           Write-Host "Publishing $packageName v$packageVersion to crates.io..."
-          cargo publish --allow-dirty
+          vx just publish-ci
+
 
   # Build release binary for Windows x64 (single architecture to avoid duplicate winget entries)
   build-release-binary:
@@ -103,8 +109,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install vx
+        uses: taiki-e/install-action@v2
+        with:
+          tool: vx
+
+      - name: Setup tools (vx)
+        run: vx setup
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -112,7 +123,8 @@ jobs:
           shared-key: release-x64
 
       - name: Build release binary
-        run: cargo build --release --locked
+        run: vx just build-release-locked
+
 
       - name: Rename binary
         shell: pwsh
@@ -165,10 +177,15 @@ jobs:
           echo "VERSION=${TAG#v}" >> $GITHUB_OUTPUT
 
       - name: Download release binary
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v6
         with:
           name: msvc-kit-x86_64-windows
           path: artifacts/
+
+      - name: Prepare release asset
+        run: |
+          mv artifacts/msvc-kit-x86_64-windows/msvc-kit-x86_64-windows.exe ./msvc-kit-x86_64-windows.exe
+
 
       - name: Generate changelog
         id: changelog
@@ -216,7 +233,8 @@ jobs:
 
             **Direct Download (Windows x64):**
             - [msvc-kit-x86_64-windows.exe](https://github.com/loonghao/msvc-kit/releases/download/${{ steps.tag.outputs.TAG_NAME }}/msvc-kit-x86_64-windows.exe)
-          artifacts: artifacts/*
+          artifacts: msvc-kit-x86_64-windows.exe
+
           draft: false
           prerelease: false
           allowUpdates: true

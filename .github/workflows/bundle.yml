@@ -44,8 +44,13 @@ jobs:
         with:
           arch: ${{ inputs.arch == 'x86' && 'x86' || inputs.arch == 'arm64' && 'amd64_arm64' || 'amd64' }}
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install vx
+        uses: taiki-e/install-action@v2
+        with:
+          tool: vx
+
+      - name: Setup tools (vx)
+        run: vx setup
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -53,7 +58,8 @@ jobs:
           shared-key: bundle-${{ inputs.arch || 'x64' }}
 
       - name: Build msvc-kit (release)
-        run: cargo build --release --locked
+        run: vx just build-release-locked
+
 
       - name: Create bundle with msvc-kit
         shell: pwsh

@@ -28,25 +28,29 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install vx
+        uses: taiki-e/install-action@v2
         with:
-          components: rustfmt, clippy
+          tool: vx
+
+      - name: Setup tools (vx)
+        run: vx setup
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: vx just fmt-check
 
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: vx just lint
 
       - name: Run tests
-        run: cargo test --all-features --verbose
+        run: vx just test-all-features
 
       - name: Run doc tests
-        run: cargo test --doc
+        run: vx just test-doc
+
 
   # Documentation build
   docs:
@@ -56,16 +60,22 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install vx
+        uses: taiki-e/install-action@v2
+        with:
+          tool: vx
+
+      - name: Setup tools (vx)
+        run: vx setup
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Build documentation
-        run: cargo doc --no-deps --document-private-items
+        run: vx just doc-ci
         env:
           RUSTDOCFLAGS: "-D warnings"
+
 
   # CI success gate
   ci-success:
