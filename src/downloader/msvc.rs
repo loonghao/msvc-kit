@@ -230,3 +230,35 @@ impl ComponentDownloader for MsvcDownloader {
         ComponentType::Msvc
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::downloader::traits::FileSystemCacheManager;
+    use std::sync::Arc;
+
+    #[test]
+    fn msvc_downloader_new_without_cache_manager() {
+        let options = DownloadOptions::default();
+        let downloader = MsvcDownloader::new(options);
+        // cache_manager should be None when not set
+        assert!(downloader.downloader.cache_manager.is_none());
+    }
+
+    #[test]
+    fn msvc_downloader_new_with_cache_manager() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let cache_mgr = Arc::new(FileSystemCacheManager::new(temp_dir.path()));
+
+        let options = DownloadOptions::builder()
+            .cache_manager(cache_mgr.clone())
+            .build();
+
+        let downloader = MsvcDownloader::new(options);
+        // cache_manager should be Some when set via options
+        assert!(downloader.downloader.cache_manager.is_some());
+        // Verify manifest_cache_dir uses the injected cache manager
+        let cache_dir = downloader.downloader.manifest_cache_dir();
+        assert_eq!(cache_dir, temp_dir.path().join("manifests"));
+    }
+}

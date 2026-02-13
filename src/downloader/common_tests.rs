@@ -92,3 +92,80 @@ async fn create_http_client_with_config_works() {
     // Just verify it doesn't panic
     let _ = client;
 }
+
+#[tokio::test]
+async fn common_downloader_with_cache_manager() {
+    use super::common::CommonDownloader;
+    use super::http::create_http_client;
+    use super::traits::FileSystemCacheManager;
+    use super::DownloadOptions;
+
+    let options = DownloadOptions::default();
+    let client = create_http_client();
+    let downloader = CommonDownloader::with_client(options, client);
+
+    // Initially no cache manager
+    assert!(downloader.cache_manager.is_none());
+
+    // Set a cache manager
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let cache_mgr = FileSystemCacheManager::new(temp_dir.path());
+    let downloader = downloader.with_cache_manager(std::sync::Arc::new(cache_mgr));
+
+    assert!(downloader.cache_manager.is_some());
+}
+
+#[tokio::test]
+async fn manifest_cache_dir_with_custom_cache_manager() {
+    use super::common::CommonDownloader;
+    use super::http::create_http_client;
+    use super::traits::FileSystemCacheManager;
+    use super::DownloadOptions;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let cache_mgr = FileSystemCacheManager::new(temp_dir.path());
+
+    let options = DownloadOptions::default();
+    let client = create_http_client();
+    let downloader = CommonDownloader::with_client(options, client)
+        .with_cache_manager(std::sync::Arc::new(cache_mgr));
+
+    // When a custom cache manager is set, manifest_cache_dir should use its cache_dir/manifests
+    let cache_dir = downloader.manifest_cache_dir();
+    assert_eq!(cache_dir, temp_dir.path().join("manifests"));
+}
+
+#[tokio::test]
+async fn manifest_cache_dir_without_cache_manager() {
+    use super::common::CommonDownloader;
+    use super::http::create_http_client;
+    use super::DownloadOptions;
+
+    let options = DownloadOptions::default();
+    let client = create_http_client();
+    let downloader = CommonDownloader::with_client(options, client);
+
+    // Without a cache manager, should fall back to default location
+    let cache_dir = downloader.manifest_cache_dir();
+    let default_dir = super::cache::default_manifest_cache_dir();
+    assert_eq!(cache_dir, default_dir);
+}
+
+#[tokio::test]
+async fn download_options_builder_sets_cache_manager() {
+    use super::traits::FileSystemCacheManager;
+    use super::DownloadOptions;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let cache_mgr = std::sync::Arc::new(FileSystemCacheManager::new(temp_dir.path()));
+
+    let options = DownloadOptions::builder()
+        .target_dir("/tmp/test-cm")
+        .cache_manager(cache_mgr.clone())
+        .build();
+
+    assert!(options.cache_manager.is_some());
+    // Verify the cache dir matches
+    let cm = options.cache_manager.unwrap();
+    assert_eq!(cm.cache_dir(), temp_dir.path());
+}

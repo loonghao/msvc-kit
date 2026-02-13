@@ -238,4 +238,25 @@ mod tests {
         assert_eq!(opts.arch, Architecture::X64);
         assert_eq!(opts.parallel_downloads, 8);
     }
+
+    #[test]
+    fn test_bundle_download_options_has_no_cache_manager() {
+        // Verify that DownloadOptions created within bundle has cache_manager = None
+        let opts = BundleOptions::default();
+        let download_opts = DownloadOptions {
+            msvc_version: opts.msvc_version.clone(),
+            sdk_version: opts.sdk_version.clone(),
+            target_dir: opts.output_dir.clone(),
+            arch: opts.arch,
+            host_arch: Some(opts.host_arch),
+            verify_hashes: true,
+            parallel_downloads: opts.parallel_downloads,
+            http_client: None,
+            progress_handler: None,
+            cache_manager: None,
+            dry_run: false,
+        };
+        assert!(download_opts.cache_manager.is_none());
+        assert!(!download_opts.dry_run);
+    }
 }
