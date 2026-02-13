@@ -333,8 +333,7 @@ fn test_release_workflow_has_winget_updater() {
         .join("workflows")
         .join("release.yml");
 
-    let content =
-        std::fs::read_to_string(&workflow_path).expect("Failed to read release.yml");
+    let content = std::fs::read_to_string(&workflow_path).expect("Failed to read release.yml");
 
     // Verify winget-releaser action is present
     assert!(
@@ -364,8 +363,7 @@ fn test_release_workflow_single_architecture_binary() {
         .join("workflows")
         .join("release.yml");
 
-    let content =
-        std::fs::read_to_string(&workflow_path).expect("Failed to read release.yml");
+    let content = std::fs::read_to_string(&workflow_path).expect("Failed to read release.yml");
 
     // Verify only x64 binary is built (no x86 or arm64 builds)
     assert!(
@@ -396,8 +394,7 @@ fn test_release_workflow_winget_job_ordering() {
         .join("workflows")
         .join("release.yml");
 
-    let content =
-        std::fs::read_to_string(&workflow_path).expect("Failed to read release.yml");
+    let content = std::fs::read_to_string(&workflow_path).expect("Failed to read release.yml");
 
     // Verify the update-winget job depends on github-release
     assert!(
