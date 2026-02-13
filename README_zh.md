@@ -244,11 +244,32 @@ msvc-kit update --version 0.2.5
   - `304`：服务器返回未修改（ETag/Last-Modified 匹配）
   - `size match`：文件大小匹配（尽力而为，代码中有注释说明）
 
+## TLS 后端配置
+
+默认情况下，msvc-kit 使用 `native-tls`（Windows 上为 SChannel），以避免编译时需要安装 `cmake` 和 `NASM`。这解决了 [aws-lc-sys 构建问题](https://github.com/loonghao/msvc-kit/issues/44)。
+
+| Feature | TLS 后端 | 构建依赖 | 默认 |
+|---------|----------|------------|------|
+| `native-tls` | 平台原生（SChannel/OpenSSL） | 无 | ✓ |
+| `rustls-tls` | rustls + aws-lc-rs | cmake, NASM | - |
+
+```toml
+# 默认: native-tls（推荐，无额外构建依赖）
+[dependencies]
+msvc-kit = "0.2"
+
+# 或显式选择 TLS 后端:
+msvc-kit = { version = "0.2", default-features = false, features = ["native-tls"] }
+
+# 使用 rustls（Windows 上需要 cmake + NASM）:
+msvc-kit = { version = "0.2", default-features = false, features = ["rustls-tls"] }
+```
+
 ## 库用法
 
 ```toml
 [dependencies]
-msvc-kit = "0.1"
+msvc-kit = "0.2"
 ```
 
 ```rust

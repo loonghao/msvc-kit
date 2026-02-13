@@ -1,12 +1,51 @@
 //! HTTP client configuration and request utilities
 //!
 //! Provides configurable HTTP client creation and common request patterns.
+//!
+//! ## TLS Backend
+//!
+//! The TLS backend is selected at compile time via Cargo feature flags:
+//! - `native-tls` (default): Uses the platform's native TLS implementation
+//!   (SChannel on Windows, OpenSSL on Linux, Secure Transport on macOS).
+//!   This avoids the `cmake`/`NASM` build dependency required by `rustls`/`aws-lc-sys`.
+//! - `rustls-tls`: Uses `rustls` with `aws-lc-rs` crypto backend.
+//!   Requires `cmake` and `NASM` to be installed on Windows.
+//!
+//! See: <https://github.com/loonghao/msvc-kit/issues/44>
 
 use std::time::Duration;
 
 use reqwest::Client;
 
 use crate::constants::USER_AGENT;
+
+// Compile-time check: at least one TLS backend must be enabled.
+#[cfg(not(any(feature = "native-tls", feature = "rustls-tls")))]
+compile_error!(
+    "At least one TLS backend feature must be enabled: `native-tls` (recommended) or `rustls-tls`. \
+     Add `native-tls` to your feature list to use the platform's native TLS, \
+     which avoids requiring cmake/NASM on Windows."
+);
+
+/// Returns the name of the currently active TLS backend.
+///
+/// This is determined at compile time based on feature flags.
+/// When both backends are enabled, `native-tls` takes precedence.
+pub fn tls_backend_name() -> &'static str {
+    #[cfg(feature = "native-tls")]
+    {
+        "native-tls"
+    }
+    #[cfg(all(feature = "rustls-tls", not(feature = "native-tls")))]
+    {
+        "rustls-tls"
+    }
+    // Fallback for the impossible case (compile_error above prevents this)
+    #[cfg(not(any(feature = "native-tls", feature = "rustls-tls")))]
+    {
+        "none"
+    }
+}
 
 /// HTTP client configuration options
 
@@ -74,6 +113,9 @@ pub fn create_http_client() -> Client {
 
 /// Create a configured HTTP client with custom settings
 ///
+/// Uses the selected TLS backend (`native-tls` by default) to avoid
+/// requiring cmake/NASM on Windows. See module-level docs for details.
+///
 /// # Arguments
 ///
 /// * `config` - HTTP client configuration
@@ -91,6 +133,18 @@ pub fn create_http_client_with_config(config: &HttpClientConfig) -> Client {
         // Enable connection pooling for better performance
         .pool_max_idle_per_host(10)
         .pool_idle_timeout(std::time::Duration::from_secs(90));
+
+    // Explicitly configure TLS backend based on feature flags.
+    // native-tls uses SChannel on Windows, avoiding cmake/NASM requirement.
+    // See: https://github.com/loonghao/msvc-kit/issues/44
+    #[cfg(feature = "native-tls")]
+    {
+        builder = builder.use_native_tls();
+    }
+    #[cfg(all(feature = "rustls-tls", not(feature = "native-tls")))]
+    {
+        builder = builder.use_rustls_tls();
+    }
 
     if let Some(timeout) = config.connect_timeout {
         builder = builder.connect_timeout(timeout);
@@ -152,5 +206,46 @@ mod tests {
             .get("http://example.com")
             .build()
             .expect("request build should succeed");
+    }
+
+    #[test]
+    fn test_tls_backend_name() {
+        let backend = tls_backend_name();
+        // With default features, native-tls should be active
+        #[cfg(feature = "native-tls")]
+        assert_eq!(backend, "native-tls");
+        #[cfg(all(feature = "rustls-tls", not(feature = "native-tls")))]
+        assert_eq!(backend, "rustls-tls");
+        // Backend name should never be empty
+        assert!(!backend.is_empty());
+    }
+
+    #[test]
+    fn test_tls_backend_is_not_none() {
+        // Ensure a valid TLS backend is configured
+        let backend = tls_backend_name();
+        assert_ne!(backend, "none", "A TLS backend must be enabled");
+    }
+
+    #[test]
+    fn test_create_client_with_tls() {
+        // Verify that client creation succeeds with the configured TLS backend.
+        // This confirms that native-tls (or rustls) initializes correctly.
+        let client = create_http_client();
+        let _request = client
+            .get("https://example.com")
+            .build()
+            .expect("HTTPS request build should succeed with TLS backend");
+    }
+
+    #[test]
+    fn test_client_builder_with_tls_config() {
+        // Verify that HttpClientConfig.build() produces a working HTTPS client
+        let config = HttpClientConfig::default();
+        let client = config.build();
+        let _request = client
+            .get("https://example.com")
+            .build()
+            .expect("HTTPS request build should succeed");
     }
 }

@@ -22,7 +22,7 @@ use crate::version::Architecture;
 
 pub use common::CommonDownloader;
 pub use hash::{compute_file_hash, compute_hash, hashes_match};
-pub use http::{create_http_client, create_http_client_with_config, HttpClientConfig};
+pub use http::{create_http_client, create_http_client_with_config, tls_backend_name, HttpClientConfig};
 pub use index::{DownloadIndex, DownloadStatus, IndexEntry};
 pub use manifest::{ChannelManifest, Package, PackagePayload, VsManifest};
 pub use msvc::MsvcDownloader;

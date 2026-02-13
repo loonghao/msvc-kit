@@ -242,11 +242,32 @@ The self-update feature is powered by [axoupdater](https://github.com/axodotdev/
   - `304`: Server returns Not Modified (ETag/Last-Modified match)
   - `size match`: File size matches expected (best-effort, noted in code)
 
+### TLS Backend Configuration
+
+By default, msvc-kit uses `native-tls` (SChannel on Windows) to avoid requiring `cmake` and `NASM` during compilation. This resolves the [aws-lc-sys build issue](https://github.com/loonghao/msvc-kit/issues/44).
+
+| Feature | TLS Backend | Build Requirements | Default |
+|---------|-------------|--------------------|---------|
+| `native-tls` | Platform native (SChannel/OpenSSL) | None | ✓ |
+| `rustls-tls` | rustls + aws-lc-rs | cmake, NASM | - |
+
+```toml
+# Default: native-tls (recommended, no extra build deps)
+[dependencies]
+msvc-kit = "0.2"
+
+# Or explicitly choose a TLS backend:
+msvc-kit = { version = "0.2", default-features = false, features = ["native-tls"] }
+
+# Use rustls instead (requires cmake + NASM on Windows):
+msvc-kit = { version = "0.2", default-features = false, features = ["rustls-tls"] }
+```
+
 ### Library Usage
 
 ```toml
 [dependencies]
-msvc-kit = "0.1"
+msvc-kit = "0.2"
 ```
 
 ```rust
