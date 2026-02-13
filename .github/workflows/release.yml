@@ -62,6 +62,7 @@ jobs:
       - name: Setup vx
         uses: loonghao/vx@main
         with:
+          version: '0.7.9'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup tools (vx)
@@ -112,6 +113,7 @@ jobs:
       - name: Setup vx
         uses: loonghao/vx@main
         with:
+          version: '0.7.9'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup tools (vx)
