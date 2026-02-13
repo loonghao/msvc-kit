@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.10](https://github.com/loonghao/msvc-kit/compare/v0.2.9...v0.2.10) (2026-02-13)
+
+
+### Bug Fixes
+
+* use crates.io API for reliable version check ([e9e0f40](https://github.com/loonghao/msvc-kit/commit/e9e0f40ebe3a1298c05696bf4ae1cf6bd777e21b))
+
 ## [0.2.9](https://github.com/loonghao/msvc-kit/compare/v0.2.8...v0.2.9) (2026-02-13)
 
 
