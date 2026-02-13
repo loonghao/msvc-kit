@@ -3,7 +3,7 @@ name: Release
 # This workflow handles:
 # 1. Regular commits to main: Only runs release-please to check if a release PR should be created/updated
 # 2. release-please PR merge: Creates a release tag and triggers the full release process
-# 3. Tag push (v*): Publishes to crates.io and creates GitHub Release
+# 3. Tag push (v*): Publishes to crates.io, builds release binary, creates GitHub Release, and updates WinGet
 on:
   push:
     branches:
@@ -71,7 +71,42 @@ jobs:
         run: |
           cargo publish --allow-dirty || echo "Package may already exist"
 
-  # Create GitHub Release (without binary artifacts - too large for GitHub releases)
+  # Build release binary for Windows x64 (single architecture to avoid duplicate winget entries)
+  build-release-binary:
+    name: Build Windows x64 binary
+    runs-on: windows-latest
+    needs: [release-please, check-tag]
+    if: |
+      always() &&
+      ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') ||
+       (needs.check-tag.result == 'success' && needs.check-tag.outputs.is_tag == 'true'))
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-x64
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Rename binary
+        shell: pwsh
+        run: |
+          Copy-Item "target/release/msvc-kit.exe" "msvc-kit-x86_64-windows.exe"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: msvc-kit-x86_64-windows
+          path: msvc-kit-x86_64-windows.exe
+          if-no-files-found: error
+
+  # Create GitHub Release with binary artifact
   github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
@@ -80,11 +115,13 @@ jobs:
         release-please,
         check-tag,
         crates-publish,
+        build-release-binary,
       ]
     if: |
       always() &&
       ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') ||
-       (needs.check-tag.result == 'success' && needs.check-tag.outputs.is_tag == 'true'))
+       (needs.check-tag.result == 'success' && needs.check-tag.outputs.is_tag == 'true')) &&
+      needs.build-release-binary.result == 'success'
     permissions:
       contents: write
     steps:
@@ -106,6 +143,12 @@ jobs:
         run: |
           TAG="${{ steps.tag.outputs.TAG_NAME }}"
           echo "VERSION=${TAG#v}" >> $GITHUB_OUTPUT
+
+      - name: Download release binary
+        uses: actions/download-artifact@v4
+        with:
+          name: msvc-kit-x86_64-windows
+          path: artifacts/
 
       - name: Generate changelog
         id: changelog
@@ -150,9 +193,52 @@ jobs:
             ```bash
             winget install loonghao.msvc-kit
             ```
+
+            **Direct Download (Windows x64):**
+            - [msvc-kit-x86_64-windows.exe](https://github.com/loonghao/msvc-kit/releases/download/${{ steps.tag.outputs.TAG_NAME }}/msvc-kit-x86_64-windows.exe)
+          artifacts: artifacts/*
           draft: false
           prerelease: false
           allowUpdates: true
           skipIfReleaseExists: false
           updateOnlyUnreleased: false
           makeLatest: true
+
+  # Update WinGet manifest (only x64 to avoid duplicate installer entries)
+  update-winget:
+    name: Update WinGet
+    runs-on: ubuntu-latest
+    needs: [release-please, check-tag, github-release]
+    if: |
+      always() &&
+      needs.github-release.result == 'success'
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Determine version and tag
+        id: version
+        run: |
+          if [ "${{ needs.release-please.outputs.version }}" != "" ]; then
+            echo "VERSION=${{ needs.release-please.outputs.version }}" >> $GITHUB_OUTPUT
+            echo "TAG_NAME=${{ needs.release-please.outputs.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+            echo "TAG_NAME=${{ needs.check-tag.outputs.tag_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Wait for release assets to be available
+        run: |
+          echo "Waiting for release assets to be fully available..."
+          sleep 30
+
+      - name: Update WinGet manifest
+        uses: vedantmgoyal2009/winget-releaser@v2
+        with:
+          identifier: loonghao.msvc-kit
+          # Match ONLY the single x64 binary to prevent "Duplicate installer entry found" error.
+          # Previously, a broader regex could match multiple files causing duplicates.
+          installers-regex: '^msvc-kit-x86_64-windows\.exe$'
+          version: ${{ steps.version.outputs.VERSION }}
+          release-tag: ${{ steps.version.outputs.TAG_NAME }}
+          token: ${{ secrets.WINGET_TOKEN }}
+        continue-on-error: true
