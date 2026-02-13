@@ -39,16 +39,6 @@ cargo install msvc-kit
 
 This installs the latest stable version from crates.io.
 
-### Pre-built Binaries
-
-Download from [GitHub Releases](https://github.com/loonghao/msvc-kit/releases):
-
-```powershell
-# PowerShell - Download and extract to cargo bin directory
-Invoke-WebRequest -Uri "https://github.com/loonghao/msvc-kit/releases/latest/download/msvc-kit-x86_64-pc-windows-msvc.zip" -OutFile msvc-kit.zip
-Expand-Archive msvc-kit.zip -DestinationPath $env:USERPROFILE\.cargo\bin -Force
-```
-
 ### From Source
 
 ```bash
@@ -94,7 +84,7 @@ rm "$env:LOCALAPPDATA\loonghao\msvc-kit\config\config.json"
 
 ### Cargo Install Fails
 
-If `cargo install` fails with linker errors, you might need MSVC to build msvc-kit itself. Use pre-built binaries instead.
+If `cargo install` fails with linker errors, you might need MSVC to build msvc-kit itself. Use Winget or the PowerShell install script instead.
 
 ### Permission Denied
 

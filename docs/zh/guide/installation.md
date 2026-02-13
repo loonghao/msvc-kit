@@ -39,16 +39,6 @@ cargo install msvc-kit
 
 这会从 crates.io 安装最新稳定版本。
 
-### 预编译二进制文件
-
-从 [GitHub Releases](https://github.com/loonghao/msvc-kit/releases) 下载：
-
-```powershell
-# PowerShell - 下载并解压到 cargo bin 目录
-Invoke-WebRequest -Uri "https://github.com/loonghao/msvc-kit/releases/latest/download/msvc-kit-x86_64-pc-windows-msvc.zip" -OutFile msvc-kit.zip
-Expand-Archive msvc-kit.zip -DestinationPath $env:USERPROFILE\.cargo\bin -Force
-```
-
 ### 从源码编译
 
 ```bash
@@ -98,7 +88,7 @@ rm "$env:LOCALAPPDATA\loonghao\msvc-kit\config\config.json"
 
 ### Cargo 安装失败
 
-如果 `cargo install` 因链接器错误失败，你可能需要 MSVC 来构建 msvc-kit 本身。请改用预编译二进制文件或 Winget。
+如果 `cargo install` 因链接器错误失败，你可能需要 MSVC 来构建 msvc-kit 本身。请改用 Winget 或 PowerShell 安装脚本。
 
 ### 权限被拒绝
 

@@ -11,20 +11,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      force-rebuild:
-        description: "Force rebuild binaries instead of reusing PR artifacts"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: write
   pull-requests: write
   issues: write
-  id-token: write
-  attestations: write
-  actions: read
 
 jobs:
   # Run release-please to create releases and tags
@@ -56,153 +47,6 @@ jobs:
           echo "Tag push detected: ${{ github.ref_name }}"
           echo "This will trigger the full release process"
 
-  # Try to find and download pre-built binaries from PR checks
-  check-pr-artifacts:
-    name: Check PR Artifacts
-    runs-on: ubuntu-latest
-    needs: [release-please, check-tag]
-    if: |
-      always() &&
-      ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') ||
-       (needs.check-tag.result == 'success' && needs.check-tag.outputs.is_tag == 'true')) &&
-      !inputs.force-rebuild
-    outputs:
-      artifacts-available: ${{ steps.check.outputs.available }}
-      pr-run-id: ${{ steps.check.outputs.run_id }}
-      source-sha: ${{ steps.check.outputs.source_sha }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Find PR workflow run for this commit
-        id: check
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const targetSha = context.sha;
-            console.log(`Looking for artifacts built from commit: ${targetSha}`);
-
-            const { data: runs } = await github.rest.actions.listWorkflowRuns({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'pr-checks.yml',
-              status: 'success',
-              head_sha: targetSha,
-              per_page: 10
-            });
-
-            if (runs.workflow_runs.length === 0) {
-              console.log(`No PR workflow found for commit ${targetSha}`);
-              core.setOutput('available', 'false');
-              core.setOutput('run_id', '');
-              core.setOutput('source_sha', '');
-              return;
-            }
-
-            for (const run of runs.workflow_runs) {
-              console.log(`Checking run ${run.id} (commit: ${run.head_sha})`);
-
-              const { data: artifacts } = await github.rest.actions.listWorkflowRunArtifacts({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                run_id: run.id
-              });
-
-              const hasX64 = artifacts.artifacts.some(a => a.name === 'msvc-kit-x86_64-windows');
-              const hasI686 = artifacts.artifacts.some(a => a.name === 'msvc-kit-i686-windows');
-              const hasArm64 = artifacts.artifacts.some(a => a.name === 'msvc-kit-aarch64-windows');
-
-              if (hasX64 && hasI686 && hasArm64) {
-                console.log(`Found matching artifacts from run ${run.id} (commit: ${targetSha})`);
-                core.setOutput('available', 'true');
-                core.setOutput('run_id', run.id.toString());
-                core.setOutput('source_sha', targetSha);
-                return;
-              }
-            }
-
-            console.log(`No suitable artifacts found for commit ${targetSha}, will rebuild`);
-            core.setOutput('available', 'false');
-            core.setOutput('run_id', '');
-            core.setOutput('source_sha', '');
-
-  # Download and re-upload artifacts from PR workflow (if available)
-  reuse-pr-artifacts:
-    name: Reuse PR Artifacts
-    runs-on: ubuntu-latest
-    needs: [release-please, check-tag, check-pr-artifacts]
-    if: |
-      always() &&
-      needs.check-pr-artifacts.result == 'success' &&
-      needs.check-pr-artifacts.outputs.artifacts-available == 'true'
-    strategy:
-      matrix:
-        artifact:
-          - msvc-kit-x86_64-windows
-          - msvc-kit-i686-windows
-          - msvc-kit-aarch64-windows
-    steps:
-      - name: Download artifact from PR workflow
-        uses: actions/download-artifact@v7
-        with:
-          name: ${{ matrix.artifact }}
-          path: dist/
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ needs.check-pr-artifacts.outputs.pr-run-id }}
-        continue-on-error: true
-
-      - name: Re-upload artifact for release
-        uses: actions/upload-artifact@v6
-        with:
-          name: ${{ matrix.artifact }}
-          path: dist/
-          if-no-files-found: ignore
-          retention-days: 7
-
-  # Build binaries if PR artifacts not available
-  build-binaries:
-    name: Build (${{ matrix.target }})
-    needs: [release-please, check-tag, check-pr-artifacts]
-    if: |
-      always() &&
-      ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') ||
-       (needs.check-tag.result == 'success' && needs.check-tag.outputs.is_tag == 'true')) &&
-      (needs.check-pr-artifacts.result != 'success' ||
-       needs.check-pr-artifacts.outputs.artifacts-available != 'true' ||
-       inputs.force-rebuild)
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-pc-windows-msvc
-            artifact-name: msvc-kit-x86_64-windows
-          - target: i686-pc-windows-msvc
-            artifact-name: msvc-kit-i686-windows
-          - target: aarch64-pc-windows-msvc
-            artifact-name: msvc-kit-aarch64-windows
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-
-      - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: ${{ matrix.artifact-name }}
-          path: target/${{ matrix.target }}/release/msvc-kit.exe
-          retention-days: 7
-
   # Publish to crates.io
   crates-publish:
     name: Publish to crates.io
@@ -227,7 +71,7 @@ jobs:
         run: |
           cargo publish --allow-dirty || echo "Package may already exist"
 
-  # Create GitHub Release
+  # Create GitHub Release (without binary artifacts - too large for GitHub releases)
   github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
@@ -235,22 +79,14 @@ jobs:
       [
         release-please,
         check-tag,
-        check-pr-artifacts,
         crates-publish,
-        reuse-pr-artifacts,
-        build-binaries,
       ]
     if: |
       always() &&
       ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') ||
-       (needs.check-tag.result == 'success' && needs.check-tag.outputs.is_tag == 'true')) &&
-      (needs.reuse-pr-artifacts.result == 'success' ||
-       needs.build-binaries.result == 'success' ||
-       needs.reuse-pr-artifacts.result == 'skipped')
+       (needs.check-tag.result == 'success' && needs.check-tag.outputs.is_tag == 'true'))
     permissions:
       contents: write
-      actions: read
-      attestations: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -290,42 +126,9 @@ jobs:
             ## Unknown
             {{__unknown__}}
 
-      - name: Download artifacts
-        uses: actions/download-artifact@v7
-        with:
-          pattern: msvc-kit-*
-          path: release-artifacts
-          merge-multiple: false
-
-      - name: Prepare release files
-        run: |
-          mkdir -p release-files
-          TAG="${{ steps.tag.outputs.TAG_NAME }}"
-          VERSION="${TAG#v}"
-          for dir in release-artifacts/*/; do
-            artifact_name=$(basename "$dir")
-            if [ -f "${dir}msvc-kit.exe" ]; then
-              # Extract architecture from artifact name (e.g., msvc-kit-x86_64-windows -> x86_64-windows)
-              arch_suffix="${artifact_name#msvc-kit-}"
-              cp "${dir}msvc-kit.exe" "release-files/msvc-kit-${VERSION}-${arch_suffix}.exe"
-            fi
-          done
-          echo "Release files:"
-          ls -la release-files/
-
-      - name: Document artifact source
-        id: artifact-source
-        run: |
-          if [ "${{ needs.check-pr-artifacts.outputs.artifacts-available }}" == "true" ]; then
-            echo "ARTIFACT_SOURCE=✅ **Reused from PR workflow** (Run: [${{ needs.check-pr-artifacts.outputs.pr-run-id }}](https://github.com/${{ github.repository }}/actions/runs/${{ needs.check-pr-artifacts.outputs.pr-run-id }}), SHA: \`${{ needs.check-pr-artifacts.outputs.source-sha }}\`)" >> $GITHUB_OUTPUT
-          else
-            echo "ARTIFACT_SOURCE=🔨 **Built fresh in release workflow** (SHA: \`${{ github.sha }}\`)" >> $GITHUB_OUTPUT
-          fi
-
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "release-files/*"
           token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ steps.tag.outputs.TAG_NAME }}
           name: ${{ steps.tag.outputs.TAG_NAME }}
@@ -347,177 +150,9 @@ jobs:
             ```bash
             winget install loonghao.msvc-kit
             ```
-
-            **Direct Download:**
-            - [msvc-kit-${{ steps.version.outputs.VERSION }}-x86_64-windows.exe](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.TAG_NAME }}/msvc-kit-${{ steps.version.outputs.VERSION }}-x86_64-windows.exe) - 64-bit x86
-            - [msvc-kit-${{ steps.version.outputs.VERSION }}-i686-windows.exe](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.TAG_NAME }}/msvc-kit-${{ steps.version.outputs.VERSION }}-i686-windows.exe) - 32-bit x86
-            - [msvc-kit-${{ steps.version.outputs.VERSION }}-aarch64-windows.exe](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.TAG_NAME }}/msvc-kit-${{ steps.version.outputs.VERSION }}-aarch64-windows.exe) - ARM64
-
-            ---
-
-            ### Build Artifacts Source
-            ${{ steps.artifact-source.outputs.ARTIFACT_SOURCE }}
           draft: false
           prerelease: false
           allowUpdates: true
           skipIfReleaseExists: false
           updateOnlyUnreleased: false
           makeLatest: true
-
-  build-bundles:
-    name: Bundle (${{ matrix.target_arch }})
-    runs-on: windows-latest
-    needs: [release-please, check-tag, github-release]
-    if: |
-      always() &&
-      ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') ||
-       (needs.check-tag.result == 'success' && needs.check-tag.outputs.is_tag == 'true'))
-    timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target_arch: x64
-          - target_arch: x86
-          - target_arch: arm64
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: bundle-${{ matrix.target_arch }}
-
-      - name: Build msvc-kit
-        run: cargo build --release
-
-      - name: Determine tag name
-        id: bundle-tag
-        shell: bash
-        run: |
-          if [ "${{ needs.release-please.outputs.tag_name }}" != "" ]; then
-            echo "TAG_NAME=${{ needs.release-please.outputs.tag_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "TAG_NAME=${{ needs.check-tag.outputs.tag_name }}" >> $GITHUB_OUTPUT
-          fi
-
-
-      - name: Get versions from manifest
-        id: versions
-        shell: pwsh
-        run: |
-          $output = & ".\target\release\msvc-kit.exe" list --available 2>&1
-          Write-Host "Available versions output:"
-          Write-Host $output
-
-          $msvcVersion = ($output | Select-String "Latest MSVC version: (.+)").Matches.Groups[1].Value
-          $sdkVersion = ($output | Select-String "Latest Windows SDK version: (.+)").Matches.Groups[1].Value
-
-          if (-not $msvcVersion) { throw "MSVC version not detected" }
-          if (-not $sdkVersion) { throw "SDK version not detected" }
-
-          Write-Host "Selected MSVC version: $msvcVersion"
-          Write-Host "Selected SDK version: $sdkVersion"
-
-          echo "msvc_version=$msvcVersion" >> $env:GITHUB_OUTPUT
-          echo "sdk_version=$sdkVersion" >> $env:GITHUB_OUTPUT
-
-      - name: Create bundle
-        id: bundle
-        shell: pwsh
-        env:
-          MSVC_VERSION: ${{ steps.versions.outputs.msvc_version }}
-          SDK_VERSION: ${{ steps.versions.outputs.sdk_version }}
-        run: |
-          $bundleDir = Join-Path $env:GITHUB_WORKSPACE "msvc-bundle"
-          $msvcVersion = $env:MSVC_VERSION
-          $sdkVersion = $env:SDK_VERSION
-          $targetArch = "${{ matrix.target_arch }}"
-
-          $hostArch = if ($targetArch -eq "x86") { "x86" } else { "x64" }
-
-          Write-Host "Creating bundle with:"
-          Write-Host "  MSVC: $msvcVersion"
-          Write-Host "  SDK: $sdkVersion"
-          Write-Host "  Host: $hostArch"
-          Write-Host "  Target: $targetArch"
-
-          & ".\target\release\msvc-kit.exe" bundle `
-            --accept-license `
-            --msvc-version $msvcVersion `
-            --sdk-version $sdkVersion `
-            --host-arch $hostArch `
-            --arch $targetArch `
-            --output $bundleDir
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Bundle creation failed"
-          }
-
-      - name: Create zip archive
-        id: zip
-        shell: pwsh
-        run: |
-          $msvcVersion = "${{ steps.versions.outputs.msvc_version }}"
-          $sdkVersion = "${{ steps.versions.outputs.sdk_version }}"
-          $targetArch = "${{ matrix.target_arch }}"
-
-          $zipName = "msvc-bundle-${msvcVersion}-${sdkVersion}-${targetArch}.zip"
-
-          Write-Host "Creating archive: $zipName"
-
-          Compress-Archive -Path "msvc-bundle\*" -DestinationPath $zipName -Force
-
-          $size = (Get-Item $zipName).Length / 1MB
-          Write-Host "Archive size: $([math]::Round($size, 2)) MB"
-
-          echo "zip_name=$zipName" >> $env:GITHUB_OUTPUT
-          echo "zip_path=$zipName" >> $env:GITHUB_OUTPUT
-
-      - name: Upload bundle to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.bundle-tag.outputs.TAG_NAME }}
-          files: ${{ steps.zip.outputs.zip_path }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # Update WinGet manifest
-  update-winget:
-    name: Update WinGet
-    runs-on: ubuntu-latest
-    needs: [release-please, check-tag, github-release]
-    if: |
-      always() &&
-      needs.github-release.result == 'success'
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Determine version and tag
-        id: version
-        run: |
-          if [ "${{ needs.release-please.outputs.version }}" != "" ]; then
-            echo "VERSION=${{ needs.release-please.outputs.version }}" >> $GITHUB_OUTPUT
-            echo "TAG_NAME=${{ needs.release-please.outputs.tag_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
-            echo "TAG_NAME=${{ needs.check-tag.outputs.tag_name }}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Wait for release assets to be available
-        run: |
-          echo "Waiting for release assets to be fully available..."
-          sleep 30
-
-      - name: Update WinGet manifest
-        uses: vedantmgoyal2009/winget-releaser@v2
-        with:
-          identifier: loonghao.msvc-kit
-          installers-regex: "msvc-kit-.*-x86_64-windows\\.exe$"
-          version: ${{ steps.version.outputs.VERSION }}
-          release-tag: ${{ steps.version.outputs.TAG_NAME }}
-          token: ${{ secrets.WINGET_TOKEN }}
-        continue-on-error: true
