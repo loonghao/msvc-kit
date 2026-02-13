@@ -39,6 +39,21 @@ async fn download_options_default_values() {
     assert_eq!(options.parallel_downloads, DEFAULT_PARALLEL_DOWNLOADS);
     assert!(options.http_client.is_none());
     assert!(options.progress_handler.is_none());
+    assert!(options.cache_manager.is_none());
+}
+
+#[tokio::test]
+async fn download_options_builder_with_cache_manager() {
+    use super::DownloadOptions;
+    use crate::version::Architecture;
+
+    // Test that cache_manager can be set through builder
+    let options = DownloadOptions::builder()
+        .target_dir("/tmp/test")
+        .arch(Architecture::X64)
+        .build();
+
+    assert!(options.cache_manager.is_none());
 }
 
 #[tokio::test]

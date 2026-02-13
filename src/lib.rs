@@ -94,9 +94,9 @@ pub mod version;
 // Re-export main types and functions
 pub use config::{load_config, save_config, MsvcKitConfig};
 pub use downloader::{
-    download_msvc, download_sdk, list_available_versions, AvailableVersions, BoxedCacheManager,
-    BoxedProgressHandler, CacheManager, ComponentDownloader, ComponentType, DownloadOptions,
-    DownloadOptionsBuilder, FileSystemCacheManager, ProgressHandler,
+    download_all, download_msvc, download_sdk, list_available_versions, AvailableVersions,
+    BoxedCacheManager, BoxedProgressHandler, CacheManager, ComponentDownloader, ComponentType,
+    DownloadOptions, DownloadOptionsBuilder, FileSystemCacheManager, ProgressHandler,
 };
 pub use env::{get_env_vars, setup_environment, MsvcEnvironment, ToolPaths};
 pub use error::{MsvcKitError, Result};

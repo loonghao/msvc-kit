@@ -26,6 +26,18 @@ pub struct DownloadOptions {
     
     /// 并行下载数量
     pub parallel_downloads: usize,
+    
+    /// 自定义 HTTP 客户端（None = 使用默认）
+    pub http_client: Option<reqwest::Client>,
+    
+    /// 自定义进度处理器（None = 使用默认 indicatif）
+    pub progress_handler: Option<BoxedProgressHandler>,
+    
+    /// 自定义缓存管理器（None = 使用默认文件系统缓存）
+    pub cache_manager: Option<BoxedCacheManager>,
+    
+    /// 预览模式：不实际下载
+    pub dry_run: bool,
 }
 ```
 
@@ -149,3 +161,64 @@ Windows SDK 版本。示例：
 ### parallel_downloads
 
 并发下载数量。较高的值可能加快下载速度，但会使用更多带宽。
+
+### http_client
+
+自定义 `reqwest::Client`，用于 HTTP 请求。可用于配置代理或自定义 TLS 设置。
+
+### progress_handler
+
+自定义进度处理器，需实现 `ProgressHandler` trait。使用 `NoopProgressHandler` 可以抑制输出。
+
+### cache_manager
+
+自定义缓存管理器，需实现 `CacheManager` trait。允许多个实例共享缓存。
+
+```rust
+use msvc_kit::{DownloadOptions, FileSystemCacheManager};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+let cache = Arc::new(FileSystemCacheManager::new(
+    PathBuf::from("/shared/cache")
+));
+
+let options = DownloadOptions::builder()
+    .target_dir("C:/msvc")
+    .cache_manager(cache)
+    .build();
+```
+
+### dry_run
+
+设为 `true` 时，显示将要下载的内容但不实际下载。
+
+## Builder 模式
+
+推荐使用 Builder 模式创建 `DownloadOptions`：
+
+```rust
+use msvc_kit::{DownloadOptions, Architecture};
+
+let options = DownloadOptions::builder()
+    .msvc_version("14.44")
+    .sdk_version("10.0.26100.0")
+    .target_dir("C:/msvc-kit")
+    .arch(Architecture::X64)
+    .host_arch(Architecture::X64)
+    .verify_hashes(true)
+    .parallel_downloads(8)
+    .dry_run(false)
+    .build();
+```
+
+## download_all
+
+并行下载 MSVC 和 SDK：
+
+```rust
+use msvc_kit::{download_all, DownloadOptions};
+
+let options = DownloadOptions::default();
+let (msvc_info, sdk_info) = download_all(&options).await?;
+```

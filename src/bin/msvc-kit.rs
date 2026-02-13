@@ -258,6 +258,7 @@ async fn main() -> anyhow::Result<()> {
                 parallel_downloads: parallel_downloads.unwrap_or(config.parallel_downloads),
                 http_client: None,
                 progress_handler: None,
+                cache_manager: None,
                 dry_run: false,
             };
 
@@ -602,6 +603,7 @@ async fn main() -> anyhow::Result<()> {
                 parallel_downloads: config.parallel_downloads,
                 http_client: None,
                 progress_handler: None,
+                cache_manager: None,
                 dry_run: false,
             };
 
