@@ -6,13 +6,14 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::cache::{
     create_spinner, default_manifest_cache_dir, fetch_bytes_with_cache, url_basename,
 };
+use super::MsvcComponent;
 use crate::constants::{USER_AGENT, VS_CHANNEL_URL};
 use crate::error::{MsvcKitError, Result};
 
@@ -305,14 +306,26 @@ impl VsManifest {
 
     /// Find MSVC packages (tools, CRT, ATL, MFC) for target architecture
     ///
-    /// This function filters packages based on the specified host and target architectures.
-    /// Only packages matching the requested architecture will be returned, avoiding
-    /// unnecessary downloads of other architecture variants (ARM64, x86, Spectre, etc.).
+    /// This function filters packages based on the specified host and target architectures,
+    /// optional component selection, and exclude patterns.
+    ///
+    /// By default, the standard toolchain (Tools, CRT, MFC, ATL) is included.
+    /// Spectre-mitigated libraries are excluded unless explicitly requested via
+    /// `include_components`.
+    ///
+    /// # Arguments
+    /// * `version_prefix` - MSVC version prefix (e.g., "14.44")
+    /// * `host_arch` - Host architecture (e.g., "x64")
+    /// * `target_arch` - Target architecture (e.g., "x64")
+    /// * `include_components` - Optional components to include (e.g., Spectre)
+    /// * `exclude_patterns` - Package ID patterns to exclude
     pub fn find_msvc_packages(
         &self,
         version_prefix: &str,
         host_arch: &str,
         target_arch: &str,
+        include_components: &HashSet<MsvcComponent>,
+        exclude_patterns: &[String],
     ) -> Vec<Package> {
         let version_prefix = format!("Microsoft.VC.{}.", version_prefix);
         let host = host_arch.to_lowercase();
@@ -331,9 +344,16 @@ impl VsManifest {
             .filter(|pkg| {
                 let id = pkg.id.to_lowercase();
 
+                // Apply user-defined exclude patterns
+                for pattern in exclude_patterns {
+                    if id.contains(&pattern.to_lowercase()) {
+                        return false;
+                    }
+                }
+
                 // Skip Spectre-mitigated libraries unless explicitly requested
-                // These add significant download size and are rarely needed
-                if id.contains(".spectre") {
+                if id.contains(".spectre") && !include_components.contains(&MsvcComponent::Spectre)
+                {
                     return false;
                 }
 
@@ -355,7 +375,17 @@ impl VsManifest {
                 // e.g., Microsoft.VC.14.44.MFC.x64, Microsoft.VC.14.44.ATL.x64
                 let is_runtime = id.contains(".mfc") || id.contains(".atl") || id.contains(".asan");
 
-                if is_crt || is_runtime {
+                // Optional opt-in components (only included when explicitly requested)
+                let is_cli =
+                    id.contains(".cli") && include_components.contains(&MsvcComponent::Cli);
+                let is_modules =
+                    id.contains(".modules") && include_components.contains(&MsvcComponent::Modules);
+                let is_redist =
+                    id.contains(".redist") && include_components.contains(&MsvcComponent::Redist);
+
+                let is_arch_filtered = is_crt || is_runtime || is_cli || is_modules || is_redist;
+
+                if is_arch_filtered {
                     // Check if package ID contains architecture suffix
                     // Architecture-neutral packages (like CRT.Headers, CRT.Source) should be included
                     let has_arch_in_id = all_archs.iter().any(|arch| {
@@ -386,6 +416,15 @@ impl VsManifest {
 
                     // Architecture-neutral package (e.g., CRT.Headers, CRT.Source)
                     return true;
+                }
+
+                // Check for custom component patterns
+                for component in include_components {
+                    if let MsvcComponent::Custom(pattern) = component {
+                        if id.contains(&pattern.to_lowercase()) {
+                            return true;
+                        }
+                    }
                 }
 
                 false
@@ -771,6 +810,64 @@ mod tests {
                     machine_arch: None,
                     product_arch: None,
                 },
+                // C++/CLI support packages (opt-in only)
+                VsPackage {
+                    id: "Microsoft.VC.14.44.CLI.x64".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("x64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                VsPackage {
+                    id: "Microsoft.VC.14.44.CLI.ARM64".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("arm64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                // C++ Modules packages (opt-in only)
+                VsPackage {
+                    id: "Microsoft.VC.14.44.Modules.x64".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("x64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                // C++ Redistributable packages (opt-in only)
+                VsPackage {
+                    id: "Microsoft.VC.14.44.Redist.x64".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("x64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
+                VsPackage {
+                    id: "Microsoft.VC.14.44.Redist.ARM64".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "Vsix".to_string(),
+                    chip: Some("arm64".to_string()),
+                    language: None,
+                    payloads: vec![],
+                    dependencies: HashMap::new(),
+                    machine_arch: None,
+                    product_arch: None,
+                },
                 // Older version tools
                 VsPackage {
                     id: "Microsoft.VC.14.43.Tools.HostX64.TargetX64.base".to_string(),
@@ -909,9 +1006,12 @@ mod tests {
     #[test]
     fn test_find_msvc_packages() {
         let manifest = create_test_manifest();
+        let empty_components = HashSet::new();
+        let empty_patterns: Vec<String> = vec![];
 
         // Find packages for 14.44 x64
-        let packages = manifest.find_msvc_packages("14.44", "x64", "x64");
+        let packages =
+            manifest.find_msvc_packages("14.44", "x64", "x64", &empty_components, &empty_patterns);
 
         // Should find the tools package
         assert!(!packages.is_empty());
@@ -922,9 +1022,12 @@ mod tests {
     #[test]
     fn test_find_msvc_packages_architecture_filtering() {
         let manifest = create_test_manifest();
+        let empty_components = HashSet::new();
+        let empty_patterns: Vec<String> = vec![];
 
         // Find packages for x64 target
-        let x64_packages = manifest.find_msvc_packages("14.44", "x64", "x64");
+        let x64_packages =
+            manifest.find_msvc_packages("14.44", "x64", "x64", &empty_components, &empty_patterns);
 
         // Should include x64 tools
         assert!(x64_packages
@@ -973,9 +1076,12 @@ mod tests {
     #[test]
     fn test_find_msvc_packages_spectre_filtering() {
         let manifest = create_test_manifest();
+        let empty_components = HashSet::new();
+        let empty_patterns: Vec<String> = vec![];
 
-        // Find packages for x64 target
-        let packages = manifest.find_msvc_packages("14.44", "x64", "x64");
+        // Find packages for x64 target (no Spectre component requested)
+        let packages =
+            manifest.find_msvc_packages("14.44", "x64", "x64", &empty_components, &empty_patterns);
 
         // Should NOT include Spectre-mitigated libraries
         assert!(!packages.iter().any(|p| p.id.contains(".Spectre")));
@@ -988,11 +1094,138 @@ mod tests {
     }
 
     #[test]
+    fn test_find_msvc_packages_spectre_inclusion() {
+        let manifest = create_test_manifest();
+        let mut components = HashSet::new();
+        components.insert(MsvcComponent::Spectre);
+        let empty_patterns: Vec<String> = vec![];
+
+        // Find packages for x64 target WITH Spectre component requested
+        let packages =
+            manifest.find_msvc_packages("14.44", "x64", "x64", &components, &empty_patterns);
+
+        // Should include Spectre-mitigated libraries
+        assert!(packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.CRT.x64.Desktop.Spectre"));
+    }
+
+    #[test]
+    fn test_find_msvc_packages_exclude_patterns() {
+        let manifest = create_test_manifest();
+        let empty_components = HashSet::new();
+        let exclude_patterns = vec![".mfc".to_string()];
+
+        // Find packages for x64 target with MFC excluded
+        let packages = manifest.find_msvc_packages(
+            "14.44",
+            "x64",
+            "x64",
+            &empty_components,
+            &exclude_patterns,
+        );
+
+        // Should NOT include MFC packages
+        assert!(!packages
+            .iter()
+            .any(|p| p.id.to_lowercase().contains(".mfc")));
+
+        // Should still include ATL and CRT
+        assert!(packages.iter().any(|p| p.id.contains("ATL")));
+        assert!(packages.iter().any(|p| p.id.contains("CRT")));
+    }
+
+    #[test]
+    fn test_find_msvc_packages_cli_inclusion() {
+        let manifest = create_test_manifest();
+        let empty_components = HashSet::new();
+        let empty_patterns: Vec<String> = vec![];
+
+        // Without CLI component, CLI packages should NOT be included
+        let packages =
+            manifest.find_msvc_packages("14.44", "x64", "x64", &empty_components, &empty_patterns);
+        assert!(!packages
+            .iter()
+            .any(|p| p.id.to_lowercase().contains(".cli")));
+
+        // With CLI component, CLI packages SHOULD be included
+        let mut components = HashSet::new();
+        components.insert(MsvcComponent::Cli);
+        let packages =
+            manifest.find_msvc_packages("14.44", "x64", "x64", &components, &empty_patterns);
+        assert!(packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.CLI.x64"));
+        // Should NOT include ARM64 CLI when targeting x64
+        assert!(!packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.CLI.ARM64"));
+    }
+
+    #[test]
+    fn test_find_msvc_packages_modules_inclusion() {
+        let manifest = create_test_manifest();
+        let empty_components = HashSet::new();
+        let empty_patterns: Vec<String> = vec![];
+
+        // Without Modules component, Modules packages should NOT be included
+        let packages =
+            manifest.find_msvc_packages("14.44", "x64", "x64", &empty_components, &empty_patterns);
+        assert!(!packages
+            .iter()
+            .any(|p| p.id.to_lowercase().contains(".modules")));
+
+        // With Modules component, Modules packages SHOULD be included
+        let mut components = HashSet::new();
+        components.insert(MsvcComponent::Modules);
+        let packages =
+            manifest.find_msvc_packages("14.44", "x64", "x64", &components, &empty_patterns);
+        assert!(packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.Modules.x64"));
+    }
+
+    #[test]
+    fn test_find_msvc_packages_redist_inclusion() {
+        let manifest = create_test_manifest();
+        let empty_components = HashSet::new();
+        let empty_patterns: Vec<String> = vec![];
+
+        // Without Redist component, Redist packages should NOT be included
+        let packages =
+            manifest.find_msvc_packages("14.44", "x64", "x64", &empty_components, &empty_patterns);
+        assert!(!packages
+            .iter()
+            .any(|p| p.id.to_lowercase().contains(".redist")));
+
+        // With Redist component, Redist packages SHOULD be included
+        let mut components = HashSet::new();
+        components.insert(MsvcComponent::Redist);
+        let packages =
+            manifest.find_msvc_packages("14.44", "x64", "x64", &components, &empty_patterns);
+        assert!(packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.Redist.x64"));
+        // Should NOT include ARM64 Redist when targeting x64
+        assert!(!packages
+            .iter()
+            .any(|p| p.id == "Microsoft.VC.14.44.Redist.ARM64"));
+    }
+
+    #[test]
     fn test_find_msvc_packages_arm64_target() {
         let manifest = create_test_manifest();
+        let empty_components = HashSet::new();
+        let empty_patterns: Vec<String> = vec![];
 
         // Find packages for ARM64 target
-        let arm64_packages = manifest.find_msvc_packages("14.44", "x64", "arm64");
+        let arm64_packages = manifest.find_msvc_packages(
+            "14.44",
+            "x64",
+            "arm64",
+            &empty_components,
+            &empty_patterns,
+        );
 
         // Should include ARM64 tools (cross-compilation from x64 host)
         assert!(arm64_packages

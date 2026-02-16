@@ -14,11 +14,105 @@ mod traits;
 #[cfg(test)]
 mod common_tests;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::error::Result;
 use crate::installer::InstallInfo;
 use crate::version::Architecture;
+
+/// Optional MSVC component categories that can be included in downloads.
+///
+/// By default, only the core toolchain (Tools, CRT, MFC, ATL, ASAN) is downloaded.
+/// Use this enum to opt-in to additional component categories like
+/// Spectre-mitigated libraries, C++/CLI support, or UWP support.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use msvc_kit::{DownloadOptions, MsvcComponent};
+///
+/// let options = DownloadOptions::builder()
+///     .include_component(MsvcComponent::Spectre)
+///     .include_component(MsvcComponent::Cli)
+///     .build();
+/// ```
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub enum MsvcComponent {
+    /// Spectre-mitigated CRT/ATL/MFC libraries
+    /// Required for builds with `/Qspectre` flag (e.g., node-pty/winpty)
+    Spectre,
+    /// Microsoft Foundation Classes
+    /// Required for legacy MFC applications
+    Mfc,
+    /// Active Template Library
+    /// Required for COM/ATL components
+    Atl,
+    /// Address Sanitizer libraries
+    /// Required for debugging with ASAN
+    Asan,
+    /// UWP/Store libraries
+    /// Required for UWP app development
+    Uwp,
+    /// C++/CLI support libraries
+    /// Required for mixed managed/native C++/CLI projects
+    /// (VS Component: Microsoft.VisualStudio.Component.VC.CLI.Support)
+    Cli,
+    /// C++ Standard Library Modules (experimental)
+    /// Required for C++20/23 `import std;` support
+    /// (VS Component: Microsoft.VisualStudio.Component.VC.Modules.x86.x64)
+    Modules,
+    /// C++ Redistributable packages
+    /// Required for distributing C++ applications
+    /// (VS Component: Microsoft.VisualStudio.Component.VC.Redist.14.Latest)
+    Redist,
+    /// Custom package ID pattern for future extensibility
+    /// Matches packages containing the specified string (case-insensitive)
+    Custom(String),
+}
+
+impl std::fmt::Display for MsvcComponent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MsvcComponent::Spectre => write!(f, "spectre"),
+            MsvcComponent::Mfc => write!(f, "mfc"),
+            MsvcComponent::Atl => write!(f, "atl"),
+            MsvcComponent::Asan => write!(f, "asan"),
+            MsvcComponent::Uwp => write!(f, "uwp"),
+            MsvcComponent::Cli => write!(f, "cli"),
+            MsvcComponent::Modules => write!(f, "modules"),
+            MsvcComponent::Redist => write!(f, "redist"),
+            MsvcComponent::Custom(s) => write!(f, "custom:{}", s),
+        }
+    }
+}
+
+impl std::str::FromStr for MsvcComponent {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "spectre" => Ok(MsvcComponent::Spectre),
+            "mfc" => Ok(MsvcComponent::Mfc),
+            "atl" => Ok(MsvcComponent::Atl),
+            "asan" => Ok(MsvcComponent::Asan),
+            "uwp" | "store" => Ok(MsvcComponent::Uwp),
+            "cli" | "c++/cli" => Ok(MsvcComponent::Cli),
+            "modules" => Ok(MsvcComponent::Modules),
+            "redist" | "redistributable" => Ok(MsvcComponent::Redist),
+            other => {
+                if let Some(pattern) = other.strip_prefix("custom:") {
+                    Ok(MsvcComponent::Custom(pattern.to_string()))
+                } else {
+                    Err(format!(
+                        "Unknown component '{}'. Valid: spectre, mfc, atl, asan, uwp, cli, modules, redist, custom:<pattern>",
+                        s
+                    ))
+                }
+            }
+        }
+    }
+}
 
 pub use common::CommonDownloader;
 pub use hash::{compute_file_hash, compute_hash, hashes_match};
@@ -71,6 +165,20 @@ pub struct DownloadOptions {
 
     /// Dry-run mode: preview what would be downloaded without actually downloading
     pub dry_run: bool,
+
+    /// Additional MSVC components to include (default: empty = standard install).
+    ///
+    /// By default, the standard toolchain (Tools, CRT, MFC, ATL) is downloaded.
+    /// Use this to opt-in to additional components like Spectre-mitigated libraries.
+    ///
+    /// See [`MsvcComponent`] for available component categories.
+    pub include_components: HashSet<MsvcComponent>,
+
+    /// Package ID patterns to exclude (case-insensitive substring match).
+    ///
+    /// Any package whose ID contains one of these patterns will be excluded
+    /// from the download, providing fine-grained control over package selection.
+    pub exclude_patterns: Vec<String>,
 }
 
 impl std::fmt::Debug for DownloadOptions {
@@ -87,6 +195,8 @@ impl std::fmt::Debug for DownloadOptions {
             .field("progress_handler", &self.progress_handler.is_some())
             .field("cache_manager", &self.cache_manager.is_some())
             .field("dry_run", &self.dry_run)
+            .field("include_components", &self.include_components)
+            .field("exclude_patterns", &self.exclude_patterns)
             .finish()
     }
 }
@@ -116,6 +226,27 @@ impl Default for DownloadOptions {
             .map(|s| matches!(s.to_lowercase().as_str(), "1" | "true" | "yes"))
             .unwrap_or(false);
 
+        // Parse MSVC_KIT_INCLUDE_COMPONENTS env var (comma-separated)
+        let include_components = std::env::var("MSVC_KIT_INCLUDE_COMPONENTS")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .filter_map(|c| c.trim().parse::<MsvcComponent>().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Parse MSVC_KIT_EXCLUDE_PATTERNS env var (comma-separated)
+        let exclude_patterns = std::env::var("MSVC_KIT_EXCLUDE_PATTERNS")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .map(|p| p.trim().to_string())
+                    .filter(|p| !p.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Self {
             msvc_version: std::env::var("MSVC_KIT_MSVC_VERSION").ok(),
             sdk_version: std::env::var("MSVC_KIT_SDK_VERSION").ok(),
@@ -128,6 +259,8 @@ impl Default for DownloadOptions {
             progress_handler: None,
             cache_manager: None,
             dry_run,
+            include_components,
+            exclude_patterns,
         }
     }
 }
@@ -209,6 +342,63 @@ impl DownloadOptionsBuilder {
     /// Enable dry-run mode (preview without downloading)
     pub fn dry_run(mut self, dry_run: bool) -> Self {
         self.options.dry_run = dry_run;
+        self
+    }
+
+    /// Include an optional MSVC component category.
+    ///
+    /// Components like Spectre-mitigated libraries are excluded by default.
+    /// Use this to opt-in to additional component categories.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use msvc_kit::{DownloadOptions, MsvcComponent};
+    ///
+    /// let options = DownloadOptions::builder()
+    ///     .include_component(MsvcComponent::Spectre)
+    ///     .build();
+    /// ```
+    pub fn include_component(mut self, component: MsvcComponent) -> Self {
+        self.options.include_components.insert(component);
+        self
+    }
+
+    /// Include multiple optional MSVC component categories at once.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use msvc_kit::{DownloadOptions, MsvcComponent};
+    ///
+    /// let options = DownloadOptions::builder()
+    ///     .include_components([MsvcComponent::Spectre, MsvcComponent::Asan])
+    ///     .build();
+    /// ```
+    pub fn include_components(
+        mut self,
+        components: impl IntoIterator<Item = MsvcComponent>,
+    ) -> Self {
+        self.options.include_components.extend(components);
+        self
+    }
+
+    /// Exclude packages matching a pattern (case-insensitive substring match).
+    ///
+    /// Any package whose ID contains the pattern will be excluded from download.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use msvc_kit::DownloadOptions;
+    ///
+    /// let options = DownloadOptions::builder()
+    ///     .exclude_pattern(".uwp")
+    ///     .exclude_pattern(".store")
+    ///     .build();
+    /// ```
+    pub fn exclude_pattern(mut self, pattern: impl Into<String>) -> Self {
+        self.options.exclude_patterns.push(pattern.into());
         self
     }
 

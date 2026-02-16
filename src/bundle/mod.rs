@@ -173,6 +173,8 @@ pub async fn create_bundle(options: BundleOptions) -> Result<BundleResult> {
         progress_handler: None,
         cache_manager: None,
         dry_run: false,
+        include_components: Default::default(),
+        exclude_patterns: Default::default(),
     };
 
     // Download and extract MSVC
@@ -255,6 +257,8 @@ mod tests {
             progress_handler: None,
             cache_manager: None,
             dry_run: false,
+            include_components: Default::default(),
+            exclude_patterns: Default::default(),
         };
         assert!(download_opts.cache_manager.is_none());
         assert!(!download_opts.dry_run);
