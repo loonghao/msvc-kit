@@ -63,7 +63,13 @@ impl MsvcDownloader {
             .to_string();
         let target_arch = self.downloader.options.arch.to_string();
 
-        let packages = manifest.find_msvc_packages(&version, &host_arch, &target_arch);
+        let packages = manifest.find_msvc_packages(
+            &version,
+            &host_arch,
+            &target_arch,
+            &self.downloader.options.include_components,
+            &self.downloader.options.exclude_patterns,
+        );
 
         let file_count: usize = packages.iter().map(|p| p.payloads.len()).sum();
         let total_size: u64 = packages.iter().map(|p| p.total_size).sum();
@@ -152,7 +158,13 @@ impl MsvcDownloader {
         );
 
         // Find packages to download
-        let packages = manifest.find_msvc_packages(&version, &host_arch, &target_arch);
+        let packages = manifest.find_msvc_packages(
+            &version,
+            &host_arch,
+            &target_arch,
+            &self.downloader.options.include_components,
+            &self.downloader.options.exclude_patterns,
+        );
 
         if packages.is_empty() {
             return Err(MsvcKitError::ComponentNotFound(format!(

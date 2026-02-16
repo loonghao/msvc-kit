@@ -10,7 +10,7 @@ use msvc_kit::env::generate_activation_script;
 use msvc_kit::version::{list_installed_msvc, list_installed_sdk, Architecture};
 use msvc_kit::{
     download_msvc, download_sdk, generate_script, get_env_vars, load_config, save_config,
-    setup_environment, DownloadOptions, MsvcKitConfig, ScriptContext, ShellType,
+    setup_environment, DownloadOptions, MsvcComponent, MsvcKitConfig, ScriptContext, ShellType,
 };
 
 /// Portable MSVC Build Tools installer and manager
@@ -67,6 +67,16 @@ enum Commands {
         /// Max parallel downloads
         #[arg(long)]
         parallel_downloads: Option<usize>,
+
+        /// Include optional MSVC components (spectre, mfc, atl, asan, uwp, custom:<pattern>)
+        /// Can be specified multiple times
+        #[arg(long = "include-component", value_name = "COMPONENT")]
+        include_components: Vec<String>,
+
+        /// Exclude packages matching pattern (case-insensitive substring match)
+        /// Can be specified multiple times
+        #[arg(long = "exclude-pattern", value_name = "PATTERN")]
+        exclude_patterns: Vec<String>,
     },
 
     /// Setup environment variables for MSVC toolchain
@@ -244,9 +254,21 @@ async fn main() -> anyhow::Result<()> {
             no_sdk,
             no_verify,
             parallel_downloads,
+            include_components,
+            exclude_patterns,
         } => {
             let target_dir = target.unwrap_or_else(|| config.install_dir.clone());
             let arch: Architecture = arch.parse().map_err(|e: String| anyhow::anyhow!(e))?;
+
+            // Parse component strings into MsvcComponent enum values
+            let components = include_components
+                .iter()
+                .filter_map(|s| {
+                    s.parse::<MsvcComponent>()
+                        .map_err(|e| eprintln!("⚠️  Warning: {}", e))
+                        .ok()
+                })
+                .collect();
 
             let options = DownloadOptions {
                 msvc_version,
@@ -260,6 +282,8 @@ async fn main() -> anyhow::Result<()> {
                 progress_handler: None,
                 cache_manager: None,
                 dry_run: false,
+                include_components: components,
+                exclude_patterns,
             };
 
             println!("📦 msvc-kit - Downloading MSVC Build Tools\n");
@@ -605,6 +629,8 @@ async fn main() -> anyhow::Result<()> {
                 progress_handler: None,
                 cache_manager: None,
                 dry_run: false,
+                include_components: Default::default(),
+                exclude_patterns: Default::default(),
             };
 
             // Download and extract MSVC
