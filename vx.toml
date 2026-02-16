@@ -1,49 +1,52 @@
-# VX Project Configuration
-# This file defines the tools and versions required for this project.
-# Run 'vx setup' to install all required tools.
-# Run 'vx dev' to enter the development environment.
-# Project: msvc-kit
-
 [tools]
-rust = "latest"
 just = "latest"
 node = "22"
+rust = "1.93.1"
 
 [settings]
-# Automatically install missing tools when entering dev environment
-auto_install = true
-# Cache duration for version checks
 cache_duration = "7d"
+auto_install = true
 
 [scripts]
-# Build commands
+audit = "just audit"
 build = "just build"
+build-all = "just build-all"
 build-release = "just build-release"
 build-release-locked = "just build-release-locked"
 build-target-release = "just build-target-release"
-
-# Quality commands
 check = "just check"
-fmt = "just fmt"
-lint = "just lint"
 check-workspace = "just check-workspace"
-
+ci = "just ci"
+clean = "just clean"
+coverage = "just coverage"
+default = "just default"
+doc = "just doc"
+doc-build = "just doc-build"
+doc-ci = "just doc-ci"
+docs-build = "just docs-build"
+docs-dev = "just docs-dev"
+docs-install = "just docs-install"
+docs-preview = "just docs-preview"
+fmt = "just fmt"
+fmt-check = "just fmt-check"
+format = "cargo fmt"
+info = "just info"
+lint = "just lint"
+lint-fix = "just lint-fix"
+outdated = "just outdated"
+publish = "just publish"
+publish-ci = "just publish-ci"
+publish-dry = "just publish-dry"
+rebuild = "just rebuild"
+release-check = "just release-check"
+run = "just run"
+run-release = "just run-release"
 test = "just test"
 test-all-features = "just test-all-features"
 test-doc = "just test-doc"
-
-# Documentation
-doc = "just doc"
-doc-ci = "just doc-ci"
-docs-dev = "just docs-dev"
-docs-build = "just docs-build"
-
-# Development
-run = "just run"
-ci = "just ci"
-
-# Release
-release-check = "just release-check"
-publish = "just publish"
-publish-ci = "just publish-ci"
-
+test-nocapture = "just test-nocapture"
+test-one = "just test-one"
+tree = "just tree"
+update = "just update"
+watch = "just watch"
+watch-test = "just watch-test"

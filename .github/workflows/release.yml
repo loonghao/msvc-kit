@@ -59,9 +59,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup MSVC Developer Command Prompt
-        uses: ilammy/msvc-dev-cmd@v1
-
       - name: Setup vx
         uses: loonghao/vx@main
         with:
@@ -70,6 +67,13 @@ jobs:
 
       - name: Setup tools (vx)
         run: vx setup
+
+      - name: Setup MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Fix MSVC linker (remove Git's link.exe)
+        run: Remove-Item 'C:\Program Files\Git\usr\bin\link.exe' -Force -ErrorAction SilentlyContinue
+        shell: pwsh
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -113,9 +117,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup MSVC Developer Command Prompt
-        uses: ilammy/msvc-dev-cmd@v1
-
       - name: Setup vx
         uses: loonghao/vx@main
         with:
@@ -124,6 +125,13 @@ jobs:
 
       - name: Setup tools (vx)
         run: vx setup
+
+      - name: Setup MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Fix MSVC linker (remove Git's link.exe)
+        run: Remove-Item 'C:\Program Files\Git\usr\bin\link.exe' -Force -ErrorAction SilentlyContinue
+        shell: pwsh
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
