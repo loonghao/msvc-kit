@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.2.10](https://github.com/loonghao/msvc-kit/compare/v0.2.9...v0.2.10) (2026-02-16)
+
+
+### Features
+
+* add extensible component selection for MSVC downloads ([256a48a](https://github.com/loonghao/msvc-kit/commit/256a48acba9abc9ea3ad3e892f0a5a396833a559)), closes [#87](https://github.com/loonghao/msvc-kit/issues/87)
+
+
+### Bug Fixes
+
+* **ci:** pin vx action to v0.7.9 to fix missing binary assets ([e11edd9](https://github.com/loonghao/msvc-kit/commit/e11edd979bfb32fce0918d46a67a41320e656342))
+* pin vx install in CI ([30309eb](https://github.com/loonghao/msvc-kit/commit/30309eb9296525b4cb6f9b88069c6e931ec5469b))
+* use crates.io API for reliable version check ([e9e0f40](https://github.com/loonghao/msvc-kit/commit/e9e0f40ebe3a1298c05696bf4ae1cf6bd777e21b))
+
+
+### Dependencies
+
+* update Rust crate futures to v0.3.32 ([182d6e1](https://github.com/loonghao/msvc-kit/commit/182d6e1459f9fd744e9a6a198fcd8633da399074))
+* update Rust crate indicatif to v0.18.4 ([6201203](https://github.com/loonghao/msvc-kit/commit/62012038467274fff051c7ee014c75ca9f49267a))
+* update Rust crate zip to v8 ([c24daf1](https://github.com/loonghao/msvc-kit/commit/c24daf11d923717767df86648d957345386cfdcf))
+
+
+### Miscellaneous
+
+* add vx-usage skills for AI coding agents ([c46059f](https://github.com/loonghao/msvc-kit/commit/c46059fa2a680dc4d344d6a63269345cfb40a829))
+* bump vx to 0.7.9 in CI ([de1de85](https://github.com/loonghao/msvc-kit/commit/de1de85cadeb222c21471705bd58bb7a4f0c6d54))
+* use vx for CI and docs ([01c80b9](https://github.com/loonghao/msvc-kit/commit/01c80b9b6fe59b83db4cee6ba29ed5d26e35bbca))
+
 ## [0.2.9](https://github.com/loonghao/msvc-kit/compare/v0.2.8...v0.2.9) (2026-02-13)
 
 
