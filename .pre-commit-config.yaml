@@ -1,0 +1,15 @@
+repos:
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt
+        args: ["--all", "--", "--check"]
+      - id: cargo-check
+      - id: clippy
+        args: ["--all-targets", "--all-features", "--", "-D", "warnings"]
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.4.1
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+

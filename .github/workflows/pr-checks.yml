@@ -48,6 +48,9 @@ jobs:
       - name: Setup tools (vx)
         run: vx setup
 
+      - name: Add Rust components
+        run: vx rustup component add clippy rustfmt
+
       - name: Setup MSVC Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
 
@@ -90,6 +93,9 @@ jobs:
       - name: Setup tools (vx)
         run: vx setup
 
+      - name: Add Rust components
+        run: vx rustup component add clippy rustfmt
+
       - name: Setup MSVC Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
 
@@ -124,6 +130,9 @@ jobs:
       - name: Setup tools (vx)
         run: vx setup
 
+      - name: Add Rust components
+        run: vx rustup component add clippy rustfmt
+
       - name: Setup MSVC Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
 
@@ -155,6 +164,9 @@ jobs:
 
       - name: Setup tools (vx)
         run: vx setup
+
+      - name: Add Rust components
+        run: vx rustup component add clippy rustfmt
 
       - name: Setup MSVC Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
