@@ -28,6 +28,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Setup MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Setup vx
         uses: loonghao/vx@main
         with:
@@ -60,6 +63,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+
+      - name: Setup MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Setup vx
         uses: loonghao/vx@main
