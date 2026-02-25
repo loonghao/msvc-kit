@@ -86,7 +86,7 @@ axoupdater = { version = "0.9", default-features = false, features = ["github_re
 
 # Embedded KV database
 redb = "3"
-bincode = { version = "2.0.1", features = ["serde"] }
+bincode = { version = "3.0.0", features = ["serde"] }
 
 # Template engine
 askama = "0.15.4"
