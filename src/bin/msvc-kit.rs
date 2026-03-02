@@ -7,10 +7,12 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use msvc_kit::bundle::{generate_bundle_scripts, save_bundle_scripts, BundleLayout};
 use msvc_kit::env::generate_activation_script;
+use msvc_kit::query::{QueryComponent, QueryOptions, QueryProperty};
 use msvc_kit::version::{list_installed_msvc, list_installed_sdk, Architecture};
 use msvc_kit::{
-    download_msvc, download_sdk, generate_script, get_env_vars, load_config, save_config,
-    setup_environment, DownloadOptions, MsvcComponent, MsvcKitConfig, ScriptContext, ShellType,
+    download_msvc, download_sdk, generate_script, get_env_vars, load_config, query_installation,
+    save_config, setup_environment, DownloadOptions, MsvcComponent, MsvcKitConfig, ScriptContext,
+    ShellType,
 };
 
 /// Portable MSVC Build Tools installer and manager
@@ -170,6 +172,37 @@ enum Commands {
         format: String,
     },
 
+    /// Query installed components for paths, environment variables, and tool locations
+    Query {
+        /// Installation directory
+        #[arg(short, long)]
+        dir: Option<PathBuf>,
+
+        /// Target architecture (x64, x86, arm64)
+        #[arg(short, long, default_value = "x64")]
+        arch: String,
+
+        /// Component to query (all, msvc, sdk)
+        #[arg(short, long, default_value = "all")]
+        component: String,
+
+        /// Property to retrieve (all, path, env, tools, version, include, lib)
+        #[arg(short, long, default_value = "all")]
+        property: String,
+
+        /// Specific MSVC version to query (default: latest installed)
+        #[arg(long)]
+        msvc_version: Option<String>,
+
+        /// Specific SDK version to query (default: latest installed)
+        #[arg(long)]
+        sdk_version: Option<String>,
+
+        /// Output format (text, json)
+        #[arg(short, long, default_value = "text")]
+        format: String,
+    },
+
     /// Create a portable bundle with MSVC toolchain (downloads components locally)
     Bundle {
         /// Output directory for the bundle
@@ -317,6 +350,7 @@ async fn main() -> anyhow::Result<()> {
 
             println!("\n🎉 Download complete!");
             println!("\nRun 'msvc-kit setup' to configure environment variables.");
+            println!("Run 'msvc-kit query --dir {}' to inspect installed paths.", target_dir.display());
         }
 
         Commands::Setup {
@@ -716,6 +750,164 @@ async fn main() -> anyhow::Result<()> {
             }
 
             println!("\n🎉 Done! Run setup.bat (cmd) or .\\setup.ps1 (PowerShell) to activate.");
+        }
+
+        Commands::Query {
+            dir,
+            arch,
+            component,
+            property,
+            msvc_version,
+            sdk_version,
+            format,
+        } => {
+            let install_dir = dir.unwrap_or_else(|| config.install_dir.clone());
+            let arch: Architecture = arch.parse().map_err(|e: String| anyhow::anyhow!(e))?;
+            let component: QueryComponent = component
+                .parse()
+                .map_err(|e: String| anyhow::anyhow!(e))?;
+            let property: QueryProperty =
+                property.parse().map_err(|e: String| anyhow::anyhow!(e))?;
+
+            let options = QueryOptions::builder()
+                .install_dir(&install_dir)
+                .arch(arch)
+                .component(component)
+                .property(property);
+
+            let options = if let Some(ref ver) = msvc_version {
+                options.msvc_version(ver)
+            } else {
+                options
+            };
+
+            let options = if let Some(ref ver) = sdk_version {
+                options.sdk_version(ver)
+            } else {
+                options
+            };
+
+            let options = options.build();
+            let result = query_installation(&options)?;
+
+            match format.as_str() {
+                "json" => {
+                    // JSON output: filter by property
+                    let json = match property {
+                        QueryProperty::All => {
+                            serde_json::to_string_pretty(&result.to_json())?
+                        }
+                        QueryProperty::Path => {
+                            let mut paths = serde_json::Map::new();
+                            paths.insert(
+                                "install_dir".to_string(),
+                                serde_json::json!(result.install_dir),
+                            );
+                            if let Some(ref msvc) = result.msvc {
+                                paths.insert(
+                                    "msvc_path".to_string(),
+                                    serde_json::json!(msvc.install_path),
+                                );
+                            }
+                            if let Some(ref sdk) = result.sdk {
+                                paths.insert(
+                                    "sdk_path".to_string(),
+                                    serde_json::json!(sdk.install_path),
+                                );
+                            }
+                            serde_json::to_string_pretty(&paths)?
+                        }
+                        QueryProperty::Env => {
+                            serde_json::to_string_pretty(&result.env_vars)?
+                        }
+                        QueryProperty::Tools => {
+                            serde_json::to_string_pretty(&result.tools)?
+                        }
+                        QueryProperty::Version => {
+                            let mut versions = serde_json::Map::new();
+                            if let Some(v) = result.msvc_version() {
+                                versions.insert(
+                                    "msvc".to_string(),
+                                    serde_json::Value::String(v.to_string()),
+                                );
+                            }
+                            if let Some(v) = result.sdk_version() {
+                                versions.insert(
+                                    "sdk".to_string(),
+                                    serde_json::Value::String(v.to_string()),
+                                );
+                            }
+                            serde_json::to_string_pretty(&versions)?
+                        }
+                        QueryProperty::Include => {
+                            let paths: Vec<&std::path::PathBuf> = result.all_include_paths();
+                            serde_json::to_string_pretty(&paths)?
+                        }
+                        QueryProperty::Lib => {
+                            let paths: Vec<&std::path::PathBuf> = result.all_lib_paths();
+                            serde_json::to_string_pretty(&paths)?
+                        }
+                    };
+                    println!("{}", json);
+                }
+                _ => {
+                    // Human-readable text output
+                    match property {
+                        QueryProperty::All => {
+                            print!("{}", result.format_summary());
+                            if !result.env_vars.is_empty() {
+                                println!("\nEnvironment Variables:");
+                                let mut sorted_vars: Vec<_> = result.env_vars.iter().collect();
+                                sorted_vars.sort_by_key(|(k, _)| k.as_str());
+                                for (key, value) in sorted_vars {
+                                    println!("  {}={}", key, value);
+                                }
+                            }
+                        }
+                        QueryProperty::Path => {
+                            println!("install_dir={}", result.install_dir.display());
+                            if let Some(ref msvc) = result.msvc {
+                                println!("msvc_path={}", msvc.install_path.display());
+                            }
+                            if let Some(ref sdk) = result.sdk {
+                                println!("sdk_path={}", sdk.install_path.display());
+                            }
+                        }
+                        QueryProperty::Env => {
+                            let mut sorted_vars: Vec<_> = result.env_vars.iter().collect();
+                            sorted_vars.sort_by_key(|(k, _)| k.as_str());
+                            for (key, value) in sorted_vars {
+                                println!("{}={}", key, value);
+                            }
+                        }
+                        QueryProperty::Tools => {
+                            let mut sorted_tools: Vec<_> = result.tools.iter().collect();
+                            sorted_tools.sort_by_key(|(k, _)| k.as_str());
+                            for (name, path) in sorted_tools {
+                                println!("{}={}", name, path.display());
+                            }
+                        }
+                        QueryProperty::Version => {
+                            if let Some(v) = result.msvc_version() {
+                                println!("msvc={}", v);
+                            }
+                            if let Some(v) = result.sdk_version() {
+                                println!("sdk={}", v);
+                            }
+                        }
+                        QueryProperty::Include => {
+                            for path in result.all_include_paths() {
+                                println!("{}", path.display());
+                            }
+                        }
+                        QueryProperty::Lib => {
+                            for path in result.all_lib_paths() {
+                                println!("{}", path.display());
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         Commands::Env { dir, format } => {

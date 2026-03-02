@@ -46,6 +46,7 @@ export default defineConfig({
                 { text: '设置环境', link: '/zh/guide/cli-setup' },
                 { text: '配置', link: '/zh/guide/cli-config' },
                 { text: '列表和清理', link: '/zh/guide/cli-list-clean' },
+                { text: '查询', link: '/zh/guide/cli-query' },
               ],
             },
             {
@@ -67,6 +68,7 @@ export default defineConfig({
                 { text: 'InstallInfo', link: '/zh/api/install-info' },
                 { text: 'MsvcEnvironment', link: '/zh/api/msvc-environment' },
                 { text: 'ToolPaths', link: '/zh/api/tool-paths' },
+                { text: 'QueryResult', link: '/zh/api/query-result' },
               ],
             },
           ],
@@ -133,6 +135,7 @@ export default defineConfig({
             { text: 'Setup Environment', link: '/guide/cli-setup' },
             { text: 'Configuration', link: '/guide/cli-config' },
             { text: 'List & Clean', link: '/guide/cli-list-clean' },
+            { text: 'Query', link: '/guide/cli-query' },
           ],
         },
         {
@@ -154,6 +157,7 @@ export default defineConfig({
             { text: 'InstallInfo', link: '/api/install-info' },
             { text: 'MsvcEnvironment', link: '/api/msvc-environment' },
             { text: 'ToolPaths', link: '/api/tool-paths' },
+            { text: 'QueryResult', link: '/api/query-result' },
           ],
         },
       ],
