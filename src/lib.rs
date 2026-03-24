@@ -88,6 +88,7 @@ pub mod downloader;
 pub mod env;
 pub mod error;
 pub mod installer;
+pub mod query;
 pub mod scripts;
 pub mod version;
 
@@ -102,6 +103,10 @@ pub use downloader::{
 pub use env::{get_env_vars, setup_environment, MsvcEnvironment, ToolPaths};
 pub use error::{MsvcKitError, Result};
 pub use installer::{extract_and_finalize_msvc, extract_and_finalize_sdk, InstallInfo};
+pub use query::{
+    query_installation, ComponentInfo, QueryComponent, QueryOptions, QueryOptionsBuilder,
+    QueryProperty, QueryResult,
+};
 pub use scripts::{
     generate_absolute_scripts, generate_portable_scripts, generate_script, save_scripts,
     GeneratedScripts, ScriptContext, ShellType,
