@@ -82,7 +82,7 @@ sha2 = "0.10"
 hex = "0.4"
 
 # Self-update via axoupdater (optional, compatible with cargo-dist releases)
-axoupdater = { version = "0.9", default-features = false, features = ["github_releases"], optional = true }
+axoupdater = { version = "0.10", default-features = false, features = ["github_releases"], optional = true }
 
 # Embedded KV database
 redb = "3"
