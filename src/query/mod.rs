@@ -40,10 +40,11 @@ use crate::installer::InstallInfo;
 use crate::version::{list_installed_msvc, list_installed_sdk, Architecture};
 
 /// Which component to query
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum QueryComponent {
     /// Query both MSVC and SDK (default)
+    #[default]
     All,
     /// Query only MSVC compiler
     Msvc,
@@ -51,11 +52,6 @@ pub enum QueryComponent {
     Sdk,
 }
 
-impl Default for QueryComponent {
-    fn default() -> Self {
-        Self::All
-    }
-}
 
 impl std::fmt::Display for QueryComponent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -84,10 +80,11 @@ impl std::str::FromStr for QueryComponent {
 }
 
 /// What property to query
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum QueryProperty {
     /// Return all information (default)
+    #[default]
     All,
     /// Return installation paths
     Path,
@@ -103,11 +100,6 @@ pub enum QueryProperty {
     Lib,
 }
 
-impl Default for QueryProperty {
-    fn default() -> Self {
-        Self::All
-    }
-}
 
 impl std::fmt::Display for QueryProperty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -348,13 +340,13 @@ impl QueryResult {
         output.push_str(&format!("Architecture: {}\n", self.arch));
 
         if let Some(ref msvc) = self.msvc {
-            output.push_str(&format!("\nMSVC Compiler:\n"));
+            output.push_str("\nMSVC Compiler:\n");
             output.push_str(&format!("  Version: {}\n", msvc.version));
             output.push_str(&format!("  Path: {}\n", msvc.install_path.display()));
         }
 
         if let Some(ref sdk) = self.sdk {
-            output.push_str(&format!("\nWindows SDK:\n"));
+            output.push_str("\nWindows SDK:\n");
             output.push_str(&format!("  Version: {}\n", sdk.version));
             output.push_str(&format!("  Path: {}\n", sdk.install_path.display()));
         }
