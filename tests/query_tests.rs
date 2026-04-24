@@ -151,10 +151,7 @@ fn test_query_property_parse_include() {
 #[test]
 fn test_query_property_parse_lib() {
     assert_eq!("lib".parse::<QueryProperty>().unwrap(), QueryProperty::Lib);
-    assert_eq!(
-        "libs".parse::<QueryProperty>().unwrap(),
-        QueryProperty::Lib
-    );
+    assert_eq!("libs".parse::<QueryProperty>().unwrap(), QueryProperty::Lib);
     assert_eq!(
         "lib-paths".parse::<QueryProperty>().unwrap(),
         QueryProperty::Lib
@@ -487,9 +484,7 @@ fn test_query_nonexistent_directory() {
 fn test_query_empty_directory() {
     let temp = TempDir::new().unwrap();
 
-    let options = QueryOptions::builder()
-        .install_dir(temp.path())
-        .build();
+    let options = QueryOptions::builder().install_dir(temp.path()).build();
 
     let result = query_installation(&options);
     assert!(result.is_err());
@@ -508,13 +503,7 @@ fn test_query_with_mock_msvc_installation() {
         .join("14.44.34823");
     std::fs::create_dir_all(msvc_version_dir.join("include")).unwrap();
     std::fs::create_dir_all(msvc_version_dir.join("lib").join("x64")).unwrap();
-    std::fs::create_dir_all(
-        msvc_version_dir
-            .join("bin")
-            .join("Hostx64")
-            .join("x64"),
-    )
-    .unwrap();
+    std::fs::create_dir_all(msvc_version_dir.join("bin").join("Hostx64").join("x64")).unwrap();
 
     let options = QueryOptions::builder()
         .install_dir(temp.path())
@@ -540,13 +529,7 @@ fn test_query_with_mock_sdk_installation() {
         .join("14.44.34823");
     std::fs::create_dir_all(msvc_version_dir.join("include")).unwrap();
     std::fs::create_dir_all(msvc_version_dir.join("lib").join("x64")).unwrap();
-    std::fs::create_dir_all(
-        msvc_version_dir
-            .join("bin")
-            .join("Hostx64")
-            .join("x64"),
-    )
-    .unwrap();
+    std::fs::create_dir_all(msvc_version_dir.join("bin").join("Hostx64").join("x64")).unwrap();
 
     // Create mock SDK directory structure
     let sdk_include = temp
