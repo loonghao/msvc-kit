@@ -52,7 +52,6 @@ pub enum QueryComponent {
     Sdk,
 }
 
-
 impl std::fmt::Display for QueryComponent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -71,10 +70,7 @@ impl std::str::FromStr for QueryComponent {
             "all" => Ok(QueryComponent::All),
             "msvc" => Ok(QueryComponent::Msvc),
             "sdk" | "winsdk" => Ok(QueryComponent::Sdk),
-            _ => Err(format!(
-                "Unknown component '{}'. Valid: all, msvc, sdk",
-                s
-            )),
+            _ => Err(format!("Unknown component '{}'. Valid: all, msvc, sdk", s)),
         }
     }
 }
@@ -99,7 +95,6 @@ pub enum QueryProperty {
     /// Return library paths
     Lib,
 }
-
 
 impl std::fmt::Display for QueryProperty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -336,7 +331,10 @@ impl QueryResult {
     pub fn format_summary(&self) -> String {
         let mut output = String::new();
 
-        output.push_str(&format!("Install directory: {}\n", self.install_dir.display()));
+        output.push_str(&format!(
+            "Install directory: {}\n",
+            self.install_dir.display()
+        ));
         output.push_str(&format!("Architecture: {}\n", self.arch));
 
         if let Some(ref msvc) = self.msvc {
@@ -489,7 +487,10 @@ fn find_msvc_component(
     };
 
     let install_path = version.install_path.clone().ok_or_else(|| {
-        MsvcKitError::InstallPath(format!("MSVC install path not found for {}", version.version))
+        MsvcKitError::InstallPath(format!(
+            "MSVC install path not found for {}",
+            version.version
+        ))
     })?;
 
     let arch_str = arch.to_string();
@@ -531,7 +532,10 @@ fn find_sdk_component(
     };
 
     let install_path = version.install_path.clone().ok_or_else(|| {
-        MsvcKitError::InstallPath(format!("SDK install path not found for {}", version.version))
+        MsvcKitError::InstallPath(format!(
+            "SDK install path not found for {}",
+            version.version
+        ))
     })?;
 
     let arch_str = arch.to_string();

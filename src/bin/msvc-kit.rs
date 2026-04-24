@@ -350,7 +350,10 @@ async fn main() -> anyhow::Result<()> {
 
             println!("\n🎉 Download complete!");
             println!("\nRun 'msvc-kit setup' to configure environment variables.");
-            println!("Run 'msvc-kit query --dir {}' to inspect installed paths.", target_dir.display());
+            println!(
+                "Run 'msvc-kit query --dir {}' to inspect installed paths.",
+                target_dir.display()
+            );
         }
 
         Commands::Setup {
@@ -763,9 +766,8 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let install_dir = dir.unwrap_or_else(|| config.install_dir.clone());
             let arch: Architecture = arch.parse().map_err(|e: String| anyhow::anyhow!(e))?;
-            let component: QueryComponent = component
-                .parse()
-                .map_err(|e: String| anyhow::anyhow!(e))?;
+            let component: QueryComponent =
+                component.parse().map_err(|e: String| anyhow::anyhow!(e))?;
             let property: QueryProperty =
                 property.parse().map_err(|e: String| anyhow::anyhow!(e))?;
 
@@ -794,9 +796,7 @@ async fn main() -> anyhow::Result<()> {
                 "json" => {
                     // JSON output: filter by property
                     let json = match property {
-                        QueryProperty::All => {
-                            serde_json::to_string_pretty(&result.to_json())?
-                        }
+                        QueryProperty::All => serde_json::to_string_pretty(&result.to_json())?,
                         QueryProperty::Path => {
                             let mut paths = serde_json::Map::new();
                             paths.insert(
@@ -817,12 +817,8 @@ async fn main() -> anyhow::Result<()> {
                             }
                             serde_json::to_string_pretty(&paths)?
                         }
-                        QueryProperty::Env => {
-                            serde_json::to_string_pretty(&result.env_vars)?
-                        }
-                        QueryProperty::Tools => {
-                            serde_json::to_string_pretty(&result.tools)?
-                        }
+                        QueryProperty::Env => serde_json::to_string_pretty(&result.env_vars)?,
+                        QueryProperty::Tools => serde_json::to_string_pretty(&result.tools)?,
                         QueryProperty::Version => {
                             let mut versions = serde_json::Map::new();
                             if let Some(v) = result.msvc_version() {
