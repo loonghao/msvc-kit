@@ -383,7 +383,7 @@ fn render_powershell(ctx: &ScriptContext) -> Result<String> {
     if !ctx.portable {
         let root = ctx.root_expr(ShellType::PowerShell);
         Ok(rendered
-            .replace("$BundleRoot", &format!("\"{}\"", root))
+            .replace("$BundleRoot", &root)
             .lines()
             .filter(|line| {
                 // Remove the BundleRoot setup lines for absolute scripts
@@ -414,7 +414,7 @@ fn render_bash(ctx: &ScriptContext) -> Result<String> {
     if !ctx.portable {
         let root = ctx.root_expr(ShellType::Bash);
         Ok(rendered
-            .replace("$BUNDLE_ROOT", &format!("\"{}\"", root))
+            .replace("$BUNDLE_ROOT", &root)
             .lines()
             .filter(|line| {
                 // Remove the BUNDLE_ROOT/SCRIPT_DIR setup lines for absolute scripts
