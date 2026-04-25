@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.2.11](https://github.com/loonghao/msvc-kit/compare/v0.2.10...v0.2.11) (2026-04-25)
+
+
+### Features
+
+* add dependency query module with CLI and API support ([ee9c9a3](https://github.com/loonghao/msvc-kit/commit/ee9c9a326ac5f92765f1fbdbf96a91542944bf43))
+* add dependency query module with CLI and API support ([5f55046](https://github.com/loonghao/msvc-kit/commit/5f55046ba744c2e1098e97bcfe8accf8a1342665))
+
+
+### Bug Fixes
+
+* remove double-quoting in PowerShell and Bash script path substitution ([5434213](https://github.com/loonghao/msvc-kit/commit/54342131e6f489d2a0b4f96a0d0cc59fc4271609)), closes [#96](https://github.com/loonghao/msvc-kit/issues/96)
+* resolve clippy derivable_impls and useless_format warnings ([52034c3](https://github.com/loonghao/msvc-kit/commit/52034c3b673a4c78e9a8c2e3b8bb61f92e364da6))
+
+
+### Dependencies
+
+* update Rust crate anyhow to v1.0.102 ([0fefa18](https://github.com/loonghao/msvc-kit/commit/0fefa181586405c228d243070f2e2b6ca77d270a))
+* update Rust crate axoupdater to 0.10 ([7cc49f6](https://github.com/loonghao/msvc-kit/commit/7cc49f64002995c0b802715baf1b366a59b64fb0))
+
+
+### Miscellaneous
+
+* apply rustfmt formatting ([975b078](https://github.com/loonghao/msvc-kit/commit/975b078c07bfd8b0aa8c94a65e53bb31adae0ec3))
+* **deps:** bump quinn-proto from 0.11.13 to 0.11.14 ([5c506cf](https://github.com/loonghao/msvc-kit/commit/5c506cf30cb2bed2223dccaf36fe5fe7a66f0294))
+* **deps:** bump rustls-webpki from 0.103.9 to 0.103.10 ([#100](https://github.com/loonghao/msvc-kit/issues/100)) ([1fef4ff](https://github.com/loonghao/msvc-kit/commit/1fef4ffcdb5a5d5d023aad8fee54d67593f50146))
+
 ## [0.2.10](https://github.com/loonghao/msvc-kit/compare/v0.2.9...v0.2.10) (2026-02-16)
 
 
