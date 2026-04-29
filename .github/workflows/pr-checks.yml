@@ -70,7 +70,7 @@ jobs:
         run: vx just build-target-release ${{ matrix.target }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact-name }}
           path: target/${{ matrix.target }}/release/msvc-kit.exe
