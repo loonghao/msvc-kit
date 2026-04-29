@@ -153,7 +153,7 @@ jobs:
           Copy-Item "target/release/msvc-kit.exe" "msvc-kit-x86_64-windows.exe"
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: msvc-kit-x86_64-windows
           path: msvc-kit-x86_64-windows.exe
@@ -198,7 +198,7 @@ jobs:
           echo "VERSION=${TAG#v}" >> $GITHUB_OUTPUT
 
       - name: Download release binary
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: msvc-kit-x86_64-windows
           path: artifacts/
