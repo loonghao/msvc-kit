@@ -40,21 +40,16 @@ use crate::installer::InstallInfo;
 use crate::version::{list_installed_msvc, list_installed_sdk, Architecture};
 
 /// Which component to query
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum QueryComponent {
     /// Query both MSVC and SDK (default)
+    #[default]
     All,
     /// Query only MSVC compiler
     Msvc,
     /// Query only Windows SDK
     Sdk,
-}
-
-impl Default for QueryComponent {
-    fn default() -> Self {
-        Self::All
-    }
 }
 
 impl std::fmt::Display for QueryComponent {
@@ -75,19 +70,17 @@ impl std::str::FromStr for QueryComponent {
             "all" => Ok(QueryComponent::All),
             "msvc" => Ok(QueryComponent::Msvc),
             "sdk" | "winsdk" => Ok(QueryComponent::Sdk),
-            _ => Err(format!(
-                "Unknown component '{}'. Valid: all, msvc, sdk",
-                s
-            )),
+            _ => Err(format!("Unknown component '{}'. Valid: all, msvc, sdk", s)),
         }
     }
 }
 
 /// What property to query
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum QueryProperty {
     /// Return all information (default)
+    #[default]
     All,
     /// Return installation paths
     Path,
@@ -101,12 +94,6 @@ pub enum QueryProperty {
     Include,
     /// Return library paths
     Lib,
-}
-
-impl Default for QueryProperty {
-    fn default() -> Self {
-        Self::All
-    }
 }
 
 impl std::fmt::Display for QueryProperty {
@@ -344,17 +331,20 @@ impl QueryResult {
     pub fn format_summary(&self) -> String {
         let mut output = String::new();
 
-        output.push_str(&format!("Install directory: {}\n", self.install_dir.display()));
+        output.push_str(&format!(
+            "Install directory: {}\n",
+            self.install_dir.display()
+        ));
         output.push_str(&format!("Architecture: {}\n", self.arch));
 
         if let Some(ref msvc) = self.msvc {
-            output.push_str(&format!("\nMSVC Compiler:\n"));
+            output.push_str("\nMSVC Compiler:\n");
             output.push_str(&format!("  Version: {}\n", msvc.version));
             output.push_str(&format!("  Path: {}\n", msvc.install_path.display()));
         }
 
         if let Some(ref sdk) = self.sdk {
-            output.push_str(&format!("\nWindows SDK:\n"));
+            output.push_str("\nWindows SDK:\n");
             output.push_str(&format!("  Version: {}\n", sdk.version));
             output.push_str(&format!("  Path: {}\n", sdk.install_path.display()));
         }
@@ -497,7 +487,10 @@ fn find_msvc_component(
     };
 
     let install_path = version.install_path.clone().ok_or_else(|| {
-        MsvcKitError::InstallPath(format!("MSVC install path not found for {}", version.version))
+        MsvcKitError::InstallPath(format!(
+            "MSVC install path not found for {}",
+            version.version
+        ))
     })?;
 
     let arch_str = arch.to_string();
@@ -539,7 +532,10 @@ fn find_sdk_component(
     };
 
     let install_path = version.install_path.clone().ok_or_else(|| {
-        MsvcKitError::InstallPath(format!("SDK install path not found for {}", version.version))
+        MsvcKitError::InstallPath(format!(
+            "SDK install path not found for {}",
+            version.version
+        ))
     })?;
 
     let arch_str = arch.to_string();

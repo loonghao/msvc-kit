@@ -123,6 +123,25 @@ msvc-kit download --no-verify
 
 > **注意：** MSVC 版本可以使用短格式（如 `14.44`），会自动解析到最新构建版本；也可以使用完整格式（如 `14.44.34823`）指定特定构建。
 
+#### Windows SDK 解压说明
+
+Windows SDK payload 中既有 MSI，也有放在同一目录下的 CAB source media。解压过程中请保持下载缓存完整；如果单独删除 CAB，Windows Installer 可能会因为找不到源介质而返回 `1619`。
+
+部分可选 SDK MSI（例如 Application Verifier、WinRT Intellisense）并不是 MSVC/Rust 编译工具链必需组件，并且在较长路径或受限环境下可能因为行政解压返回 `1603`。msvc-kit 会跳过这些可选 MSI，继续解压编译所需的 SDK headers、libraries、tools 和 redistributables。
+
+如果 SDK 解压仍失败：
+
+- 优先使用较短的目标目录，例如 `msvc-kit download --target C:\msvc-kit`。
+- 如果错误提示缺少 source media，清理 SDK 缓存后重试：`msvc-kit clean --all --cache`。
+- 如果错误码是 `1618`，等待 Windows Update 或其他安装程序完成后再运行。
+- 报告问题时设置 `RUST_LOG=debug`，这样日志里会包含失败的 MSI、目标目录和 SDK 解压计划。
+
+开发者指引：
+
+- 将 SDK CAB 视为 MSI 的 source media，而不是要单独解包的归档文件。
+- 除非某个可选 SDK MSI 被真实编译流程证明必需，否则保持可跳过/可排除。
+- 调用 `msiexec` 时尽量使用短路径或规范化路径，并为已知问题包名保留回归测试，避免 manifest 更新后再次引入同类问题。
+
 **版本兼容性速查：**
 
 | 场景 | MSVC | SDK | 命令 |
