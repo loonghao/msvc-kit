@@ -3,7 +3,7 @@
 use std::env;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -21,6 +21,111 @@ static MSI_EXTRACT_LOCK: Mutex<()> = Mutex::new(());
 const MSI_MAX_RETRIES: u32 = 5;
 /// Delay between retries in milliseconds
 const MSI_RETRY_DELAY_MS: u64 = 2000;
+
+fn explain_windows_installer_code(code: Option<i32>) -> &'static str {
+    match code {
+        Some(1603) => {
+            "Windows Installer error 1603 is a generic fatal install/extract failure. For Windows SDK administrative extraction this is often caused by optional SDK MSI payloads, path length limits, or a locked target directory."
+        }
+        Some(1618) => {
+            "Windows Installer error 1618 means another installation is already in progress."
+        }
+        Some(1619) => {
+            "Windows Installer error 1619 means the MSI package could not be opened. This is commonly caused by missing source media next to the MSI, an incomplete download cache, or an inaccessible path."
+        }
+        Some(1620) => {
+            "Windows Installer error 1620 means the package is not a valid Windows Installer package for this environment."
+        }
+        _ => "Windows Installer returned a non-zero exit status.",
+    }
+}
+
+fn prefer_shorter_path(original: &Path, candidate: Option<PathBuf>) -> PathBuf {
+    candidate
+        .filter(|path| path.as_os_str().len() < original.as_os_str().len())
+        .unwrap_or_else(|| original.to_path_buf())
+}
+
+#[cfg(windows)]
+fn windows_short_path(path: &Path) -> Option<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetShortPathNameW(
+            lpszLongPath: *const u16,
+            lpszShortPath: *mut u16,
+            cchBuffer: u32,
+        ) -> u32;
+    }
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+
+    // Ask Windows for the buffer size first. If 8.3 names are disabled for
+    // this path or any segment does not exist, this returns 0 and we fall back.
+    let needed = unsafe { GetShortPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0) };
+    if needed == 0 {
+        return None;
+    }
+
+    let mut buffer = vec![0u16; needed as usize];
+    let written = unsafe { GetShortPathNameW(wide.as_ptr(), buffer.as_mut_ptr(), needed) };
+    if written == 0 || written >= needed {
+        return None;
+    }
+
+    buffer.truncate(written as usize);
+    Some(PathBuf::from(OsString::from_wide(&buffer)))
+}
+
+#[cfg(windows)]
+fn msiexec_path_arg(path: &Path) -> String {
+    let selected = prefer_shorter_path(path, windows_short_path(path));
+    if selected != path {
+        tracing::debug!(
+            "Using Windows short path for msiexec: {:?} -> {:?}",
+            path,
+            selected
+        );
+    }
+    selected.to_string_lossy().into_owned()
+}
+
+#[cfg(windows)]
+fn format_msiexec_failure(
+    status: std::process::ExitStatus,
+    file_name: &str,
+    msi_path: &Path,
+    target_dir: &Path,
+) -> String {
+    let code = status.code();
+    let mut message = format!(
+        "msiexec failed with status: {} for {}\n{}\nSource MSI: {}\nTarget directory: {}",
+        status,
+        file_name,
+        explain_windows_installer_code(code),
+        msi_path.display(),
+        target_dir.display()
+    );
+
+    match code {
+        Some(1603) => message.push_str(
+            "\nNext steps: retry with a shorter --target-dir such as C:\\msvc-kit, make sure antivirus or another installer is not locking the target directory, then rerun the command.",
+        ),
+        Some(1619) => message.push_str(
+            "\nNext steps: delete the downloads/sdk cache for this SDK version and rerun so the MSI and its adjacent CAB source files are downloaded together.",
+        ),
+        Some(1618) => message.push_str(
+            "\nNext steps: wait for Windows Update or another installer to finish, then rerun msvc-kit.",
+        ),
+        _ => message.push_str(
+            "\nNext steps: rerun with RUST_LOG=debug for more context, or try a shorter target directory and a fresh download cache.",
+        ),
+    }
+
+    message
+}
 
 pub(crate) fn inner_progress_enabled() -> bool {
     matches!(
@@ -204,17 +309,15 @@ fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> 
     {
         use std::process::Command;
 
-        let msi_path_str = msi_path
-            .to_str()
-            .ok_or_else(|| MsvcKitError::Other("Invalid MSI path".to_string()))?;
-        let target_dir_str = format!("TARGETDIR={}", target_dir.display());
+        let msi_path_str = msiexec_path_arg(msi_path);
+        let target_dir_str = format!("TARGETDIR={}", msiexec_path_arg(target_dir));
 
         // Retry loop for handling error 1618 (another installation in progress)
         // This can happen if system Windows Installer is busy with other operations
         let mut last_error = None;
         for attempt in 1..=MSI_MAX_RETRIES {
             let status = Command::new("msiexec")
-                .args(["/a", msi_path_str, "/qn", &target_dir_str])
+                .args(["/a", &msi_path_str, "/qn", &target_dir_str])
                 .status()?;
 
             if status.success() {
@@ -253,9 +356,8 @@ fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> 
             if let Some(pb) = pb.as_ref() {
                 pb.abandon_with_message(format!("msiexec failed: {}", file_name));
             }
-            return Err(MsvcKitError::Other(format!(
-                "msiexec failed with status: {} for {}",
-                status, file_name
+            return Err(MsvcKitError::Other(format_msiexec_failure(
+                status, &file_name, msi_path, target_dir,
             )));
         }
     }
@@ -430,6 +532,82 @@ mod tests {
 
     #[allow(unused_imports)]
     use tempfile::TempDir;
+
+    #[test]
+    fn test_windows_installer_code_explanations() {
+        assert!(explain_windows_installer_code(Some(1603)).contains("fatal"));
+        assert!(explain_windows_installer_code(Some(1618)).contains("another installation"));
+        assert!(explain_windows_installer_code(Some(1619)).contains("could not be opened"));
+        assert!(explain_windows_installer_code(Some(1620)).contains("not a valid"));
+        assert!(explain_windows_installer_code(None).contains("non-zero"));
+    }
+
+    #[test]
+    fn test_prefer_shorter_path() {
+        let original = Path::new(
+            "C:/Users/example/AppData/Local/loonghao/msvc-kit/data/downloads/sdk/26100_arm64/Installers",
+        );
+        let shorter = PathBuf::from("C:/Users/EXAMPL~1/AppData/Local/LOONGH~1/MSVC-K~1/data");
+        let longer = PathBuf::from(format!(
+            "{}/extra/path/that/is/not/shorter",
+            original.display()
+        ));
+
+        assert_eq!(
+            prefer_shorter_path(original, Some(shorter.clone())),
+            shorter
+        );
+        assert_eq!(prefer_shorter_path(original, Some(longer)), original);
+        assert_eq!(prefer_shorter_path(original, None), original);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_msiexec_path_arg_returns_existing_path() {
+        let temp = TempDir::new().unwrap();
+        let selected = msiexec_path_arg(temp.path());
+
+        assert!(!selected.is_empty());
+        assert!(Path::new(&selected).exists());
+        assert!(selected.len() <= temp.path().to_string_lossy().len());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_format_msiexec_failure_includes_guidance() {
+        use std::process::Command;
+
+        let status_1603 = Command::new("cmd")
+            .args(["/C", "exit", "1603"])
+            .status()
+            .unwrap();
+        let message_1603 = format_msiexec_failure(
+            status_1603,
+            "WinRT Intellisense UAP - en-us-x86_en-us.msi",
+            Path::new(
+                "C:/msvc-kit/downloads/sdk/Installers/WinRT Intellisense UAP - en-us-x86_en-us.msi",
+            ),
+            Path::new("C:/msvc-kit"),
+        );
+        assert!(message_1603.contains("1603"));
+        assert!(message_1603.contains("shorter --target-dir"));
+        assert!(message_1603.contains("Source MSI:"));
+        assert!(message_1603.contains("Target directory:"));
+
+        let status_1619 = Command::new("cmd")
+            .args(["/C", "exit", "1619"])
+            .status()
+            .unwrap();
+        let message_1619 = format_msiexec_failure(
+            status_1619,
+            "Application Verifier arm64 External Package (DesktopEditions)-arm64_en-us.msi",
+            Path::new("C:/msvc-kit/downloads/sdk/Installers/Application Verifier arm64 External Package (DesktopEditions)-arm64_en-us.msi"),
+            Path::new("C:/msvc-kit"),
+        );
+        assert!(message_1619.contains("1619"));
+        assert!(message_1619.contains("downloads/sdk cache"));
+        assert!(message_1619.contains("adjacent CAB source files"));
+    }
 
     #[test]
     fn test_get_extractor() {

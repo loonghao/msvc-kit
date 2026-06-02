@@ -15,15 +15,20 @@ tokio = { version = "1", features = ["full"] }
 ## 快速示例
 
 ```rust
-use msvc_kit::{download_msvc, download_sdk, setup_environment, DownloadOptions};
+use msvc_kit::{
+    download_msvc, download_sdk, extract_and_finalize_msvc, extract_and_finalize_sdk,
+    setup_environment, DownloadOptions,
+};
 
 #[tokio::main]
 async fn main() -> msvc_kit::Result<()> {
     // 使用默认选项下载
     let options = DownloadOptions::default();
     
-    let msvc_info = download_msvc(&options).await?;
+    let mut msvc_info = download_msvc(&options).await?;
     let sdk_info = download_sdk(&options).await?;
+    extract_and_finalize_msvc(&mut msvc_info).await?;
+    extract_and_finalize_sdk(&sdk_info).await?;
     
     // 设置环境
     let env = setup_environment(&msvc_info, Some(&sdk_info))?;
@@ -47,6 +52,18 @@ pub async fn download_msvc(options: &DownloadOptions) -> Result<InstallInfo>;
 
 /// 下载 Windows SDK 组件
 pub async fn download_sdk(options: &DownloadOptions) -> Result<InstallInfo>;
+```
+
+`download_msvc` 和 `download_sdk` 只负责获取 payload。把返回的
+`InstallInfo` 传给 `setup_environment` 前，需要先调用
+`extract_and_finalize_msvc` / `extract_and_finalize_sdk` 完成解压和路径确认。
+
+```rust
+/// 解压已下载的 MSVC payload，并更新完整 MSVC 版本
+pub async fn extract_and_finalize_msvc(info: &mut InstallInfo) -> Result<()>;
+
+/// 解压已下载的 Windows SDK payload
+pub async fn extract_and_finalize_sdk(info: &InstallInfo) -> Result<()>;
 ```
 
 ### 环境函数

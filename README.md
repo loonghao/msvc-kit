@@ -122,6 +122,25 @@ msvc-kit download --no-verify
 
 > **Note:** MSVC version can be specified as short format (e.g., `14.44`) which auto-resolves to the latest build, or full format (e.g., `14.44.34823`) for a specific build.
 
+#### Windows SDK extraction notes
+
+Windows SDK payloads contain MSI installers plus adjacent CAB source media. Keep the download cache intact while extraction runs; deleting individual CAB files can make Windows Installer fail with `1619`.
+
+Some optional SDK MSI packages, such as Application Verifier and WinRT Intellisense, are not required for MSVC/Rust toolchains and may fail administrative extraction with `1603` on long or constrained paths. msvc-kit skips those optional MSI packages and keeps extracting the SDK headers, libraries, tools, and redistributables needed for compilation.
+
+If SDK extraction still fails:
+
+- Prefer a short target directory, for example `msvc-kit download --target C:\msvc-kit`.
+- Clear the SDK cache and retry if the error mentions missing source media: `msvc-kit clean --all --cache`.
+- Wait for Windows Update or another installer if the error is `1618`.
+- Set `RUST_LOG=debug` when reporting an issue so the failing MSI, target directory, and extraction plan are visible.
+
+Developer guidance:
+
+- Treat SDK CAB files as MSI source media, not standalone archives to unpack.
+- Keep non-essential SDK MSI packages opt-out/skippable unless they are needed by a verified compiler workflow.
+- Use short or normalized paths for `msiexec` whenever possible, and keep tests for known-problem package names so manifest changes do not reintroduce the regression.
+
 **Version Compatibility Quick Reference:**
 
 | Scenario | MSVC | SDK | Command |
@@ -287,7 +306,10 @@ msvc-kit = "0.2"
 ```
 
 ```rust
-use msvc_kit::{download_msvc, download_sdk, setup_environment, DownloadOptions};
+use msvc_kit::{
+    download_msvc, download_sdk, extract_and_finalize_msvc, extract_and_finalize_sdk,
+    setup_environment, DownloadOptions,
+};
 use msvc_kit::{list_available_versions, Architecture};
 
 #[tokio::main]
@@ -303,8 +325,10 @@ async fn main() -> msvc_kit::Result<()> {
         .arch(Architecture::X64)
         .build();
 
-    let msvc = download_msvc(&options).await?;
+    let mut msvc = download_msvc(&options).await?;
     let sdk = download_sdk(&options).await?;
+    extract_and_finalize_msvc(&mut msvc).await?;
+    extract_and_finalize_sdk(&sdk).await?;
     let env = setup_environment(&msvc, Some(&sdk))?;
 
     println!("cl.exe: {:?}", env.cl_exe_path());

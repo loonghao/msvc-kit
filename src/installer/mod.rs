@@ -5,10 +5,11 @@ mod extractor;
 use futures::{stream, StreamExt};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use crate::constants::{extraction as ext_const, progress as progress_const};
 use crate::error::Result;
@@ -19,6 +20,76 @@ use extractor::{
     extract_cab_with_progress, extract_msi_with_progress, extract_vsix_with_progress,
     inner_progress_enabled,
 };
+
+const SDK_OPTIONAL_MSI_SKIP_PATTERNS: &[&str] = &["application verifier", "winrt intellisense"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SdkExtractionAction {
+    Extract,
+    KeepSourceMedia,
+    SkipOptional,
+    SkipUnsupported,
+}
+
+fn classify_sdk_payload_for_extraction(file: &Path) -> SdkExtractionAction {
+    let extension = file
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    match extension.as_str() {
+        "msi" => {
+            let name = file
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_lowercase();
+            if SDK_OPTIONAL_MSI_SKIP_PATTERNS
+                .iter()
+                .any(|pattern| name.contains(pattern))
+            {
+                SdkExtractionAction::SkipOptional
+            } else {
+                SdkExtractionAction::Extract
+            }
+        }
+        "cab" => SdkExtractionAction::KeepSourceMedia,
+        _ => SdkExtractionAction::SkipUnsupported,
+    }
+}
+
+fn sdk_payloads_to_extract(files: &[PathBuf]) -> Vec<PathBuf> {
+    let mut extractable = Vec::new();
+    let mut source_media = 0usize;
+    let mut optional = 0usize;
+    let mut unsupported = 0usize;
+
+    for file in files {
+        match classify_sdk_payload_for_extraction(file) {
+            SdkExtractionAction::Extract => extractable.push(file.clone()),
+            SdkExtractionAction::KeepSourceMedia => source_media += 1,
+            SdkExtractionAction::SkipOptional => {
+                optional += 1;
+                tracing::info!(
+                    "Skipping optional Windows SDK MSI that is not required for MSVC toolchains: {:?}",
+                    file
+                );
+            }
+            SdkExtractionAction::SkipUnsupported => unsupported += 1,
+        }
+    }
+
+    tracing::info!(
+        "Windows SDK extraction plan: {} MSI files, {} source CAB files retained, {} optional MSI files skipped, {} unsupported payloads skipped",
+        extractable.len(),
+        source_media,
+        optional,
+        unsupported
+    );
+
+    extractable
+}
 
 /// Extract a package based on its file extension
 pub async fn extract_package(file: &Path, target_dir: &Path) -> Result<()> {
@@ -45,6 +116,30 @@ async fn extract_package_with_progress(
             Ok(())
         }
     }
+}
+
+async fn extraction_marker_path(marker_dir: &Path, file: &Path) -> PathBuf {
+    let name = file
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+    let metadata = tokio::fs::metadata(file).await.ok();
+    let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+    let modified = metadata
+        .and_then(|m| m.modified().ok())
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+
+    let mut hasher = Sha256::new();
+    hasher.update(file.to_string_lossy().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(size.to_le_bytes());
+    hasher.update(b"\0");
+    hasher.update(modified.to_le_bytes());
+    let fingerprint = hex::encode(hasher.finalize());
+
+    marker_dir.join(format!("{}-{}.done", name, &fingerprint[..16]))
 }
 
 /// Extract multiple packages with a unified progress bar (parallel extraction)
@@ -83,11 +178,7 @@ pub async fn extract_packages_with_progress(
     let mut cached_files = Vec::new();
 
     for file in files.iter() {
-        let name = file
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown");
-        let marker = marker_dir.join(format!("{}.done", name));
+        let marker = extraction_marker_path(&marker_dir, file).await;
 
         if marker.exists() {
             cached_files.push(file.clone());
@@ -114,7 +205,7 @@ pub async fn extract_packages_with_progress(
     let label = label.to_string();
     let pb = Arc::new(pb);
 
-    let results: Vec<Result<PathBuf>> = stream::iter(files_to_extract.into_iter())
+    let results: Vec<Result<PathBuf>> = stream::iter(files_to_extract)
         .map(|file| {
             let target_dir = target_dir.clone();
             let marker_dir = marker_dir.clone();
@@ -125,17 +216,12 @@ pub async fn extract_packages_with_progress(
             let total = total as usize;
 
             async move {
-                let name = file
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
+                let marker = extraction_marker_path(&marker_dir, &file).await;
 
                 // Extract the package
                 extract_package_with_progress(&file, &target_dir, false).await?;
 
                 // Mark as extracted
-                let marker = marker_dir.join(format!("{}.done", name));
                 let _ = tokio::fs::write(&marker, b"ok").await;
 
                 // Update progress
@@ -313,8 +399,12 @@ pub async fn extract_and_finalize_sdk(info: &InstallInfo) -> Result<()> {
 
     tracing::info!("Extracting Windows SDK packages to {:?}", target_dir);
 
-    // Extract all packages
-    extract_packages_with_progress(&info.downloaded_files, target_dir, "Windows SDK").await?;
+    // SDK payloads include bootstrap EXEs and source CAB media. The CAB files must
+    // stay beside their MSI files for msiexec, but they are not standalone archives
+    // to unpack. Some optional SDK MSIs also fail administrative extraction while
+    // being unnecessary for MSVC/Rust toolchains.
+    let sdk_files = sdk_payloads_to_extract(&info.downloaded_files);
+    extract_packages_with_progress(&sdk_files, target_dir, "Windows SDK").await?;
 
     Ok(())
 }
@@ -348,7 +438,8 @@ pub async fn install_sdk(info: &InstallInfo) -> Result<PathBuf> {
     );
 
     tokio::fs::create_dir_all(&info.install_path).await?;
-    extract_packages_with_progress(&info.downloaded_files, &info.install_path, "SDK").await?;
+    let sdk_files = sdk_payloads_to_extract(&info.downloaded_files);
+    extract_packages_with_progress(&sdk_files, &info.install_path, "Windows SDK").await?;
 
     Ok(info.install_path.clone())
 }
@@ -361,4 +452,118 @@ pub async fn cleanup_downloads(info: &InstallInfo) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn write_test_zip(path: &Path, entry_name: &str, contents: &[u8]) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file(entry_name, options).unwrap();
+        std::io::Write::write_all(&mut zip, contents).unwrap();
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn sdk_extraction_keeps_cabs_and_skips_optional_msi_payloads() {
+        let payloads = vec![
+            PathBuf::from("downloads/sdk/26100_arm64/winsdksetup.exe"),
+            PathBuf::from("downloads/sdk/26100_arm64/Installers/source.cab"),
+            PathBuf::from("downloads/sdk/26100_arm64/Installers/Application Verifier arm64 External Package (DesktopEditions)-arm64_en-us.msi"),
+            PathBuf::from("downloads/sdk/26100_arm64/Installers/WinRT Intellisense UAP - en-us-x86_en-us.msi"),
+            PathBuf::from("downloads/sdk/26100_arm64/Installers/Windows SDK Desktop Headers arm64-x86_en-us.msi"),
+        ];
+
+        assert_eq!(
+            classify_sdk_payload_for_extraction(&payloads[0]),
+            SdkExtractionAction::SkipUnsupported
+        );
+        assert_eq!(
+            classify_sdk_payload_for_extraction(&payloads[1]),
+            SdkExtractionAction::KeepSourceMedia
+        );
+        assert_eq!(
+            classify_sdk_payload_for_extraction(&payloads[2]),
+            SdkExtractionAction::SkipOptional
+        );
+        assert_eq!(
+            classify_sdk_payload_for_extraction(&payloads[3]),
+            SdkExtractionAction::SkipOptional
+        );
+        assert_eq!(
+            classify_sdk_payload_for_extraction(&payloads[4]),
+            SdkExtractionAction::Extract
+        );
+
+        let extractable = sdk_payloads_to_extract(&payloads);
+        assert_eq!(extractable, vec![payloads[4].clone()]);
+    }
+
+    #[tokio::test]
+    async fn install_sdk_legacy_path_uses_sdk_payload_filter() {
+        let temp = TempDir::new().unwrap();
+        let install_path = temp.path().join("sdk");
+        let info = InstallInfo {
+            component_type: "sdk".to_string(),
+            version: "10.0.26100.0".to_string(),
+            install_path: install_path.clone(),
+            downloaded_files: vec![
+                temp.path().join("Installers").join("source.cab"),
+                temp.path().join("Installers").join(
+                    "Application Verifier x64 External Package (DesktopEditions)-x64_en-us.msi",
+                ),
+                temp.path()
+                    .join("Installers")
+                    .join("WinRT Intellisense UAP - en-us-x86_en-us.msi"),
+            ],
+            arch: Architecture::X64,
+        };
+
+        let installed = install_sdk(&info).await.unwrap();
+
+        assert_eq!(installed, install_path);
+        assert!(installed.exists());
+    }
+
+    #[tokio::test]
+    async fn extraction_markers_include_source_fingerprint() {
+        let temp = TempDir::new().unwrap();
+        let first_dir = temp.path().join("downloads").join("sdk-1");
+        let second_dir = temp.path().join("downloads").join("sdk-2");
+        let target = temp.path().join("install");
+        std::fs::create_dir_all(&first_dir).unwrap();
+        std::fs::create_dir_all(&second_dir).unwrap();
+
+        let first_zip = first_dir.join("shared-name.zip");
+        let second_zip = second_dir.join("shared-name.zip");
+        write_test_zip(&first_zip, "first.txt", b"first");
+        write_test_zip(&second_zip, "second.txt", b"second");
+
+        extract_packages_with_progress(&[first_zip], &target, "test")
+            .await
+            .unwrap();
+        extract_packages_with_progress(&[second_zip], &target, "test")
+            .await
+            .unwrap();
+
+        assert!(target.join("first.txt").exists());
+        assert!(target.join("second.txt").exists());
+
+        let markers = std::fs::read_dir(target.join(".msvc-kit-extracted"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("shared-name.zip-")
+            })
+            .count();
+        assert_eq!(markers, 2);
+    }
 }

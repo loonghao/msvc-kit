@@ -15,15 +15,20 @@ tokio = { version = "1", features = ["full"] }
 ## Quick Example
 
 ```rust
-use msvc_kit::{download_msvc, download_sdk, setup_environment, DownloadOptions};
+use msvc_kit::{
+    download_msvc, download_sdk, extract_and_finalize_msvc, extract_and_finalize_sdk,
+    setup_environment, DownloadOptions,
+};
 
 #[tokio::main]
 async fn main() -> msvc_kit::Result<()> {
     // Download with default options
     let options = DownloadOptions::default();
     
-    let msvc_info = download_msvc(&options).await?;
+    let mut msvc_info = download_msvc(&options).await?;
     let sdk_info = download_sdk(&options).await?;
+    extract_and_finalize_msvc(&mut msvc_info).await?;
+    extract_and_finalize_sdk(&sdk_info).await?;
     
     // Setup environment
     let env = setup_environment(&msvc_info, Some(&sdk_info))?;
@@ -82,6 +87,18 @@ pub async fn download_msvc(options: &DownloadOptions) -> Result<InstallInfo>;
 
 /// Download Windows SDK components
 pub async fn download_sdk(options: &DownloadOptions) -> Result<InstallInfo>;
+```
+
+`download_msvc` and `download_sdk` only fetch payloads. Call
+`extract_and_finalize_msvc` / `extract_and_finalize_sdk` before passing the
+returned `InstallInfo` to `setup_environment`.
+
+```rust
+/// Extract downloaded MSVC payloads and update the full MSVC version
+pub async fn extract_and_finalize_msvc(info: &mut InstallInfo) -> Result<()>;
+
+/// Extract downloaded Windows SDK payloads
+pub async fn extract_and_finalize_sdk(info: &InstallInfo) -> Result<()>;
 ```
 
 ### Environment Functions
