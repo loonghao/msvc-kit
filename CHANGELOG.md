@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.2.12](https://github.com/loonghao/msvc-kit/compare/v0.2.11...v0.2.12) (2026-06-02)
+
+
+### Bug Fixes
+
+* handle optional Windows SDK MSI extraction failures ([9316b0b](https://github.com/loonghao/msvc-kit/commit/9316b0bf2a82b6582f9aaf67c824066cf7371f2f))
+
+
+### Dependencies
+
+* update Rust crate askama to 0.16.0 ([0ec0a00](https://github.com/loonghao/msvc-kit/commit/0ec0a0076174047909f941c8ed1f7e12b0bd54f6))
+* update Rust crate chrono to v0.4.44 ([d85cba5](https://github.com/loonghao/msvc-kit/commit/d85cba560379526935ac4e3f04451cdf5b9285d5))
+* update Rust crate clap to v4.6.1 ([ad94bdb](https://github.com/loonghao/msvc-kit/commit/ad94bdb5c0d159f7699ce281fec1ca5bb5a8e31c))
+* update Rust crate redb to v3.1.3 ([5c311e1](https://github.com/loonghao/msvc-kit/commit/5c311e17b2ffb0184eb6f4f8ba7b5d9ec7a71dd2))
+* update Rust crate reqwest to v0.13.4 ([30f4297](https://github.com/loonghao/msvc-kit/commit/30f42976a84d319fcedf4e16740dab9e4b0a1a3b))
+* update Rust crate serde_json to v1.0.150 ([e0dea40](https://github.com/loonghao/msvc-kit/commit/e0dea40c80e3609dfcdab478cdcc79212eb841dd))
+* update Rust crate tempfile to v3.27.0 ([0392211](https://github.com/loonghao/msvc-kit/commit/03922110621cf77336ccdbf2256c06bc5d6f34bc))
+* update Rust crate tokio to v1.52.3 ([358d15f](https://github.com/loonghao/msvc-kit/commit/358d15f80f7a067d36ead2a42aa3cb399903fc5b))
+* update Rust crate toml to v1.1.2 ([33efdbc](https://github.com/loonghao/msvc-kit/commit/33efdbcbf298106d5686496b884558fb85b63f10))
+* update Rust crate tracing-subscriber to v0.3.23 ([769fe98](https://github.com/loonghao/msvc-kit/commit/769fe988d24e8ddfa214f8e935aa629af04c8a19))
+* update Rust crate zip to v8.6.0 ([d969fd7](https://github.com/loonghao/msvc-kit/commit/d969fd70d6d4e6aed80994bdcfd009b632976ff8))
+
+
+### Miscellaneous
+
+* **deps-dev:** bump rollup from 4.54.0 to 4.59.0 in /docs ([c78d7c6](https://github.com/loonghao/msvc-kit/commit/c78d7c6960cc5c6d10c16bf60e0355ff07846c32))
+* **deps:** bump rand from 0.9.2 to 0.9.4 ([6e3cf72](https://github.com/loonghao/msvc-kit/commit/6e3cf72c10aa1ce50a8b83681e94b8d72bc95322))
+
 ## [0.2.11](https://github.com/loonghao/msvc-kit/compare/v0.2.10...v0.2.11) (2026-04-25)
 
 
