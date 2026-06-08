@@ -72,7 +72,7 @@ async-trait = "0.1.89"
 
 # Windows registry (Windows only)
 [target.'cfg(windows)'.dependencies]
-winreg = "0.55"
+winreg = "0.56"
 
 # Async utilities
 futures = "0.3"
