@@ -205,7 +205,13 @@ jobs:
 
       - name: Prepare release asset
         run: |
-          mv artifacts/msvc-kit-x86_64-windows/msvc-kit-x86_64-windows.exe ./msvc-kit-x86_64-windows.exe
+          EXE=$(find artifacts/ -name "msvc-kit-x86_64-windows.exe" -type f | head -1)
+          if [ -z "$EXE" ]; then
+            echo "Error: msvc-kit-x86_64-windows.exe not found in artifacts/"
+            ls -R artifacts/
+            exit 1
+          fi
+          mv "$EXE" ./msvc-kit-x86_64-windows.exe
 
       - name: Generate changelog
         id: changelog
