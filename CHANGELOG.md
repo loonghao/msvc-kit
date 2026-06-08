@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.13](https://github.com/loonghao/msvc-kit/compare/v0.2.12...v0.2.13) (2026-06-08)
+
+
+### Bug Fixes
+
+* sync Cargo.lock with Cargo.toml to fix --locked builds ([cb0c40e](https://github.com/loonghao/msvc-kit/commit/cb0c40e863cc749980fd0210cb66099ebf05a831))
+
 ## [0.2.12](https://github.com/loonghao/msvc-kit/compare/v0.2.11...v0.2.12) (2026-06-02)
 
 
