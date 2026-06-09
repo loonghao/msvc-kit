@@ -629,11 +629,7 @@ async fn main() -> anyhow::Result<()> {
             println!("  Parallel downloads: {}", config.parallel_downloads);
         }
 
-        Commands::InstallIntoVs {
-            dir,
-            check,
-            auto,
-        } => {
+        Commands::InstallIntoVs { dir, check, auto } => {
             if check {
                 // --check mode: enumerate VS instances and their registered MSVC versions
                 println!("🔍 Checking Visual Studio installations...\n");
@@ -660,24 +656,58 @@ async fn main() -> anyhow::Result<()> {
                         }
                         let writable =
                             msvc_kit::install_into_vs::can_write_to_vs(&inst.install_path);
-                        println!("   Writable: {}", if writable { "✅ yes" } else { "❌ no (requires admin)" });
+                        println!(
+                            "   Writable: {}",
+                            if writable {
+                                "✅ yes"
+                            } else {
+                                "❌ no (requires admin)"
+                            }
+                        );
                         println!();
                     }
                 }
             } else if auto {
                 // --auto mode: find the latest download in the config install dir
                 let install_dir = config.install_dir.clone();
-                println!("🔍 Auto-detecting downloaded MSVC toolchain in {}...\n", install_dir.display());
+                println!(
+                    "🔍 Auto-detecting downloaded MSVC toolchain in {}...\n",
+                    install_dir.display()
+                );
                 let msvc_versions = msvc_kit::version::list_installed_msvc(&install_dir);
                 if msvc_versions.is_empty() {
-                    anyhow::bail!("No downloaded MSVC toolchain found. Run 'msvc-kit download' first.");
+                    anyhow::bail!(
+                        "No downloaded MSVC toolchain found. Run 'msvc-kit download' first."
+                    );
                 }
                 for v in &msvc_versions {
-                    println!("   Found: {} at {}", v.version, v.install_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default());
+                    println!(
+                        "   Found: {} at {}",
+                        v.version,
+                        v.install_path
+                            .as_ref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default()
+                    );
                 }
                 let latest = &msvc_versions[0];
-                let source_dir = latest.install_path.as_ref().unwrap().parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap();
-                println!("\n📦 Installing latest MSVC {} from {}...\n", latest.version, source_dir.display());
+                let source_dir = latest
+                    .install_path
+                    .as_ref()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap();
+                println!(
+                    "\n📦 Installing latest MSVC {} from {}...\n",
+                    latest.version,
+                    source_dir.display()
+                );
 
                 let instances = msvc_kit::install_into_vs::find_vs_instances();
                 if instances.is_empty() {
@@ -687,7 +717,12 @@ async fn main() -> anyhow::Result<()> {
                 let target = &instances[0];
                 match msvc_kit::install_into_vs::install_into_vs(source_dir, target) {
                     Ok(result) => {
-                        println!("✅ MSVC {} installed into {} ({})", latest.version, target.label, target.install_path.display());
+                        println!(
+                            "✅ MSVC {} installed into {} ({})",
+                            latest.version,
+                            target.label,
+                            target.install_path.display()
+                        );
                         println!("\nRegistered MSVC toolchains:");
                         for v in &result.registered_versions {
                             println!("  - {}", v);
@@ -699,7 +734,10 @@ async fn main() -> anyhow::Result<()> {
                 }
             } else if let Some(ref source_dir) = dir {
                 // Explicit directory mode
-                println!("📦 Installing MSVC toolchain from {}...\n", source_dir.display());
+                println!(
+                    "📦 Installing MSVC toolchain from {}...\n",
+                    source_dir.display()
+                );
 
                 let instances = msvc_kit::install_into_vs::find_vs_instances();
                 if instances.is_empty() {
@@ -707,11 +745,20 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 for (i, inst) in instances.iter().enumerate() {
-                    println!("  [{}.] {} ({})", i + 1, inst.label, inst.install_path.display());
+                    println!(
+                        "  [{}.] {} ({})",
+                        i + 1,
+                        inst.label,
+                        inst.install_path.display()
+                    );
                 }
 
                 let target = &instances[0];
-                println!("\nUsing: {} ({})", target.label, target.install_path.display());
+                println!(
+                    "\nUsing: {} ({})",
+                    target.label,
+                    target.install_path.display()
+                );
 
                 match msvc_kit::install_into_vs::install_into_vs(source_dir, target) {
                     Ok(result) => {
@@ -1100,8 +1147,7 @@ async fn main() -> anyhow::Result<()> {
             updater.disable_installer_output();
 
             // Use GitHub token from environment if available to avoid 403 rate limiting
-            if let Ok(token) =
-                std::env::var("GITHUB_TOKEN").or_else(|_| std::env::var("GH_TOKEN"))
+            if let Ok(token) = std::env::var("GITHUB_TOKEN").or_else(|_| std::env::var("GH_TOKEN"))
             {
                 if !token.is_empty() {
                     updater.set_github_token(&token);
