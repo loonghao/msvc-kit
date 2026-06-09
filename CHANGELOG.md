@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.2.14](https://github.com/loonghao/msvc-kit/compare/v0.2.13...v0.2.14) (2026-06-09)
+
+
+### Features
+
+* add install-into-vs subcommand for UBT toolchain discovery ([cbae2dc](https://github.com/loonghao/msvc-kit/commit/cbae2dc62425a6db1af513b9036a5681cfb38c5d))
+
+
+### Bug Fixes
+
+* **ci:** use find to locate release binary regardless of download-artifact path ([00d27d8](https://github.com/loonghao/msvc-kit/commit/00d27d817b11e9b262753ce6fc51ab15fc95bd21))
+* remove emoji from all user-facing CLI output ([6f67658](https://github.com/loonghao/msvc-kit/commit/6f67658ec7e90cd000aa42aa405de53203a49ed5))
+* rustfmt and clippy fixes for CI ([025ac5c](https://github.com/loonghao/msvc-kit/commit/025ac5cba0375c358ebe06d85a949b16d1de7bfe))
+* use GITHUB_TOKEN/GH_TOKEN in self-update to avoid 403 rate limiting ([1bdfe09](https://github.com/loonghao/msvc-kit/commit/1bdfe099c7403e4975f0d4cfea9ebc983aedfae9))
+
+
+### Dependencies
+
+* update actions/deploy-pages action to v5 ([a1bab7a](https://github.com/loonghao/msvc-kit/commit/a1bab7a284341889bb326d929c731700f34f81fd))
+* update actions/upload-pages-artifact action to v5 ([449df0f](https://github.com/loonghao/msvc-kit/commit/449df0f3e0498f15123fed5168c5b818bc819e94))
+* update googleapis/release-please-action action to v5 ([d3ce0cf](https://github.com/loonghao/msvc-kit/commit/d3ce0cfdb6533a500ffae46c174cd46175fe7b4f))
+* update Rust crate redb to v4 ([6f99782](https://github.com/loonghao/msvc-kit/commit/6f99782281400c310825ab792e0e4222735961fd))
+* update Rust crate winreg to 0.56 ([2edcb39](https://github.com/loonghao/msvc-kit/commit/2edcb39676d8df22b8280e75edd11eafb4a497eb))
+
+
+### Documentation
+
+* add install-into-vs subcommand and UE CI integration docs ([9aec882](https://github.com/loonghao/msvc-kit/commit/9aec8821de982e8dad45ef2151bdf12c5a084dc7))
+
 ## [0.2.13](https://github.com/loonghao/msvc-kit/compare/v0.2.12...v0.2.13) (2026-06-08)
 
 
