@@ -263,6 +263,56 @@ msvc-kit update --version 0.2.5
 
 The self-update feature is powered by [axoupdater](https://github.com/axodotdev/axoupdater) and queries GitHub Releases directly. It is compatible with both cargo-dist and custom release workflows. The `self-update` feature is enabled by default and can be disabled with `--no-default-features` at build time.
 
+#### Install MSVC into Visual Studio (UBT Discovery)
+
+Unreal Build Tool (UBT) discovers MSVC toolchains by scanning Visual Studio's
+installation directory. When msvc-kit downloads a toolchain to a custom
+location (e.g. `C:\msvc-kit\14.36`), UBT cannot find it. The
+`install-into-vs` subcommand copies the toolchain files into VS's toolchain
+directory, making them visible to UBT.
+
+```bash
+# Check VS instances and their registered MSVC versions
+msvc-kit install-into-vs --check
+
+# Install a specific downloaded toolchain into VS
+msvc-kit install-into-vs --dir C:\msvc-kit\14.36
+
+# Auto-detect and install the latest downloaded toolchain
+msvc-kit install-into-vs --auto
+```
+
+> ⚠️  This command usually requires administrator privileges because it writes
+> to `C:\Program Files (x86)\Microsoft Visual Studio\...`.
+
+**UE 5.2 + MSVC 14.36 CI Integration Example:**
+
+When building Unreal Engine plugins via GitHub Actions self-hosted runners,
+msvc-kit can provision the exact MSVC version required by the engine:
+
+```yaml
+- name: Ensure MSVC 14.36 toolchain
+  shell: pwsh
+  run: |
+    $msvcKitExe = "C:\msvc-kit\bin\msvc-kit.exe"
+    $msvcTargetDir = "C:\msvc-kit\14.36"
+
+    # Download if not cached
+    if (-not (Test-Path "$msvcTargetDir\VC\Tools\MSVC")) {
+      & $msvcKitExe download --msvc-version 14.36 --no-sdk --dir $msvcTargetDir --arch x64
+    }
+
+    # Activate toolchain for this job
+    $envScript = & $msvcKitExe setup --script --shell powershell --dir $msvcTargetDir
+    if ($LASTEXITCODE -ne 0) { throw "msvc-kit setup failed" }
+    Invoke-Expression ($envScript -join "`n")
+
+    # Install into VS for UBT discovery (requires admin)
+    & $msvcKitExe install-into-vs --dir $msvcTargetDir
+```
+
+### Caching & Progress
+
 ### Caching & Progress
 
 | Cache Type | Location | Description |
