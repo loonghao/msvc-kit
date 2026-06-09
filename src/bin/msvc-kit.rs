@@ -1099,6 +1099,15 @@ async fn main() -> anyhow::Result<()> {
             // Disable installer output noise
             updater.disable_installer_output();
 
+            // Use GitHub token from environment if available to avoid 403 rate limiting
+            if let Ok(token) =
+                std::env::var("GITHUB_TOKEN").or_else(|_| std::env::var("GH_TOKEN"))
+            {
+                if !token.is_empty() {
+                    updater.set_github_token(&token);
+                }
+            }
+
             if let Some(ref target_version) = version {
                 updater.configure_version_specifier(axoupdater::UpdateRequest::SpecificVersion(
                     target_version.clone(),
@@ -1120,7 +1129,12 @@ async fn main() -> anyhow::Result<()> {
                         println!("\n✅ You are running the latest version.");
                     }
                     Err(e) => {
-                        println!("⚠️  Failed to check for updates: {}", e);
+                        let err_msg = format!("{}", e);
+                        println!("Failed to check for updates: {}", err_msg);
+                        if err_msg.contains("403") || err_msg.contains("rate") {
+                            println!("\nHint: GitHub API rate limit may have been reached.");
+                            println!("Set GITHUB_TOKEN or GH_TOKEN environment variable to authenticate.");
+                        }
                     }
                 }
             } else {
@@ -1139,7 +1153,13 @@ async fn main() -> anyhow::Result<()> {
                         );
                     }
                     Err(e) => {
-                        anyhow::bail!("Failed to update: {}", e);
+                        let err_msg = format!("{}", e);
+                        let mut hint = String::new();
+                        if err_msg.contains("403") || err_msg.contains("rate") {
+                            hint = "\nHint: GitHub API rate limit may have been reached. Set GITHUB_TOKEN or GH_TOKEN environment variable to authenticate."
+                                .to_string();
+                        }
+                        anyhow::bail!("Failed to update: {}{}", e, hint);
                     }
                 }
             }

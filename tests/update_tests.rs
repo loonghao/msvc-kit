@@ -142,4 +142,34 @@ mod axoupdater_config_tests {
         // Test LatestMaybePrerelease
         let _pre = UpdateRequest::LatestMaybePrerelease;
     }
+
+    #[test]
+    fn test_set_github_token_configures_auth() {
+        let source = ReleaseSource {
+            release_type: ReleaseSourceType::GitHub,
+            owner: "loonghao".to_string(),
+            name: "msvc-kit".to_string(),
+            app_name: "msvc-kit".to_string(),
+        };
+
+        let mut updater = AxoUpdater::new_for("msvc-kit");
+        updater.set_release_source(source);
+        updater.set_github_token("test-token-123");
+
+        // Verify updater is still functional after setting token
+        let result = updater.set_current_version("0.2.5".parse().unwrap());
+        assert!(
+            result.is_ok(),
+            "set_current_version should succeed after setting github token"
+        );
+    }
+
+    #[test]
+    fn test_set_github_token_empty_string_does_not_panic() {
+        let mut updater = AxoUpdater::new_for("msvc-kit");
+        updater.set_github_token("");
+
+        let result = updater.set_current_version("0.2.5".parse().unwrap());
+        assert!(result.is_ok());
+    }
 }
