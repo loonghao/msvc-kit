@@ -259,7 +259,7 @@ pub fn find_msvc_kit_version(source_dir: &Path) -> Option<PathBuf> {
     std::fs::read_dir(&msvc_dir)
         .ok()?
         .filter_map(|e| e.ok())
-        .find(|e| e.file_type().ok().map_or(false, |t| t.is_dir()))
+        .find(|e| e.file_type().ok().is_some_and(|t| t.is_dir()))
         .map(|e| e.path())
 }
 
