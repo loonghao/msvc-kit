@@ -87,6 +87,7 @@ pub mod constants;
 pub mod downloader;
 pub mod env;
 pub mod error;
+pub mod install_into_vs;
 pub mod installer;
 pub mod query;
 pub mod scripts;
@@ -115,3 +116,9 @@ pub use version::{Architecture, MsvcVersion, SdkVersion};
 
 // Re-export bundle types
 pub use bundle::{create_bundle, discover_bundle, BundleLayout, BundleOptions, BundleResult};
+
+// Re-export install_into_vs types
+pub use install_into_vs::{
+    can_write_to_vs, find_msvc_kit_version, find_vs_instances, install_into_vs,
+    list_vs_msvc_versions, VsInstallResult, VsInstance,
+};

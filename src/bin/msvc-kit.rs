@@ -203,6 +203,21 @@ enum Commands {
         format: String,
     },
 
+    /// Install a downloaded MSVC toolchain into Visual Studio (UBT discovery)
+    InstallIntoVs {
+        /// Downloaded MSVC toolchain directory (e.g. C:\msvc-kit\14.36)
+        #[arg(short, long)]
+        dir: Option<PathBuf>,
+
+        /// Only check installed VS instances and registered MSVC versions
+        #[arg(long)]
+        check: bool,
+
+        /// Auto-detect latest downloaded toolchain in the config install dir
+        #[arg(long)]
+        auto: bool,
+    },
+
     /// Create a portable bundle with MSVC toolchain (downloads components locally)
     Bundle {
         /// Output directory for the bundle
@@ -612,6 +627,116 @@ async fn main() -> anyhow::Result<()> {
             println!("  Default architecture: {}", config.default_arch);
             println!("  Verify hashes: {}", config.verify_hashes);
             println!("  Parallel downloads: {}", config.parallel_downloads);
+        }
+
+        Commands::InstallIntoVs {
+            dir,
+            check,
+            auto,
+        } => {
+            if check {
+                // --check mode: enumerate VS instances and their registered MSVC versions
+                println!("🔍 Checking Visual Studio installations...\n");
+                let instances = msvc_kit::install_into_vs::find_vs_instances();
+                if instances.is_empty() {
+                    println!("❌ No Visual Studio instances with VC Tools found.");
+                    println!("\nTroubleshooting:");
+                    println!("  - Ensure Visual Studio BuildTools 2022 is installed");
+                    println!("  - Ensure the \"VC++ tools\" workload is selected");
+                    println!("  - Run from an elevated (admin) prompt if needed");
+                } else {
+                    for inst in &instances {
+                        println!("📁 {} ({})", inst.label, inst.version);
+                        println!("   Path: {}", inst.install_path.display());
+                        let versions =
+                            msvc_kit::install_into_vs::list_vs_msvc_versions(&inst.install_path);
+                        if versions.is_empty() {
+                            println!("   Registered MSVC: (none)");
+                        } else {
+                            println!("   Registered MSVC:");
+                            for v in &versions {
+                                println!("    - {}", v);
+                            }
+                        }
+                        let writable =
+                            msvc_kit::install_into_vs::can_write_to_vs(&inst.install_path);
+                        println!("   Writable: {}", if writable { "✅ yes" } else { "❌ no (requires admin)" });
+                        println!();
+                    }
+                }
+            } else if auto {
+                // --auto mode: find the latest download in the config install dir
+                let install_dir = config.install_dir.clone();
+                println!("🔍 Auto-detecting downloaded MSVC toolchain in {}...\n", install_dir.display());
+                let msvc_versions = msvc_kit::version::list_installed_msvc(&install_dir);
+                if msvc_versions.is_empty() {
+                    anyhow::bail!("No downloaded MSVC toolchain found. Run 'msvc-kit download' first.");
+                }
+                for v in &msvc_versions {
+                    println!("   Found: {} at {}", v.version, v.install_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default());
+                }
+                let latest = &msvc_versions[0];
+                let source_dir = latest.install_path.as_ref().unwrap().parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap();
+                println!("\n📦 Installing latest MSVC {} from {}...\n", latest.version, source_dir.display());
+
+                let instances = msvc_kit::install_into_vs::find_vs_instances();
+                if instances.is_empty() {
+                    anyhow::bail!("No Visual Studio instance found. Cannot install.");
+                }
+
+                let target = &instances[0];
+                match msvc_kit::install_into_vs::install_into_vs(source_dir, target) {
+                    Ok(result) => {
+                        println!("✅ MSVC {} installed into {} ({})", latest.version, target.label, target.install_path.display());
+                        println!("\nRegistered MSVC toolchains:");
+                        for v in &result.registered_versions {
+                            println!("  - {}", v);
+                        }
+                    }
+                    Err(e) => {
+                        anyhow::bail!("Installation failed: {}\n\nTip: Run from an elevated (admin) command prompt.", e);
+                    }
+                }
+            } else if let Some(ref source_dir) = dir {
+                // Explicit directory mode
+                println!("📦 Installing MSVC toolchain from {}...\n", source_dir.display());
+
+                let instances = msvc_kit::install_into_vs::find_vs_instances();
+                if instances.is_empty() {
+                    anyhow::bail!("No Visual Studio instance found. Cannot install.");
+                }
+
+                for (i, inst) in instances.iter().enumerate() {
+                    println!("  [{}.] {} ({})", i + 1, inst.label, inst.install_path.display());
+                }
+
+                let target = &instances[0];
+                println!("\nUsing: {} ({})", target.label, target.install_path.display());
+
+                match msvc_kit::install_into_vs::install_into_vs(source_dir, target) {
+                    Ok(result) => {
+                        println!("✅ Installation complete!");
+                        println!("\nRegistered MSVC toolchains:");
+                        for v in &result.registered_versions {
+                            println!("  - {}", v);
+                        }
+                    }
+                    Err(e) => {
+                        anyhow::bail!("Installation failed: {}\n\nTip: Run from an elevated (admin) command prompt.", e);
+                    }
+                }
+            } else {
+                // No flags: show usage
+                println!("msvc-kit install-into-vs: Install a downloaded MSVC toolchain into Visual Studio\n");
+                println!("Usage:");
+                println!("  msvc-kit install-into-vs --check          # Check VS instances and registered versions");
+                println!("  msvc-kit install-into-vs --dir <PATH>     # Install from a specific directory");
+                println!("  msvc-kit install-into-vs --auto           # Auto-detect and install latest download\n");
+                println!("Examples:");
+                println!("  msvc-kit install-into-vs --dir C:\\msvc-kit\\14.36");
+                println!("  msvc-kit install-into-vs --auto\n");
+                println!("⚠️  This command usually requires administrator privileges.");
+            }
         }
 
         Commands::Bundle {
