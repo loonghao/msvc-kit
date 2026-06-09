@@ -258,7 +258,7 @@ impl VsManifest {
         let _ = done_tx.send(());
 
         spinner.finish_with_message(format!(
-            "✓ Loaded manifest with {} packages",
+            "Loaded manifest with {} packages",
             manifest.packages.len()
         ));
 

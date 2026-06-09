@@ -313,7 +313,7 @@ async fn main() -> anyhow::Result<()> {
                 .iter()
                 .filter_map(|s| {
                     s.parse::<MsvcComponent>()
-                        .map_err(|e| eprintln!("⚠️  Warning: {}", e))
+                        .map_err(|e| eprintln!("Warning: {}", e))
                         .ok()
                 })
                 .collect();
@@ -334,36 +334,36 @@ async fn main() -> anyhow::Result<()> {
                 exclude_patterns,
             };
 
-            println!("📦 msvc-kit - Downloading MSVC Build Tools\n");
+            println!("msvc-kit - Downloading MSVC Build Tools\n");
             println!("Target directory: {}", target_dir.display());
             println!("Architecture: {}", arch);
             println!();
 
             if !no_msvc {
-                println!("⬇️  Downloading MSVC compiler...");
+                println!("Downloading MSVC compiler...");
                 let mut msvc_info = download_msvc(&options).await?;
-                println!("📁 Extracting MSVC packages...");
+                println!("Extracting MSVC packages...");
                 msvc_kit::extract_and_finalize_msvc(&mut msvc_info).await?;
                 println!(
-                    "✅ MSVC {} installed to {}",
+                    "MSVC {} installed to {}",
                     msvc_info.version,
                     target_dir.display()
                 );
             }
 
             if !no_sdk {
-                println!("\n⬇️  Downloading Windows SDK...");
+                println!("\nDownloading Windows SDK...");
                 let sdk_info = download_sdk(&options).await?;
-                println!("📁 Extracting SDK packages...");
+                println!("Extracting SDK packages...");
                 msvc_kit::extract_and_finalize_sdk(&sdk_info).await?;
                 println!(
-                    "✅ Windows SDK {} installed to {}",
+                    "Windows SDK {} installed to {}",
                     sdk_info.version,
                     target_dir.display()
                 );
             }
 
-            println!("\n🎉 Download complete!");
+            println!("\nDownload complete!");
             println!("\nRun 'msvc-kit setup' to configure environment variables.");
             println!(
                 "Run 'msvc-kit query --dir {}' to inspect installed paths.",
@@ -446,7 +446,7 @@ async fn main() -> anyhow::Result<()> {
                 #[cfg(windows)]
                 {
                     msvc_kit::env::write_to_registry(&env)?;
-                    println!("✅ Environment variables written to registry.");
+                    println!("Environment variables written to registry.");
                     println!("Please restart your terminal for changes to take effect.");
                 }
                 #[cfg(not(windows))]
@@ -458,7 +458,7 @@ async fn main() -> anyhow::Result<()> {
                 let shell_type = ShellType::detect();
                 let _script = generate_activation_script(&env, shell_type)?;
 
-                println!("📋 MSVC Environment Setup\n");
+                println!("MSVC Environment Setup\n");
                 println!("To activate the MSVC environment, run:\n");
 
                 match shell_type {
@@ -488,7 +488,7 @@ async fn main() -> anyhow::Result<()> {
             let install_dir = dir.unwrap_or_else(|| config.install_dir.clone());
 
             if available {
-                println!("📋 Fetching available versions from Microsoft...\n");
+                println!("Fetching available versions from Microsoft...\n");
 
                 let manifest = msvc_kit::downloader::VsManifest::fetch().await?;
 
@@ -499,7 +499,7 @@ async fn main() -> anyhow::Result<()> {
                     println!("Latest Windows SDK version: {}", sdk);
                 }
             } else {
-                println!("📋 Installed versions in {}\n", install_dir.display());
+                println!("Installed versions in {}\n", install_dir.display());
 
                 let msvc_versions = list_installed_msvc(&install_dir);
                 let sdk_versions = list_installed_sdk(&install_dir);
@@ -535,11 +535,11 @@ async fn main() -> anyhow::Result<()> {
             let install_dir = dir.unwrap_or_else(|| config.install_dir.clone());
 
             if all {
-                println!("🗑️  Removing all installed versions...");
+                println!("Removing all installed versions...");
 
                 if install_dir.exists() {
                     tokio::fs::remove_dir_all(&install_dir).await?;
-                    println!("✅ Removed {}", install_dir.display());
+                    println!("Removed {}", install_dir.display());
                 }
             } else {
                 if let Some(version) = msvc_version {
@@ -550,9 +550,9 @@ async fn main() -> anyhow::Result<()> {
                         .join(&version);
                     if msvc_path.exists() {
                         tokio::fs::remove_dir_all(&msvc_path).await?;
-                        println!("✅ Removed MSVC {}", version);
+                        println!("Removed MSVC {}", version);
                     } else {
-                        println!("⚠️  MSVC {} not found", version);
+                        println!("MSVC {} not found", version);
                     }
                 }
 
@@ -574,9 +574,9 @@ async fn main() -> anyhow::Result<()> {
                                 tokio::fs::remove_dir_all(&path).await?;
                             }
                         }
-                        println!("✅ Removed Windows SDK {}", version);
+                        println!("Removed Windows SDK {}", version);
                     } else {
-                        println!("⚠️  Windows SDK {} not found", version);
+                        println!("Windows SDK {} not found", version);
                     }
                 }
             }
@@ -585,7 +585,7 @@ async fn main() -> anyhow::Result<()> {
                 let cache_dir = install_dir.join("downloads");
                 if cache_dir.exists() {
                     tokio::fs::remove_dir_all(&cache_dir).await?;
-                    println!("✅ Removed download cache");
+                    println!("Removed download cache");
                 }
             }
         }
@@ -599,7 +599,7 @@ async fn main() -> anyhow::Result<()> {
             if reset {
                 config = MsvcKitConfig::default();
                 save_config(&config)?;
-                println!("✅ Configuration reset to defaults");
+                println!("Configuration reset to defaults");
             } else if set_dir.is_some() || set_msvc.is_some() || set_sdk.is_some() {
                 if let Some(dir) = set_dir {
                     config.install_dir = dir;
@@ -611,10 +611,10 @@ async fn main() -> anyhow::Result<()> {
                     config.default_sdk_version = Some(sdk);
                 }
                 save_config(&config)?;
-                println!("✅ Configuration updated");
+                println!("Configuration updated");
             }
 
-            println!("📋 Current configuration:\n");
+            println!("Current configuration:\n");
             println!("  Install directory: {}", config.install_dir.display());
             println!(
                 "  Default MSVC version: {}",
@@ -632,17 +632,17 @@ async fn main() -> anyhow::Result<()> {
         Commands::InstallIntoVs { dir, check, auto } => {
             if check {
                 // --check mode: enumerate VS instances and their registered MSVC versions
-                println!("🔍 Checking Visual Studio installations...\n");
+                println!("Checking Visual Studio installations...\n");
                 let instances = msvc_kit::install_into_vs::find_vs_instances();
                 if instances.is_empty() {
-                    println!("❌ No Visual Studio instances with VC Tools found.");
+                    println!("No Visual Studio instances with VC Tools found.");
                     println!("\nTroubleshooting:");
                     println!("  - Ensure Visual Studio BuildTools 2022 is installed");
                     println!("  - Ensure the \"VC++ tools\" workload is selected");
                     println!("  - Run from an elevated (admin) prompt if needed");
                 } else {
                     for inst in &instances {
-                        println!("📁 {} ({})", inst.label, inst.version);
+                        println!("{} ({})", inst.label, inst.version);
                         println!("   Path: {}", inst.install_path.display());
                         let versions =
                             msvc_kit::install_into_vs::list_vs_msvc_versions(&inst.install_path);
@@ -659,9 +659,9 @@ async fn main() -> anyhow::Result<()> {
                         println!(
                             "   Writable: {}",
                             if writable {
-                                "✅ yes"
+                                "yes"
                             } else {
-                                "❌ no (requires admin)"
+                                "no (requires admin)"
                             }
                         );
                         println!();
@@ -671,7 +671,7 @@ async fn main() -> anyhow::Result<()> {
                 // --auto mode: find the latest download in the config install dir
                 let install_dir = config.install_dir.clone();
                 println!(
-                    "🔍 Auto-detecting downloaded MSVC toolchain in {}...\n",
+                    "Auto-detecting downloaded MSVC toolchain in {}...\n",
                     install_dir.display()
                 );
                 let msvc_versions = msvc_kit::version::list_installed_msvc(&install_dir);
@@ -704,7 +704,7 @@ async fn main() -> anyhow::Result<()> {
                     .parent()
                     .unwrap();
                 println!(
-                    "\n📦 Installing latest MSVC {} from {}...\n",
+                    "\nInstalling latest MSVC {} from {}...\n",
                     latest.version,
                     source_dir.display()
                 );
@@ -718,7 +718,7 @@ async fn main() -> anyhow::Result<()> {
                 match msvc_kit::install_into_vs::install_into_vs(source_dir, target) {
                     Ok(result) => {
                         println!(
-                            "✅ MSVC {} installed into {} ({})",
+                            "MSVC {} installed into {} ({})",
                             latest.version,
                             target.label,
                             target.install_path.display()
@@ -735,7 +735,7 @@ async fn main() -> anyhow::Result<()> {
             } else if let Some(ref source_dir) = dir {
                 // Explicit directory mode
                 println!(
-                    "📦 Installing MSVC toolchain from {}...\n",
+                    "Installing MSVC toolchain from {}...\n",
                     source_dir.display()
                 );
 
@@ -762,7 +762,7 @@ async fn main() -> anyhow::Result<()> {
 
                 match msvc_kit::install_into_vs::install_into_vs(source_dir, target) {
                     Ok(result) => {
-                        println!("✅ Installation complete!");
+                        println!("Installation complete!");
                         println!("\nRegistered MSVC toolchains:");
                         for v in &result.registered_versions {
                             println!("  - {}", v);
@@ -782,7 +782,7 @@ async fn main() -> anyhow::Result<()> {
                 println!("Examples:");
                 println!("  msvc-kit install-into-vs --dir C:\\msvc-kit\\14.36");
                 println!("  msvc-kit install-into-vs --auto\n");
-                println!("⚠️  This command usually requires administrator privileges.");
+                println!("This command usually requires administrator privileges.");
             }
         }
 
@@ -796,7 +796,7 @@ async fn main() -> anyhow::Result<()> {
             zip,
         } => {
             if !accept_license {
-                println!("⚠️  License Agreement Required\n");
+                println!("License Agreement Required\n");
                 println!(
                     "The MSVC compiler and Windows SDK are subject to Microsoft's license terms:"
                 );
@@ -816,7 +816,7 @@ async fn main() -> anyhow::Result<()> {
                 .transpose()?
                 .unwrap_or_else(Architecture::host);
 
-            println!("📦 msvc-kit - Creating Portable MSVC Bundle\n");
+            println!("msvc-kit - Creating Portable MSVC Bundle\n");
             println!("Output directory: {}", output.display());
             println!("Target architecture: {}", arch);
             println!("Host architecture: {}", host_arch);
@@ -843,20 +843,20 @@ async fn main() -> anyhow::Result<()> {
             };
 
             // Download and extract MSVC
-            println!("⬇️  Downloading MSVC compiler...");
+            println!("Downloading MSVC compiler...");
             let mut msvc_info = download_msvc(&options).await?;
-            println!("📁 Extracting MSVC packages...");
+            println!("Extracting MSVC packages...");
             msvc_kit::extract_and_finalize_msvc(&mut msvc_info).await?;
             let msvc_ver = msvc_info.version.clone();
-            println!("✅ MSVC {} installed", msvc_ver);
+            println!("MSVC {} installed", msvc_ver);
 
             // Download and extract SDK
-            println!("\n⬇️  Downloading Windows SDK...");
+            println!("\nDownloading Windows SDK...");
             let sdk_info = download_sdk(&options).await?;
-            println!("📁 Extracting SDK packages...");
+            println!("Extracting SDK packages...");
             msvc_kit::extract_and_finalize_sdk(&sdk_info).await?;
             let sdk_ver = sdk_info.version.clone();
-            println!("✅ Windows SDK {} installed", sdk_ver);
+            println!("Windows SDK {} installed", sdk_ver);
 
             // Create bundle layout
             let layout = BundleLayout::from_root_with_versions(
@@ -877,7 +877,7 @@ async fn main() -> anyhow::Result<()> {
             let target_exe = output.join(exe_name);
             tokio::fs::copy(&current_exe, &target_exe).await?;
 
-            println!("\n✅ Bundle created successfully!");
+            println!("\nBundle created successfully!");
             println!("\nContents:");
             println!("  {}/", output.display());
             println!("  ├── {}", exe_name);
@@ -889,7 +889,7 @@ async fn main() -> anyhow::Result<()> {
             println!("  └── Windows Kits/10/");
 
             if zip {
-                println!("\n📦 Creating zip archive...");
+                println!("\nCreating zip archive...");
                 let zip_name = format!(
                     "msvc-kit-bundle-{}-{}-{}.zip",
                     msvc_ver.replace('.', "_"),
@@ -913,18 +913,18 @@ async fn main() -> anyhow::Result<()> {
                         ])
                         .status()?;
                     if status.success() {
-                        println!("✅ Created: {}", zip_path.display());
+                        println!("Created: {}", zip_path.display());
                     } else {
-                        println!("⚠️  Failed to create zip archive");
+                        println!("Failed to create zip archive");
                     }
                 }
                 #[cfg(not(windows))]
                 {
-                    println!("⚠️  Zip creation is only supported on Windows");
+                    println!("Zip creation is only supported on Windows");
                 }
             }
 
-            println!("\n🎉 Done! Run setup.bat (cmd) or .\\setup.ps1 (PowerShell) to activate.");
+            println!("\nDone! Run setup.bat (cmd) or .\\setup.ps1 (PowerShell) to activate.");
         }
 
         Commands::Query {
@@ -1162,17 +1162,17 @@ async fn main() -> anyhow::Result<()> {
             }
 
             if check {
-                println!("🔍 Checking for updates...\n");
+                println!("Checking for updates...\n");
                 println!("Current version: v{}", current_version);
 
                 match updater.query_new_version().await {
                     Ok(Some(new_version)) => {
                         println!("Latest version:  v{}", new_version);
-                        println!("\n📦 A new version is available!");
+                        println!("\nA new version is available!");
                         println!("Run 'msvc-kit update' to upgrade.");
                     }
                     Ok(None) => {
-                        println!("\n✅ You are running the latest version.");
+                        println!("\nYou are running the latest version.");
                     }
                     Err(e) => {
                         let err_msg = format!("{}", e);
@@ -1184,17 +1184,17 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             } else {
-                println!("🔄 Updating msvc-kit...\n");
+                println!("Updating msvc-kit...\n");
                 println!("Current version: v{}", current_version);
 
                 match updater.run().await {
                     Ok(Some(result)) => {
-                        println!("\n✅ Updated to v{}!", result.new_version);
+                        println!("\nUpdated to v{}!", result.new_version);
                         println!("Please restart msvc-kit to use the new version.");
                     }
                     Ok(None) => {
                         println!(
-                            "\n✅ Already running the latest version (v{}).",
+                            "\nAlready running the latest version (v{}).",
                             current_version
                         );
                     }
