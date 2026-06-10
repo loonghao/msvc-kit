@@ -235,7 +235,7 @@ msvc-kit query [OPTIONS]
 Options:
   -d, --dir <DIR>                Installation directory
   -a, --arch <ARCH>              Target architecture [default: x64]
-  -c, --component <COMPONENT>    Component to query (all, msvc, sdk) [default: all]
+      --component <COMPONENT>    Component to query (all, msvc, sdk) [default: all]
   -p, --property <PROPERTY>      Property to retrieve (all, path, env, tools, version, include, lib) [default: all]
       --msvc-version <VERSION>   Specific MSVC version to query
       --sdk-version <VERSION>    Specific SDK version to query

@@ -261,7 +261,7 @@ msvc-kit update
 msvc-kit update --version 0.2.5
 ```
 
-The self-update feature is powered by [axoupdater](https://github.com/axodotdev/axoupdater) and queries GitHub Releases directly. It is compatible with both cargo-dist and custom release workflows. The `self-update` feature is enabled by default and can be disabled with `--no-default-features` at build time.
+The self-update feature is powered by [axoupdater](https://github.com/axodotdev/axoupdater) and queries GitHub Releases directly. It is compatible with both cargo-dist and custom release workflows. During installation, msvc-kit pins the update to the current install root and verifies that the updated executable reports the expected version before declaring success. The `self-update` feature is enabled by default and can be disabled with `--no-default-features` at build time.
 
 #### Install MSVC into Visual Studio (UBT Discovery)
 

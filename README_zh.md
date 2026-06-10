@@ -263,7 +263,7 @@ msvc-kit update
 msvc-kit update --version 0.2.5
 ```
 
-自动更新功能由 [axoupdater](https://github.com/axodotdev/axoupdater) 驱动，直接查询 GitHub Releases。兼容 cargo-dist 和自定义发布流程。`self-update` 特性默认启用，构建时可通过 `--no-default-features` 禁用。
+自动更新功能由 [axoupdater](https://github.com/axodotdev/axoupdater) 驱动，直接查询 GitHub Releases。兼容 cargo-dist 和自定义发布流程。安装更新时，msvc-kit 会锁定当前安装根目录，并在报告成功前验证更新后的可执行文件是否返回预期版本。`self-update` 特性默认启用，构建时可通过 `--no-default-features` 禁用。
 
 ## 缓存机制
 

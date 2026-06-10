@@ -235,7 +235,7 @@ msvc-kit query [OPTIONS]
 选项：
   -d, --dir <DIR>                安装目录
   -a, --arch <ARCH>              目标架构 [默认：x64]
-  -c, --component <COMPONENT>    要查询的组件 (all, msvc, sdk) [默认：all]
+      --component <COMPONENT>    要查询的组件 (all, msvc, sdk) [默认：all]
   -p, --property <PROPERTY>      要获取的属性 (all, path, env, tools, version, include, lib) [默认：all]
       --msvc-version <VERSION>   指定 MSVC 版本
       --sdk-version <VERSION>    指定 SDK 版本

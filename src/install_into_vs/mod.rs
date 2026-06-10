@@ -285,6 +285,29 @@ pub fn can_write_to_vs(vs_path: &Path) -> bool {
     false
 }
 
+fn toolchain_has_cl(toolchain_dir: &Path) -> bool {
+    let bin_dir = toolchain_dir.join("bin");
+    if !bin_dir.exists() {
+        return false;
+    }
+
+    std::fs::read_dir(&bin_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().ok().is_some_and(|t| t.is_dir()))
+        .any(|host_entry| {
+            std::fs::read_dir(host_entry.path())
+                .ok()
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| entry.file_type().ok().is_some_and(|t| t.is_dir()))
+                .any(|target_entry| target_entry.path().join("cl.exe").exists())
+        })
+}
+
 /// Install a downloaded MSVC toolchain into a Visual Studio instance.
 ///
 /// `source_dir` should point to the msvc-kit download root that contains
@@ -316,8 +339,18 @@ pub fn install_into_vs(
         .join(version_name);
 
     if target_dir.exists() {
+        if toolchain_has_cl(&target_dir) {
+            let registered = list_vs_msvc_versions(&vs_instance.install_path);
+            return Ok(VsInstallResult {
+                vs_instance: vs_instance.clone(),
+                registered_versions: registered,
+                installed_source: Some(version_dir),
+            });
+        }
+
         return Err(format!(
-            "MSVC {} is already installed at {}",
+            "MSVC {} already exists at {}, but cl.exe was not found. \
+             Remove that directory or repair the VS toolchain before retrying.",
             version_name,
             target_dir.display()
         ));
@@ -356,26 +389,11 @@ pub fn install_into_vs(
 
     copy_recursively(&version_dir, &target_dir)?;
 
-    // Verify cl.exe exists
-    let cl_path = target_dir
-        .join("bin")
-        .join("Hostx64")
-        .join("x64")
-        .join("cl.exe");
-    if !cl_path.exists() {
-        // Try alternative paths (different host/target combos)
-        let alt_cl = target_dir
-            .join("bin")
-            .join("Hostx86")
-            .join("x64")
-            .join("cl.exe");
-        if !alt_cl.exists() {
-            return Err(format!(
-                "Toolchain installed but cl.exe not found at expected path. \
-                 Files copied to: {}. Verify manually.",
-                target_dir.display()
-            ));
-        }
+    if !toolchain_has_cl(&target_dir) {
+        return Err(format!(
+            "Toolchain installed but cl.exe not found under {}. Verify manually.",
+            target_dir.display()
+        ));
     }
 
     let registered = list_vs_msvc_versions(&vs_instance.install_path);
@@ -385,4 +403,84 @@ pub fn install_into_vs(
         registered_versions: registered,
         installed_source: Some(version_dir),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_vs_instance(path: PathBuf) -> VsInstance {
+        VsInstance {
+            install_path: path,
+            version: "17.0".to_string(),
+            label: "Test VS".to_string(),
+        }
+    }
+
+    fn create_toolchain(root: &Path, version: &str) -> PathBuf {
+        let version_dir = root.join("VC").join("Tools").join("MSVC").join(version);
+        let bin_dir = version_dir.join("bin").join("Hostx64").join("x64");
+        std::fs::create_dir_all(&bin_dir).expect("create toolchain bin dir");
+        std::fs::write(bin_dir.join("cl.exe"), b"test compiler").expect("write cl.exe");
+        version_dir
+    }
+
+    #[test]
+    fn install_into_vs_copies_toolchain() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let source = temp.path().join("source");
+        let vs_root = temp.path().join("vs");
+        create_toolchain(&source, "14.36.32532");
+
+        let result = install_into_vs(&source, &make_vs_instance(vs_root.clone())).unwrap();
+
+        assert!(vs_root
+            .join("VC")
+            .join("Tools")
+            .join("MSVC")
+            .join("14.36.32532")
+            .join("bin")
+            .join("Hostx64")
+            .join("x64")
+            .join("cl.exe")
+            .exists());
+        assert!(result
+            .registered_versions
+            .contains(&"14.36.32532".to_string()));
+    }
+
+    #[test]
+    fn install_into_vs_is_idempotent_when_toolchain_already_valid() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let source = temp.path().join("source");
+        let vs_root = temp.path().join("vs");
+        create_toolchain(&source, "14.36.32532");
+        create_toolchain(&vs_root, "14.36.32532");
+
+        let result = install_into_vs(&source, &make_vs_instance(vs_root)).unwrap();
+
+        assert!(result
+            .registered_versions
+            .contains(&"14.36.32532".to_string()));
+    }
+
+    #[test]
+    fn install_into_vs_rejects_existing_incomplete_toolchain() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let source = temp.path().join("source");
+        let vs_root = temp.path().join("vs");
+        create_toolchain(&source, "14.36.32532");
+        std::fs::create_dir_all(
+            vs_root
+                .join("VC")
+                .join("Tools")
+                .join("MSVC")
+                .join("14.36.32532"),
+        )
+        .expect("create incomplete toolchain");
+
+        let err = install_into_vs(&source, &make_vs_instance(vs_root)).unwrap_err();
+
+        assert!(err.contains("cl.exe was not found"));
+    }
 }
