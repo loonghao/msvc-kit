@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.15](https://github.com/loonghao/msvc-kit/compare/v0.2.14...v0.2.15) (2026-06-10)
+
+
+### Bug Fixes
+
+* harden vs install and self-update ([#133](https://github.com/loonghao/msvc-kit/issues/133)) ([c8b213c](https://github.com/loonghao/msvc-kit/commit/c8b213c49f1a1c3a04e70acbcb20d8bf08780d03))
+
 ## [0.2.14](https://github.com/loonghao/msvc-kit/compare/v0.2.13...v0.2.14) (2026-06-09)
 
 
