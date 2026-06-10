@@ -1,6 +1,7 @@
 //! msvc-kit CLI - Portable MSVC Build Tools installer and manager
 
 use std::path::PathBuf;
+use std::process::Command as ProcessCommand;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -14,6 +15,95 @@ use msvc_kit::{
     save_config, setup_environment, DownloadOptions, MsvcComponent, MsvcKitConfig, ScriptContext,
     ShellType,
 };
+
+fn infer_self_update_install_root(exe_path: &std::path::Path) -> Option<PathBuf> {
+    let exe_dir = exe_path.parent()?;
+    if exe_dir.file_name().is_some_and(|name| name == "bin") {
+        return exe_dir.parent().map(std::path::Path::to_path_buf);
+    }
+
+    Some(exe_dir.to_path_buf())
+}
+
+fn updated_executable_candidates(
+    original_exe: &std::path::Path,
+    install_root: &std::path::Path,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(name) = original_exe.file_name() {
+        for candidate in [
+            original_exe.to_path_buf(),
+            install_root.join("bin").join(name),
+            install_root.join(name),
+        ] {
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    candidates
+}
+
+fn parse_msvc_kit_version(output: &str) -> Option<&str> {
+    let mut parts = output.split_whitespace();
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some("msvc-kit"), Some(version), None) => Some(version),
+        _ => None,
+    }
+}
+
+fn verify_updated_executable(
+    original_exe: &std::path::Path,
+    install_root: &std::path::Path,
+    expected_version: &str,
+) -> Result<PathBuf, String> {
+    let mut errors = Vec::new();
+    for candidate in updated_executable_candidates(original_exe, install_root) {
+        if !candidate.exists() {
+            errors.push(format!("{} does not exist", candidate.display()));
+            continue;
+        }
+
+        let output = ProcessCommand::new(&candidate)
+            .arg("--version")
+            .output()
+            .map_err(|e| format!("failed to run {} --version: {}", candidate.display(), e))?;
+
+        if !output.status.success() {
+            errors.push(format!(
+                "{} --version exited with {:?}",
+                candidate.display(),
+                output.status.code()
+            ));
+            continue;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let actual = parse_msvc_kit_version(stdout.trim()).ok_or_else(|| {
+            format!(
+                "{} --version returned unexpected output: {}",
+                candidate.display(),
+                stdout.trim()
+            )
+        })?;
+
+        if actual == expected_version {
+            return Ok(candidate);
+        }
+
+        errors.push(format!(
+            "{} reports version {}, expected {}",
+            candidate.display(),
+            actual,
+            expected_version
+        ));
+    }
+
+    Err(format!(
+        "updated executable verification failed: {}",
+        errors.join("; ")
+    ))
+}
 
 /// Portable MSVC Build Tools installer and manager
 #[derive(Parser)]
@@ -47,7 +137,7 @@ enum Commands {
         sdk_version: Option<String>,
 
         /// Target directory for installation
-        #[arg(short, long)]
+        #[arg(short = 't', long, visible_short_alias = 'd', visible_alias = "dir")]
         target: Option<PathBuf>,
 
         /// Target architecture (x64, x86, arm64)
@@ -183,7 +273,7 @@ enum Commands {
         arch: String,
 
         /// Component to query (all, msvc, sdk)
-        #[arg(short, long, default_value = "all")]
+        #[arg(long, default_value = "all")]
         component: String,
 
         /// Property to retrieve (all, path, env, tools, version, include, lib)
@@ -1124,6 +1214,16 @@ async fn main() -> anyhow::Result<()> {
         #[cfg(feature = "self-update")]
         Commands::Update { check, version } => {
             let current_version = env!("CARGO_PKG_VERSION");
+            let current_exe = std::env::current_exe()
+                .map_err(|e| anyhow::anyhow!("Failed to locate current executable: {}", e))?;
+            let install_root = infer_self_update_install_root(&current_exe)
+                .ok_or_else(|| anyhow::anyhow!("Failed to infer msvc-kit install directory"))?;
+            let install_root_str = install_root.to_str().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "msvc-kit install directory is not valid UTF-8: {}",
+                    install_root.display()
+                )
+            })?;
 
             // Configure axoupdater with GitHub release source (no cargo-dist receipt needed)
             let source = axoupdater::ReleaseSource {
@@ -1135,6 +1235,7 @@ async fn main() -> anyhow::Result<()> {
 
             let mut updater = axoupdater::AxoUpdater::new_for("msvc-kit");
             updater.set_release_source(source);
+            updater.set_install_dir(install_root_str);
             updater
                 .set_current_version(
                     current_version
@@ -1189,7 +1290,19 @@ async fn main() -> anyhow::Result<()> {
 
                 match updater.run().await {
                     Ok(Some(result)) => {
+                        let verified_exe = verify_updated_executable(
+                            &current_exe,
+                            result.install_prefix.as_std_path(),
+                            &result.new_version.to_string(),
+                        )
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "Update installer completed, but the installed executable could not be verified: {}",
+                                e
+                            )
+                        })?;
                         println!("\nUpdated to v{}!", result.new_version);
+                        println!("Verified executable: {}", verified_exe.display());
                         println!("Please restart msvc-kit to use the new version.");
                     }
                     Ok(None) => {
@@ -1213,4 +1326,64 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn infer_self_update_install_root_strips_bin_directory() {
+        let root_dir = PathBuf::from("msvc-kit");
+        let exe = root_dir.join("bin").join("msvc-kit");
+
+        let root = infer_self_update_install_root(&exe).unwrap();
+
+        assert_eq!(root, root_dir);
+    }
+
+    #[test]
+    fn infer_self_update_install_root_uses_parent_for_non_bin_directory() {
+        let root_dir = PathBuf::from("tools");
+        let exe = root_dir.join("msvc-kit");
+
+        let root = infer_self_update_install_root(&exe).unwrap();
+
+        assert_eq!(root, root_dir);
+    }
+
+    #[test]
+    fn updated_executable_candidates_include_legacy_and_cargo_dist_layouts() {
+        let root = PathBuf::from("tools");
+        let exe = root.join("msvc-kit");
+
+        let candidates = updated_executable_candidates(&exe, &root);
+
+        assert_eq!(
+            candidates,
+            vec![root.join("msvc-kit"), root.join("bin").join("msvc-kit"),]
+        );
+    }
+
+    #[test]
+    fn parse_msvc_kit_version_accepts_exact_version_output() {
+        assert_eq!(parse_msvc_kit_version("msvc-kit 0.2.13"), Some("0.2.13"));
+    }
+
+    #[test]
+    fn parse_msvc_kit_version_rejects_unexpected_output() {
+        assert_eq!(parse_msvc_kit_version("msvc-kit version 0.2.13"), None);
+        assert_eq!(parse_msvc_kit_version("0.2.13"), None);
+    }
+
+    #[test]
+    fn verify_updated_executable_reports_missing_candidates() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let exe = temp.path().join("bin").join("msvc-kit.exe");
+
+        let err = verify_updated_executable(&exe, temp.path(), "9.9.9").unwrap_err();
+
+        assert!(err.contains("updated executable verification failed"));
+        assert!(err.contains("does not exist"));
+    }
 }

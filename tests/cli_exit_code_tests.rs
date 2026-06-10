@@ -103,7 +103,16 @@ fn test_version_flag_exits_zero() {
 fn test_subcommand_help_exits_zero() {
     // Subcommand help should exit with code 0
     let commands = [
-        "download", "setup", "list", "clean", "config", "env", "bundle", "update",
+        "download",
+        "setup",
+        "list",
+        "clean",
+        "config",
+        "env",
+        "query",
+        "install-into-vs",
+        "bundle",
+        "update",
     ];
 
     for cmd in commands {
@@ -117,6 +126,57 @@ fn test_subcommand_help_exits_zero() {
             output.status.code()
         );
     }
+}
+
+#[test]
+fn test_download_accepts_dir_alias() {
+    // --dir is kept as a compatibility alias for workflows that pair
+    // download with setup/install-into-vs commands.
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let target = temp_dir.path().join("msvc");
+
+    let output = run_command(&[
+        "download",
+        "--msvc-version",
+        "14.36",
+        "--no-msvc",
+        "--no-sdk",
+        "--dir",
+        target.to_str().unwrap(),
+        "--arch",
+        "x64",
+    ])
+    .expect("Failed to run msvc-kit download with --dir alias");
+
+    assert!(
+        output.status.success(),
+        "Expected exit code 0 for download --dir alias, got: {:?}\nstdout:\n{}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&target.display().to_string()),
+        "Expected output to include aliased target directory"
+    );
+}
+
+#[test]
+fn test_install_into_vs_check_exits_zero() {
+    // --check must be a non-mutating diagnostics command. It may find no VS
+    // instances in CI, but that should still be a successful check.
+    let output = run_command(&["install-into-vs", "--check"])
+        .expect("Failed to run msvc-kit install-into-vs --check");
+
+    assert!(
+        output.status.success(),
+        "Expected exit code 0 for install-into-vs --check, got: {:?}\nstdout:\n{}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[rstest]
