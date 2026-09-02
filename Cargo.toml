@@ -78,7 +78,7 @@ winreg = "0.56"
 futures = "0.3"
 
 # SHA256 verification
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 
 # Self-update via axoupdater (optional, compatible with cargo-dist releases)
