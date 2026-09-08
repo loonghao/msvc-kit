@@ -87,7 +87,7 @@ rm -rf "$env:LOCALAPPDATA\loonghao\msvc-kit"
 ### Remove Configuration
 
 ```powershell
-rm "$env:LOCALAPPDATA\loonghao\msvc-kit\config\config.json"
+rm "$env:APPDATA\loonghao\msvc-kit\config\config.toml"
 ```
 
 ## Troubleshooting

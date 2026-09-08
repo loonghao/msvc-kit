@@ -91,7 +91,7 @@ rm -rf "$env:LOCALAPPDATA\loonghao\msvc-kit"
 ### 移除配置
 
 ```powershell
-rm "$env:LOCALAPPDATA\loonghao\msvc-kit\config\config.json"
+rm "$env:APPDATA\loonghao\msvc-kit\config\config.toml"
 ```
 
 ## 故障排除

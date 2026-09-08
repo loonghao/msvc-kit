@@ -691,6 +691,8 @@ async fn main() -> anyhow::Result<()> {
                 save_config(&config)?;
                 println!("Configuration reset to defaults");
             } else if set_dir.is_some() || set_msvc.is_some() || set_sdk.is_some() {
+                // Persist only stored settings, never an environment override.
+                config = msvc_kit::config::load_persisted_config()?;
                 if let Some(dir) = set_dir {
                     config.install_dir = dir;
                 }
