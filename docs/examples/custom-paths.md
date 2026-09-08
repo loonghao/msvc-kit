@@ -118,7 +118,9 @@ async fn main() -> msvc_kit::Result<()> {
 }
 ```
 
-### Export to JSON Config
+### Export environment metadata to JSON
+
+This JSON describes the resolved tool environment. It is not the CLI configuration file; persistent CLI settings use `config.toml`.
 
 ```rust
 use msvc_kit::{download_msvc, download_sdk, setup_environment, DownloadOptions};
@@ -133,9 +135,9 @@ async fn main() -> msvc_kit::Result<()> {
     
     // Export full environment to JSON
     let json = env.to_json();
-    fs::write("msvc-config.json", serde_json::to_string_pretty(&json)?)?;
+    fs::write("msvc-environment.json", serde_json::to_string_pretty(&json)?)?;
     
-    println!("Config saved to msvc-config.json");
+    println!("Config saved to msvc-environment.json");
     Ok(())
 }
 ```

@@ -86,6 +86,13 @@ pub fn get_config_path() -> PathBuf {
 ///
 /// If the configuration file doesn't exist, returns default configuration.
 pub fn load_config() -> Result<MsvcKitConfig> {
+    let mut config = load_persisted_config()?;
+    apply_install_dir_override(&mut config, std::env::var_os("MSVC_KIT_DIR"));
+    Ok(config)
+}
+
+/// Load stored settings without transient environment overrides.
+pub fn load_persisted_config() -> Result<MsvcKitConfig> {
     let config_path = get_config_path();
 
     if config_path.exists() {
@@ -95,6 +102,16 @@ pub fn load_config() -> Result<MsvcKitConfig> {
     }
 
     Ok(MsvcKitConfig::default())
+}
+
+fn apply_install_dir_override(config: &mut MsvcKitConfig, value: Option<std::ffi::OsString>) {
+    if let Some(value) = value.filter(|value| !value.is_empty()) {
+        let old_default_cache = config.install_dir.join("cache");
+        config.install_dir = PathBuf::from(value);
+        if config.cache_dir.as_ref() == Some(&old_default_cache) {
+            config.cache_dir = Some(config.install_dir.join("cache"));
+        }
+    }
 }
 
 /// Save configuration to disk (TOML format)
@@ -133,6 +150,31 @@ pub fn get_sdk_install_dir(config: &MsvcKitConfig, version: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn environment_override_relocates_default_cache() {
+        let mut config = MsvcKitConfig::default();
+        apply_install_dir_override(&mut config, Some("custom kit".into()));
+        assert_eq!(config.install_dir, PathBuf::from("custom kit"));
+        assert_eq!(config.cache_dir, Some(PathBuf::from("custom kit/cache")));
+    }
+
+    #[test]
+    fn environment_override_preserves_explicit_cache() {
+        let mut config = MsvcKitConfig::default();
+        config.cache_dir = Some(PathBuf::from("separate-cache"));
+        apply_install_dir_override(&mut config, Some("custom kit".into()));
+        assert_eq!(config.cache_dir, Some(PathBuf::from("separate-cache")));
+    }
+
+    #[test]
+    fn empty_or_missing_override_preserves_settings() {
+        let mut config = MsvcKitConfig::default();
+        let expected = config.install_dir.clone();
+        apply_install_dir_override(&mut config, None);
+        apply_install_dir_override(&mut config, Some("".into()));
+        assert_eq!(config.install_dir, expected);
+    }
 
     #[test]
     fn test_default_config() {
