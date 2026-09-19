@@ -33,9 +33,13 @@ cache_dir = 'D:\msvc-kit\cache'
 
 Optional version and cache fields may be omitted. There is no `default_host_arch` configuration field. To share settings, copy the actual TOML file and adjust machine-specific paths.
 
+Setting `cache_dir` moves the VS manifest cache: manifests are stored in `<cache_dir>/manifests/`.
+
 ## Environment and precedence
 
-Directory precedence: explicit command `--target` / `--dir` > nonempty `MSVC_KIT_DIR` > saved `install_dir` > platform default. The environment variable does not relocate the configuration file and is not persisted by configuration update commands. Empty values are ignored. The default cache follows the installation directory; an explicit custom cache is preserved.
+Directory precedence: explicit command `--target` / `--dir` > nonempty `MSVC_KIT_DIR` > saved `install_dir` > platform default. The environment variable does not relocate the configuration file and is not persisted by configuration update commands. Empty values are ignored.
+
+Cache directory precedence: explicit `cache_dir` from the TOML file > `<install_dir>/cache` when the installation directory is not the platform default (so both `MSVC_KIT_DIR` and `config --set-dir` relocate the cache) > platform default cache directory. `msvc-kit config` prints the cache directory in use.
 
 ```powershell
 $env:MSVC_KIT_DIR = 'D:\msvc-kit'

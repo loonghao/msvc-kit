@@ -163,6 +163,14 @@ pub struct DownloadOptions {
     /// Custom cache manager (None = use default file system cache)
     pub cache_manager: Option<BoxedCacheManager>,
 
+    /// Directory that stores cached Visual Studio manifests.
+    ///
+    /// `None` falls back to the platform default (or to the cache manager's
+    /// directory when one is injected). Set it to wire the configured
+    /// `MsvcKitConfig::cache_dir` into the downloader:
+    /// `config.manifest_cache_dir()`.
+    pub manifest_cache_dir: Option<PathBuf>,
+
     /// Dry-run mode: preview what would be downloaded without actually downloading
     pub dry_run: bool,
 
@@ -194,6 +202,7 @@ impl std::fmt::Debug for DownloadOptions {
             .field("http_client", &self.http_client.is_some())
             .field("progress_handler", &self.progress_handler.is_some())
             .field("cache_manager", &self.cache_manager.is_some())
+            .field("manifest_cache_dir", &self.manifest_cache_dir)
             .field("dry_run", &self.dry_run)
             .field("include_components", &self.include_components)
             .field("exclude_patterns", &self.exclude_patterns)
@@ -258,6 +267,7 @@ impl Default for DownloadOptions {
             http_client: None,
             progress_handler: None,
             cache_manager: None,
+            manifest_cache_dir: None,
             dry_run,
             include_components,
             exclude_patterns,
@@ -336,6 +346,23 @@ impl DownloadOptionsBuilder {
     /// Set custom cache manager for manifest and payload caching
     pub fn cache_manager(mut self, manager: BoxedCacheManager) -> Self {
         self.options.cache_manager = Some(manager);
+        self
+    }
+
+    /// Set the directory that stores cached Visual Studio manifests
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use msvc_kit::{load_config, DownloadOptions};
+    ///
+    /// let config = load_config().unwrap_or_default();
+    /// let options = DownloadOptions::builder()
+    ///     .manifest_cache_dir(config.manifest_cache_dir())
+    ///     .build();
+    /// ```
+    pub fn manifest_cache_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.options.manifest_cache_dir = Some(dir.into());
         self
     }
 

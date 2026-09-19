@@ -419,6 +419,7 @@ async fn main() -> anyhow::Result<()> {
                 http_client: None,
                 progress_handler: None,
                 cache_manager: None,
+                manifest_cache_dir: Some(config.manifest_cache_dir()),
                 dry_run: false,
                 include_components: components,
                 exclude_patterns,
@@ -580,7 +581,10 @@ async fn main() -> anyhow::Result<()> {
             if available {
                 println!("Fetching available versions from Microsoft...\n");
 
-                let manifest = msvc_kit::downloader::VsManifest::fetch().await?;
+                let manifest = msvc_kit::downloader::VsManifest::fetch_with_cache_dir(
+                    &config.manifest_cache_dir(),
+                )
+                .await?;
 
                 if let Some(msvc) = manifest.get_latest_msvc_version() {
                     println!("Latest MSVC version: {}", msvc);
@@ -708,6 +712,10 @@ async fn main() -> anyhow::Result<()> {
 
             println!("Current configuration:\n");
             println!("  Install directory: {}", config.install_dir.display());
+            println!(
+                "  Cache directory: {}",
+                config.effective_cache_dir().display()
+            );
             println!(
                 "  Default MSVC version: {}",
                 config.default_msvc_version.as_deref().unwrap_or("latest")
@@ -929,6 +937,7 @@ async fn main() -> anyhow::Result<()> {
                 http_client: None,
                 progress_handler: None,
                 cache_manager: None,
+                manifest_cache_dir: Some(config.manifest_cache_dir()),
                 dry_run: false,
                 include_components: Default::default(),
                 exclude_patterns: Default::default(),

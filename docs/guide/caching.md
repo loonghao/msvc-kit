@@ -7,7 +7,7 @@ msvc-kit uses multiple caching strategies to minimize downloads and speed up ope
 | Cache | Location | Purpose |
 |-------|----------|---------|
 | Download Index | `downloads/{msvc\|sdk}/.../index.db` | Track downloaded files |
-| Manifest Cache | `cache/manifests/` | VS manifest with ETag |
+| Manifest Cache | `<cache dir>/manifests/` | VS manifest with ETag |
 | Extraction Markers | `.msvc-kit-extracted/` | Skip re-extraction |
 
 ## Download Index
@@ -31,7 +31,9 @@ Size match is a best-effort optimization. Same size doesn't guarantee same conte
 
 ## Manifest Cache
 
-VS manifests are cached with HTTP conditional requests:
+VS manifests are cached under the configured cache directory: `<install_dir>/cache/manifests/` when the installation directory is not the platform default (`MSVC_KIT_DIR` or `config --set-dir`), an explicit `cache_dir` from the TOML file, or the platform default cache directory otherwise. Run `msvc-kit config` to print the cache directory in use.
+
+Manifests are cached with HTTP conditional requests:
 
 ```
 GET /manifest.json

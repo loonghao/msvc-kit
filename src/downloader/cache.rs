@@ -51,12 +51,11 @@ pub fn compute_fingerprint(name: &str, size: u64) -> String {
 }
 
 /// Get the default manifest cache directory
+///
+/// Mirrors [`crate::config::default_cache_root`] so a configuration that never
+/// set `cache_dir` keeps caching manifests where it always has.
 pub fn default_manifest_cache_dir() -> PathBuf {
-    if let Some(proj) = directories::ProjectDirs::from("com", "loonghao", "msvc-kit") {
-        proj.cache_dir().join("manifests")
-    } else {
-        std::env::temp_dir().join("msvc-kit").join("manifests")
-    }
+    crate::config::default_cache_root().join("manifests")
 }
 
 /// Get the metadata file path for a cache file
