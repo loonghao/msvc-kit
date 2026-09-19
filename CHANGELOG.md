@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.17](https://github.com/loonghao/msvc-kit/compare/v0.2.16...v0.2.17) (2026-09-19)
+
+
+### Features
+
+* **vs-channel:** data-driven Visual Studio channel registry with VS 2026 support ([2e22ea9](https://github.com/loonghao/msvc-kit/commit/2e22ea9c2af21a2372c927bfec04e45650f572cc))
+
 ## [0.2.16](https://github.com/loonghao/msvc-kit/compare/v0.2.15...v0.2.16) (2026-09-19)
 
 
