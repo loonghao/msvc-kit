@@ -161,8 +161,10 @@ mod tests {
 
     #[test]
     fn environment_override_preserves_explicit_cache() {
-        let mut config = MsvcKitConfig::default();
-        config.cache_dir = Some(PathBuf::from("separate-cache"));
+        let mut config = MsvcKitConfig {
+            cache_dir: Some(PathBuf::from("separate-cache")),
+            ..MsvcKitConfig::default()
+        };
         apply_install_dir_override(&mut config, Some("custom kit".into()));
         assert_eq!(config.cache_dir, Some(PathBuf::from("separate-cache")));
     }
