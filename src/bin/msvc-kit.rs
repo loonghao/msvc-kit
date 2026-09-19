@@ -474,6 +474,7 @@ async fn main() -> anyhow::Result<()> {
                 progress_handler: None,
                 cache_manager: None,
                 vs_channel: resolve_vs_channel(vs_channel, &config)?,
+                manifest_cache_dir: Some(config.manifest_cache_dir()),
                 dry_run: false,
                 include_components: components,
                 exclude_patterns,
@@ -648,7 +649,7 @@ async fn main() -> anyhow::Result<()> {
 
                 let (manifest, channel) = msvc_kit::downloader::VsManifest::fetch_with_selection(
                     selection,
-                    &msvc_kit::downloader::cache::default_manifest_cache_dir(),
+                    &config.manifest_cache_dir(),
                 )
                 .await?;
                 println!("Visual Studio channel: {}\n", channel);
@@ -788,6 +789,10 @@ async fn main() -> anyhow::Result<()> {
 
             println!("Current configuration:\n");
             println!("  Install directory: {}", config.install_dir.display());
+            println!(
+                "  Cache directory: {}",
+                config.effective_cache_dir().display()
+            );
             println!(
                 "  Default MSVC version: {}",
                 config.default_msvc_version.as_deref().unwrap_or("latest")
@@ -1019,6 +1024,7 @@ async fn main() -> anyhow::Result<()> {
                 progress_handler: None,
                 cache_manager: None,
                 vs_channel: resolve_vs_channel(vs_channel, &config)?,
+                manifest_cache_dir: Some(config.manifest_cache_dir()),
                 dry_run: false,
                 include_components: Default::default(),
                 exclude_patterns: Default::default(),

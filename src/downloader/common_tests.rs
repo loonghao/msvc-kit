@@ -136,6 +136,86 @@ async fn manifest_cache_dir_with_custom_cache_manager() {
 }
 
 #[tokio::test]
+async fn manifest_cache_dir_from_download_options() {
+    use super::common::CommonDownloader;
+    use super::http::create_http_client;
+    use super::DownloadOptions;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let configured = temp_dir.path().join("manifests");
+
+    let options = DownloadOptions::builder()
+        .manifest_cache_dir(&configured)
+        .build();
+    let client = create_http_client();
+    let downloader = CommonDownloader::with_client(options, client);
+
+    // The configured directory is used instead of the platform default.
+    assert_eq!(downloader.manifest_cache_dir(), configured);
+}
+
+#[tokio::test]
+async fn with_configured_manifest_cache_dir_preserves_explicit_directory() {
+    use super::DownloadOptions;
+
+    let configured = tempfile::TempDir::new().unwrap();
+    let explicit = configured.path().join("manifests");
+
+    let options = DownloadOptions::builder()
+        .manifest_cache_dir(&explicit)
+        .build();
+
+    // The library entry points must not override an explicit directory.
+    assert_eq!(
+        options
+            .with_configured_manifest_cache_dir()
+            .manifest_cache_dir,
+        Some(explicit)
+    );
+}
+
+#[tokio::test]
+async fn with_configured_manifest_cache_dir_applies_configuration() {
+    use super::DownloadOptions;
+
+    let options = DownloadOptions::default();
+    assert_eq!(options.manifest_cache_dir, None);
+
+    // Without an explicit directory the configured cache directory is used.
+    assert_eq!(
+        options
+            .with_configured_manifest_cache_dir()
+            .manifest_cache_dir,
+        Some(super::configured_manifest_cache_dir())
+    );
+}
+
+#[tokio::test]
+async fn manifest_cache_dir_prefers_cache_manager_over_options() {
+    use super::common::CommonDownloader;
+    use super::http::create_http_client;
+    use super::traits::FileSystemCacheManager;
+    use super::DownloadOptions;
+
+    let configured = tempfile::TempDir::new().unwrap();
+    let manager_dir = tempfile::TempDir::new().unwrap();
+
+    let options = DownloadOptions::builder()
+        .manifest_cache_dir(configured.path())
+        .build();
+    let client = create_http_client();
+    let downloader = CommonDownloader::with_client(options, client).with_cache_manager(
+        std::sync::Arc::new(FileSystemCacheManager::new(manager_dir.path())),
+    );
+
+    // An injected cache manager still wins.
+    assert_eq!(
+        downloader.manifest_cache_dir(),
+        manager_dir.path().join("manifests")
+    );
+}
+
+#[tokio::test]
 async fn manifest_cache_dir_without_cache_manager() {
     use super::common::CommonDownloader;
     use super::http::create_http_client;
@@ -149,6 +229,66 @@ async fn manifest_cache_dir_without_cache_manager() {
     let cache_dir = downloader.manifest_cache_dir();
     let default_dir = super::cache::default_manifest_cache_dir();
     assert_eq!(cache_dir, default_dir);
+}
+
+/// A downloader whose options carry no manifest cache directory resolves the
+/// configured one, so dry-run previews read manifests from the location the
+/// configuration points at.
+#[tokio::test]
+async fn configured_manifest_cache_dir_falls_back_to_config() {
+    use super::common::CommonDownloader;
+    use super::http::create_http_client;
+    use super::DownloadOptions;
+
+    let options = DownloadOptions::default();
+    let client = create_http_client();
+    let downloader = CommonDownloader::with_client(options, client);
+
+    assert_eq!(
+        downloader.configured_manifest_cache_dir(),
+        super::configured_manifest_cache_dir()
+    );
+}
+
+#[tokio::test]
+async fn configured_manifest_cache_dir_keeps_explicit_directory() {
+    use super::common::CommonDownloader;
+    use super::http::create_http_client;
+    use super::DownloadOptions;
+
+    let configured = tempfile::TempDir::new().unwrap();
+    let explicit = configured.path().join("manifests");
+
+    let options = DownloadOptions::builder()
+        .manifest_cache_dir(&explicit)
+        .build();
+    let client = create_http_client();
+    let downloader = CommonDownloader::with_client(options, client);
+
+    // An explicit directory wins over the configuration.
+    assert_eq!(downloader.configured_manifest_cache_dir(), explicit);
+}
+
+#[tokio::test]
+async fn configured_manifest_cache_dir_keeps_cache_manager() {
+    use super::common::CommonDownloader;
+    use super::http::create_http_client;
+    use super::traits::FileSystemCacheManager;
+    use super::DownloadOptions;
+
+    let manager_dir = tempfile::TempDir::new().unwrap();
+
+    let client = create_http_client();
+    let downloader = CommonDownloader::with_client(DownloadOptions::default(), client)
+        .with_cache_manager(std::sync::Arc::new(FileSystemCacheManager::new(
+            manager_dir.path(),
+        )));
+
+    // An injected cache manager still wins over the configuration.
+    assert_eq!(
+        downloader.configured_manifest_cache_dir(),
+        manager_dir.path().join("manifests")
+    );
 }
 
 #[tokio::test]

@@ -54,6 +54,7 @@
 //!         msvc_version: None,  // Use latest
 //!         sdk_version: None,   // Use latest
 //!         vs_channel: None,    // Use the newest published VS channel
+//!         manifest_cache_dir: None, // Use the configured cache directory
 //!         parallel_downloads: 8,
 //!     };
 //!     
@@ -97,6 +98,11 @@ pub struct BundleOptions {
     ///
     /// Accepts a major version (`18`), a release year (`2026`) or `auto`.
     pub vs_channel: Option<String>,
+    /// Directory that stores cached Visual Studio manifests (None = platform default)
+    ///
+    /// Set it to `MsvcKitConfig::manifest_cache_dir()` so bundle creation reads
+    /// and writes manifests in the configured cache directory.
+    pub manifest_cache_dir: Option<PathBuf>,
     /// Number of parallel downloads
     pub parallel_downloads: usize,
 }
@@ -110,6 +116,7 @@ impl Default for BundleOptions {
             msvc_version: None,
             sdk_version: None,
             vs_channel: std::env::var(crate::vs_channel::VS_CHANNEL_ENV_VAR).ok(),
+            manifest_cache_dir: None,
             parallel_downloads: 8,
         }
     }
@@ -160,14 +167,13 @@ pub struct BundleResult {
 ///     Ok(())
 /// }
 /// ```
-pub async fn create_bundle(options: BundleOptions) -> Result<BundleResult> {
-    // Create output directory
-    tokio::fs::create_dir_all(&options.output_dir)
-        .await
-        .map_err(MsvcKitError::Io)?;
-
-    // Download options - download directly to bundle root
-    let download_opts = DownloadOptions {
+/// Download options used by [`create_bundle`].
+///
+/// Packages land directly in the bundle root (there is no `runtime/`
+/// subdirectory), and the configured manifest cache directory is honoured so
+/// manifests are cached where the configuration points at.
+fn bundle_download_options(options: &BundleOptions) -> DownloadOptions {
+    DownloadOptions {
         msvc_version: options.msvc_version.clone(),
         sdk_version: options.sdk_version.clone(),
         target_dir: options.output_dir.clone(),
@@ -179,10 +185,20 @@ pub async fn create_bundle(options: BundleOptions) -> Result<BundleResult> {
         progress_handler: None,
         cache_manager: None,
         vs_channel: options.vs_channel.clone(),
+        manifest_cache_dir: options.manifest_cache_dir.clone(),
         dry_run: false,
         include_components: Default::default(),
         exclude_patterns: Default::default(),
-    };
+    }
+}
+
+pub async fn create_bundle(options: BundleOptions) -> Result<BundleResult> {
+    // Create output directory
+    tokio::fs::create_dir_all(&options.output_dir)
+        .await
+        .map_err(MsvcKitError::Io)?;
+
+    let download_opts = bundle_download_options(&options);
 
     // Download and extract MSVC
     let mut msvc_info = download_msvc(&download_opts).await?;
@@ -264,11 +280,37 @@ mod tests {
             progress_handler: None,
             cache_manager: None,
             vs_channel: opts.vs_channel.clone(),
+            manifest_cache_dir: opts.manifest_cache_dir.clone(),
             dry_run: false,
             include_components: Default::default(),
             exclude_patterns: Default::default(),
         };
         assert!(download_opts.cache_manager.is_none());
         assert!(!download_opts.dry_run);
+    }
+
+    #[test]
+    fn bundle_download_options_carry_manifest_cache_dir() {
+        let cache_dir = std::path::PathBuf::from("custom-cache").join("manifests");
+        let opts = BundleOptions {
+            manifest_cache_dir: Some(cache_dir.clone()),
+            ..BundleOptions::default()
+        };
+
+        // Bundle creation must read manifests from the configured directory.
+        assert_eq!(
+            bundle_download_options(&opts).manifest_cache_dir,
+            Some(cache_dir)
+        );
+    }
+
+    #[test]
+    fn bundle_download_options_default_to_no_manifest_cache_dir() {
+        // An unconfigured bundle keeps the platform default behaviour.
+        assert_eq!(
+            bundle_download_options(&BundleOptions::default()).manifest_cache_dir,
+            None
+        );
+        assert_eq!(BundleOptions::default().manifest_cache_dir, None);
     }
 }

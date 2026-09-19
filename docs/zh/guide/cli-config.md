@@ -33,9 +33,13 @@ cache_dir = 'D:\msvc-kit\cache'
 
 可选版本和缓存字段可省略；没有 `default_host_arch` 配置字段。分享配置时复制实际 TOML 文件，并调整机器相关路径。
 
+设置 `cache_dir` 会移动 VS 清单缓存：清单保存在 `<cache_dir>/manifests/`。
+
 ## 环境变量与优先级
 
-目录优先级：命令的显式 `--target` / `--dir` > 非空 `MSVC_KIT_DIR` > 已保存的 `install_dir` > 平台默认值。环境变量不改变配置文件位置，也不会通过配置修改命令持久化。空变量被忽略。默认缓存随安装目录移动，显式自定义缓存保持不变。
+目录优先级：命令的显式 `--target` / `--dir` > 非空 `MSVC_KIT_DIR` > 已保存的 `install_dir` > 平台默认值。环境变量不改变配置文件位置，也不会通过配置修改命令持久化。空变量被忽略。
+
+缓存目录优先级：TOML 中显式的 `cache_dir` > 安装目录不是平台默认目录时的 `<install_dir>/cache`（因此 `MSVC_KIT_DIR` 与 `config --set-dir` 都会让缓存随之移动）> 平台默认缓存目录。`msvc-kit config` 会打印正在使用的缓存目录。
 
 ```powershell
 $env:MSVC_KIT_DIR = 'D:\msvc-kit'

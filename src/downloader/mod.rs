@@ -171,6 +171,14 @@ pub struct DownloadOptions {
     /// usable manifest. See [`crate::vs_channel`].
     pub vs_channel: Option<String>,
 
+    /// Directory that stores cached Visual Studio manifests.
+    ///
+    /// `None` falls back to the platform default (or to the cache manager's
+    /// directory when one is injected). Set it to wire the configured
+    /// `MsvcKitConfig::cache_dir` into the downloader:
+    /// `config.manifest_cache_dir()`.
+    pub manifest_cache_dir: Option<PathBuf>,
+
     /// Dry-run mode: preview what would be downloaded without actually downloading
     pub dry_run: bool,
 
@@ -203,6 +211,7 @@ impl std::fmt::Debug for DownloadOptions {
             .field("progress_handler", &self.progress_handler.is_some())
             .field("cache_manager", &self.cache_manager.is_some())
             .field("vs_channel", &self.vs_channel)
+            .field("manifest_cache_dir", &self.manifest_cache_dir)
             .field("dry_run", &self.dry_run)
             .field("include_components", &self.include_components)
             .field("exclude_patterns", &self.exclude_patterns)
@@ -268,6 +277,7 @@ impl Default for DownloadOptions {
             progress_handler: None,
             cache_manager: None,
             vs_channel: std::env::var(crate::vs_channel::VS_CHANNEL_ENV_VAR).ok(),
+            manifest_cache_dir: None,
             dry_run,
             include_components,
             exclude_patterns,
@@ -366,6 +376,23 @@ impl DownloadOptionsBuilder {
         self
     }
 
+    /// Set the directory that stores cached Visual Studio manifests
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use msvc_kit::{load_config, DownloadOptions};
+    ///
+    /// let config = load_config().unwrap_or_default();
+    /// let options = DownloadOptions::builder()
+    ///     .manifest_cache_dir(config.manifest_cache_dir())
+    ///     .build();
+    /// ```
+    pub fn manifest_cache_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.options.manifest_cache_dir = Some(dir.into());
+        self
+    }
+
     /// Enable dry-run mode (preview without downloading)
     pub fn dry_run(mut self, dry_run: bool) -> Self {
         self.options.dry_run = dry_run;
@@ -442,6 +469,30 @@ impl DownloadOptions {
     pub fn vs_channel_selection(&self) -> Result<VsChannelSelection> {
         VsChannelSelection::from_optional(self.vs_channel.as_deref())
     }
+
+    /// Copy the options with the configured manifest cache directory applied.
+    ///
+    /// An explicit `manifest_cache_dir` always wins. When it is `None`, the
+    /// directory configured through `MsvcKitConfig::cache_dir` is used; a
+    /// configuration that never set one resolves to the platform default, the
+    /// location manifests were always cached in.
+    pub fn with_configured_manifest_cache_dir(&self) -> Self {
+        let mut options = self.clone();
+        if options.manifest_cache_dir.is_none() {
+            options.manifest_cache_dir = Some(configured_manifest_cache_dir());
+        }
+        options
+    }
+}
+
+/// Manifest cache directory taken from the configuration.
+///
+/// Falls back to the platform default when no configuration can be read, so an
+/// unconfigured installation keeps caching manifests where it always has.
+pub(crate) fn configured_manifest_cache_dir() -> PathBuf {
+    crate::load_config()
+        .map(|config| config.manifest_cache_dir())
+        .unwrap_or_else(|_| cache::default_manifest_cache_dir())
 }
 
 /// Preview information for dry-run mode
@@ -512,7 +563,7 @@ impl DownloadPreview {
 /// }
 /// ```
 pub async fn download_msvc(options: &DownloadOptions) -> Result<InstallInfo> {
-    let downloader = MsvcDownloader::new(options.clone());
+    let downloader = MsvcDownloader::new(options.with_configured_manifest_cache_dir());
     downloader.download().await
 }
 
@@ -529,7 +580,7 @@ pub async fn download_msvc(options: &DownloadOptions) -> Result<InstallInfo> {
 ///
 /// Returns `InstallInfo` containing paths to installed components
 pub async fn download_sdk(options: &DownloadOptions) -> Result<InstallInfo> {
-    let downloader = SdkDownloader::new(options.clone());
+    let downloader = SdkDownloader::new(options.with_configured_manifest_cache_dir());
     downloader.download().await
 }
 
@@ -620,7 +671,7 @@ pub async fn list_available_versions() -> Result<AvailableVersions> {
 pub async fn list_available_versions_with_selection(
     selection: VsChannelSelection,
 ) -> Result<AvailableVersions> {
-    let cache_dir = cache::default_manifest_cache_dir();
+    let cache_dir = configured_manifest_cache_dir();
     let (manifest, channel) = VsManifest::fetch_with_selection(selection, &cache_dir).await?;
 
     Ok(AvailableVersions {

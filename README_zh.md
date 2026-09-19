@@ -273,7 +273,7 @@ msvc-kit update --version 0.2.5
 | 缓存类型 | 位置 | 说明 |
 |----------|------|------|
 | 下载索引 | `downloads/{msvc\|sdk}/.../index.db` | redb 数据库，跟踪下载状态 |
-| 清单缓存 | `cache/manifests/` | VS 清单缓存，支持 ETag/Last-Modified |
+| 清单缓存 | `<cache dir>/manifests/` | VS 清单缓存，支持 ETag/Last-Modified；随 `MSVC_KIT_DIR` 与 `config --set-dir` 移动 |
 | 解压标记 | `.msvc-kit-extracted/` | 跳过已解压的包 |
 
 - **进度显示**：默认单行转圈。设置 `MSVC_KIT_INNER_PROGRESS=1` 显示详细文件进度。

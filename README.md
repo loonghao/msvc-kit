@@ -322,7 +322,7 @@ msvc-kit can provision the exact MSVC version required by the engine:
 | Cache Type | Location | Description |
 |------------|----------|-------------|
 | Download index | `downloads/{msvc\|sdk}/.../index.db` | redb database for tracking download status |
-| Manifest cache | `cache/manifests/` | Cached VS manifests with ETag/Last-Modified |
+| Manifest cache | `<cache dir>/manifests/` | Cached VS manifests with ETag/Last-Modified; follows `MSVC_KIT_DIR` and `config --set-dir` |
 | Extraction markers | `.msvc-kit-extracted/` | Skip already-extracted packages |
 
 - **Progress display**: Single-line spinner by default. Set `MSVC_KIT_INNER_PROGRESS=1` for detailed file progress.
