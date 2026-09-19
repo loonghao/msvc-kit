@@ -60,6 +60,23 @@ msvc-kit download --host-arch x64 --arch arm64
 - `arm64` - ARM64
 - `arm` - ARM 32 位（仅目标）
 
+### Visual Studio Channel
+
+包是从 Visual Studio channel manifest 中发现的。默认使用最新且可用的 channel；
+需要固定在某个 Visual Studio 版本时可以显式指定：
+
+```bash
+# 用大版本号或发布年份固定
+msvc-kit download --vs-channel 17
+msvc-kit download --vs-channel 2022
+
+# 环境变量 / 配置
+MSVC_KIT_VS_CHANNEL=17 msvc-kit download
+msvc-kit config --set-vs-channel 2022
+```
+
+详见 [Visual Studio 版本与 Channel](./vs-versions.md)。
+
 ### 下载选项
 
 ```bash

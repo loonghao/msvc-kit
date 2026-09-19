@@ -18,6 +18,13 @@ pub struct MsvcKitConfig {
     /// Default Windows SDK version to use (None = latest)
     pub default_sdk_version: Option<String>,
 
+    /// Default Visual Studio channel for manifest discovery (None = auto)
+    ///
+    /// Accepts a major version ("18"), a release year ("2026") or "auto".
+    /// `None` picks the newest channel that serves a usable manifest.
+    #[serde(default)]
+    pub default_vs_channel: Option<String>,
+
     /// Default architecture
     pub default_arch: Architecture,
 
@@ -38,6 +45,7 @@ impl Default for MsvcKitConfig {
             install_dir: base_dir.clone(),
             default_msvc_version: None,
             default_sdk_version: None,
+            default_vs_channel: None,
             default_arch: Architecture::X64,
             verify_hashes: true,
             parallel_downloads: 4,
@@ -176,6 +184,44 @@ mod tests {
         apply_install_dir_override(&mut config, None);
         apply_install_dir_override(&mut config, Some("".into()));
         assert_eq!(config.install_dir, expected);
+    }
+
+    #[test]
+    fn config_without_vs_channel_still_deserializes() {
+        // Older config files predate `default_vs_channel`; they must keep loading.
+        let toml_str = "install_dir = 'C:/kit'\n\n[irrelevant]\n";
+        let parsed: std::result::Result<MsvcKitConfig, _> = toml::from_str(toml_str);
+        assert!(parsed.is_err(), "unknown sections are not expected here");
+
+        let minimal = MsvcKitConfig::default();
+        assert_eq!(minimal.default_vs_channel, None);
+    }
+
+    #[test]
+    fn vs_channel_round_trips_through_toml() {
+        let config = MsvcKitConfig {
+            default_vs_channel: Some("2026".to_string()),
+            ..MsvcKitConfig::default()
+        };
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        assert!(toml_str.contains("default_vs_channel"));
+
+        let parsed: MsvcKitConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.default_vs_channel.as_deref(), Some("2026"));
+    }
+
+    #[test]
+    fn legacy_config_toml_without_vs_channel_loads() {
+        let config = MsvcKitConfig::default();
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let stripped: String = toml_str
+            .lines()
+            .filter(|line| !line.contains("default_vs_channel"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let parsed: MsvcKitConfig = toml::from_str(&stripped).unwrap();
+        assert_eq!(parsed.default_vs_channel, None);
     }
 
     #[test]

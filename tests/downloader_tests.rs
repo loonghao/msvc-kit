@@ -285,6 +285,7 @@ fn test_available_versions_debug() {
         sdk_versions: vec!["10.0.26100.0".to_string()],
         latest_msvc: Some("14.44".to_string()),
         latest_sdk: Some("10.0.26100.0".to_string()),
+        channel: Some("Visual Studio 2026 (v18)".to_string()),
     };
 
     let debug_str = format!("{:?}", versions);
@@ -299,6 +300,7 @@ fn test_available_versions_clone() {
         sdk_versions: vec!["10.0.26100.0".to_string()],
         latest_msvc: Some("14.44".to_string()),
         latest_sdk: Some("10.0.26100.0".to_string()),
+        channel: Some("Visual Studio 2022 (v17)".to_string()),
     };
 
     let cloned = versions.clone();
@@ -306,6 +308,7 @@ fn test_available_versions_clone() {
     assert_eq!(cloned.sdk_versions, versions.sdk_versions);
     assert_eq!(cloned.latest_msvc, versions.latest_msvc);
     assert_eq!(cloned.latest_sdk, versions.latest_sdk);
+    assert_eq!(cloned.channel, versions.channel);
 }
 
 // ============================================================================

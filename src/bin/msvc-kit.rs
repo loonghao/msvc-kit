@@ -10,11 +10,48 @@ use msvc_kit::bundle::{generate_bundle_scripts, save_bundle_scripts, BundleLayou
 use msvc_kit::env::generate_activation_script;
 use msvc_kit::query::{QueryComponent, QueryOptions, QueryProperty};
 use msvc_kit::version::{list_installed_msvc, list_installed_sdk, Architecture};
+use msvc_kit::vs_channel::{parse_channel_selector, VsChannelSelection};
 use msvc_kit::{
     download_msvc, download_sdk, generate_script, get_env_vars, load_config, query_installation,
     save_config, setup_environment, DownloadOptions, MsvcComponent, MsvcKitConfig, ScriptContext,
     ShellType,
 };
+
+/// Resolve the Visual Studio channel for a command.
+///
+/// Precedence: command line flag > `MSVC_KIT_VS_CHANNEL` > config file > auto.
+fn resolve_vs_channel(
+    flag: Option<String>,
+    config: &MsvcKitConfig,
+) -> anyhow::Result<Option<String>> {
+    let selected = flag
+        .or_else(|| std::env::var(msvc_kit::VS_CHANNEL_ENV_VAR).ok())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| config.default_vs_channel.clone());
+
+    match selected {
+        Some(value) => Ok(Some(validate_vs_channel(&value)?)),
+        None => Ok(None),
+    }
+}
+
+/// Validate a channel selector early so typos fail before any network call
+fn validate_vs_channel(selector: &str) -> anyhow::Result<String> {
+    parse_channel_selector(selector)
+        .map_err(|e| anyhow::anyhow!(e))?
+        .map(|spec| spec.major.to_string())
+        // "auto"/"latest" resolve to no pinned channel
+        .map(Ok)
+        .unwrap_or_else(|| Ok("auto".to_string()))
+}
+
+/// Human readable description of an optional channel selector
+fn describe_vs_channel(selector: Option<&str>) -> String {
+    match selector.and_then(|value| parse_channel_selector(value).ok().flatten()) {
+        Some(spec) => spec.display_name(),
+        None => "auto (newest available channel)".to_string(),
+    }
+}
 
 fn infer_self_update_install_root(exe_path: &std::path::Path) -> Option<PathBuf> {
     let exe_dir = exe_path.parent()?;
@@ -169,6 +206,10 @@ enum Commands {
         /// Can be specified multiple times
         #[arg(long = "exclude-pattern", value_name = "PATTERN")]
         exclude_patterns: Vec<String>,
+
+        /// Visual Studio channel to discover packages from (18/2026/17/2022, default: auto)
+        #[arg(long, value_name = "CHANNEL")]
+        vs_channel: Option<String>,
     },
 
     /// Setup environment variables for MSVC toolchain
@@ -207,6 +248,10 @@ enum Commands {
         /// Show available versions from Microsoft
         #[arg(long)]
         available: bool,
+
+        /// Visual Studio channel to query (18/2026/17/2022, default: auto)
+        #[arg(long, value_name = "CHANNEL")]
+        vs_channel: Option<String>,
     },
 
     /// Remove installed versions
@@ -245,6 +290,10 @@ enum Commands {
         /// Set default SDK version
         #[arg(long)]
         set_sdk: Option<String>,
+
+        /// Set default Visual Studio channel (18/2026/17/2022/auto)
+        #[arg(long)]
+        set_vs_channel: Option<String>,
 
         /// Reset configuration to defaults
         #[arg(long)]
@@ -331,6 +380,10 @@ enum Commands {
         #[arg(long)]
         sdk_version: Option<String>,
 
+        /// Visual Studio channel to discover packages from (18/2026/17/2022, default: auto)
+        #[arg(long, value_name = "CHANNEL")]
+        vs_channel: Option<String>,
+
         /// Accept Microsoft license terms (required)
         #[arg(long)]
         accept_license: bool,
@@ -394,6 +447,7 @@ async fn main() -> anyhow::Result<()> {
             parallel_downloads,
             include_components,
             exclude_patterns,
+            vs_channel,
         } => {
             let target_dir = target.unwrap_or_else(|| config.install_dir.clone());
             let arch: Architecture = arch.parse().map_err(|e: String| anyhow::anyhow!(e))?;
@@ -419,10 +473,15 @@ async fn main() -> anyhow::Result<()> {
                 http_client: None,
                 progress_handler: None,
                 cache_manager: None,
+                vs_channel: resolve_vs_channel(vs_channel, &config)?,
                 dry_run: false,
                 include_components: components,
                 exclude_patterns,
             };
+            println!(
+                "Visual Studio channel: {}",
+                describe_vs_channel(options.vs_channel.as_deref())
+            );
 
             println!("msvc-kit - Downloading MSVC Build Tools\n");
             println!("Target directory: {}", target_dir.display());
@@ -574,13 +633,25 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::List { dir, available } => {
+        Commands::List {
+            dir,
+            available,
+            vs_channel,
+        } => {
             let install_dir = dir.unwrap_or_else(|| config.install_dir.clone());
 
             if available {
+                let selection = VsChannelSelection::from_optional(
+                    resolve_vs_channel(vs_channel, &config)?.as_deref(),
+                )?;
                 println!("Fetching available versions from Microsoft...\n");
 
-                let manifest = msvc_kit::downloader::VsManifest::fetch().await?;
+                let (manifest, channel) = msvc_kit::downloader::VsManifest::fetch_with_selection(
+                    selection,
+                    &msvc_kit::downloader::cache::default_manifest_cache_dir(),
+                )
+                .await?;
+                println!("Visual Studio channel: {}\n", channel);
 
                 if let Some(msvc) = manifest.get_latest_msvc_version() {
                     println!("Latest MSVC version: {}", msvc);
@@ -684,13 +755,18 @@ async fn main() -> anyhow::Result<()> {
             set_dir,
             set_msvc,
             set_sdk,
+            set_vs_channel,
             reset,
         } => {
             if reset {
                 config = MsvcKitConfig::default();
                 save_config(&config)?;
                 println!("Configuration reset to defaults");
-            } else if set_dir.is_some() || set_msvc.is_some() || set_sdk.is_some() {
+            } else if set_dir.is_some()
+                || set_msvc.is_some()
+                || set_sdk.is_some()
+                || set_vs_channel.is_some()
+            {
                 // Persist only stored settings, never an environment override.
                 config = msvc_kit::config::load_persisted_config()?;
                 if let Some(dir) = set_dir {
@@ -701,6 +777,10 @@ async fn main() -> anyhow::Result<()> {
                 }
                 if let Some(sdk) = set_sdk {
                     config.default_sdk_version = Some(sdk);
+                }
+                if let Some(channel) = set_vs_channel {
+                    // Validate eagerly so a typo never reaches the config file.
+                    config.default_vs_channel = Some(validate_vs_channel(&channel)?);
                 }
                 save_config(&config)?;
                 println!("Configuration updated");
@@ -715,6 +795,10 @@ async fn main() -> anyhow::Result<()> {
             println!(
                 "  Default SDK version: {}",
                 config.default_sdk_version.as_deref().unwrap_or("latest")
+            );
+            println!(
+                "  Default VS channel: {}",
+                describe_vs_channel(config.default_vs_channel.as_deref())
             );
             println!("  Default architecture: {}", config.default_arch);
             println!("  Verify hashes: {}", config.verify_hashes);
@@ -884,6 +968,7 @@ async fn main() -> anyhow::Result<()> {
             host_arch,
             msvc_version,
             sdk_version,
+            vs_channel,
             accept_license,
             zip,
         } => {
@@ -912,6 +997,10 @@ async fn main() -> anyhow::Result<()> {
             println!("Output directory: {}", output.display());
             println!("Target architecture: {}", arch);
             println!("Host architecture: {}", host_arch);
+            println!(
+                "Visual Studio channel: {}",
+                describe_vs_channel(resolve_vs_channel(vs_channel.clone(), &config)?.as_deref())
+            );
             println!();
 
             // Create output directory
@@ -929,6 +1018,7 @@ async fn main() -> anyhow::Result<()> {
                 http_client: None,
                 progress_handler: None,
                 cache_manager: None,
+                vs_channel: resolve_vs_channel(vs_channel, &config)?,
                 dry_run: false,
                 include_components: Default::default(),
                 exclude_patterns: Default::default(),

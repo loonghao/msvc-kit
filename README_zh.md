@@ -119,6 +119,9 @@ msvc-kit download --parallel-downloads 8
 
 # 跳过哈希校验
 msvc-kit download --no-verify
+
+# 固定 Visual Studio channel（默认：最新已发布的 channel）
+msvc-kit download --vs-channel 2022
 ```
 
 > **注意：** MSVC 版本可以使用短格式（如 `14.44`），会自动解析到最新构建版本；也可以使用完整格式（如 `14.44.34823`）指定特定构建。

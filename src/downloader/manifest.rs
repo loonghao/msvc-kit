@@ -11,11 +11,12 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::cache::{
-    create_spinner, default_manifest_cache_dir, fetch_bytes_with_cache, url_basename,
+    create_spinner, default_manifest_cache_dir, fetch_bytes_with_cache, meta_path_for, url_basename,
 };
 use super::MsvcComponent;
-use crate::constants::{USER_AGENT, VS_CHANNEL_URL};
+use crate::constants::USER_AGENT;
 use crate::error::{MsvcKitError, Result};
+use crate::vs_channel::{self, VsChannelSelection, VsChannelSpec};
 
 /// Channel manifest structure (top-level)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,43 +122,152 @@ pub struct PackagePayload {
 }
 
 impl VsManifest {
-    /// Fetch and parse the latest VS manifest (cached).
+    /// Fetch and parse the VS manifest from the newest available channel (cached).
     ///
     /// The cache is stored under the OS-specific cache directory.
+    ///
+    /// Channels are tried newest first; a channel whose manifest has not been
+    /// published upstream yet is skipped instead of failing the whole request.
+    /// Use [`VsManifest::fetch_with_selection`] to pin a channel.
     pub async fn fetch() -> Result<Self> {
         let cache_dir = default_manifest_cache_dir();
         Self::fetch_with_cache_dir(&cache_dir).await
     }
 
-    /// Fetch and parse the latest VS manifest using a specific cache directory.
+    /// Fetch and parse the VS manifest using a specific cache directory.
+    ///
+    /// Uses the newest available channel, see [`VsManifest::fetch`].
     pub async fn fetch_with_cache_dir(cache_dir: &Path) -> Result<Self> {
+        Ok(
+            Self::fetch_with_selection(VsChannelSelection::Auto, cache_dir)
+                .await?
+                .0,
+        )
+    }
+
+    /// Fetch the VS manifest from one specific channel, without any fallback.
+    ///
+    /// Returns [`MsvcKitError::ChannelUnavailable`] when the channel does not
+    /// serve a usable manifest (for example because upstream has not published
+    /// it yet) instead of failing with an opaque parse error.
+    pub async fn fetch_with_channel(channel: &VsChannelSpec, cache_dir: &Path) -> Result<Self> {
+        Self::fetch_channel(channel, cache_dir).await
+    }
+
+    /// Fetch the VS manifest for a channel selection.
+    ///
+    /// * [`VsChannelSelection::Auto`] walks the channel registry newest first
+    ///   and uses the first channel that serves a usable manifest, so adding a
+    ///   new Visual Studio release to the registry is enough to pick it up once
+    ///   upstream publishes it.
+    /// * [`VsChannelSelection::Pinned`] uses exactly that channel.
+    ///
+    /// Returns the manifest together with the channel that served it.
+    pub async fn fetch_with_selection(
+        selection: VsChannelSelection,
+        cache_dir: &Path,
+    ) -> Result<(Self, VsChannelSpec)> {
+        match selection {
+            VsChannelSelection::Auto => Self::fetch_auto(cache_dir).await,
+            VsChannelSelection::Pinned(spec) => {
+                let manifest = Self::fetch_channel(&spec, cache_dir).await?;
+                Ok((manifest, spec))
+            }
+        }
+    }
+
+    /// Try every known channel newest first until one serves a usable manifest
+    async fn fetch_auto(cache_dir: &Path) -> Result<(Self, VsChannelSpec)> {
+        Self::fetch_auto_from(&vs_channel::known_channels(), cache_dir).await
+    }
+
+    /// Try the given channels in order until one serves a usable manifest
+    ///
+    /// Channels that upstream has not published yet (HTML instead of JSON) are
+    /// skipped with a warning instead of failing the whole request.
+    async fn fetch_auto_from(
+        candidates: &[VsChannelSpec],
+        cache_dir: &Path,
+    ) -> Result<(Self, VsChannelSpec)> {
+        let mut skipped: Vec<String> = Vec::new();
+
+        for candidate in candidates {
+            match Self::fetch_channel(candidate, cache_dir).await {
+                Ok(manifest) => {
+                    if !skipped.is_empty() {
+                        tracing::warn!(
+                            "Visual Studio channel(s) skipped as unavailable: {}",
+                            skipped.join("; ")
+                        );
+                    }
+                    return Ok((manifest, candidate.clone()));
+                }
+                Err(err @ MsvcKitError::ChannelUnavailable { .. }) => {
+                    tracing::debug!("Channel {} skipped: {}", candidate, err);
+                    skipped.push(format!("{} ({})", candidate, err));
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        Err(MsvcKitError::ChannelUnavailable {
+            channel: "auto-selection".to_string(),
+            url: candidates
+                .iter()
+                .map(|c| c.channel_url.clone())
+                .collect::<Vec<_>>()
+                .join(", "),
+            reason: if skipped.is_empty() {
+                "no Visual Studio channel configured".to_string()
+            } else {
+                format!(
+                    "no channel serves a usable manifest (attempts: {})",
+                    skipped.join("; ")
+                )
+            },
+        })
+    }
+
+    /// Fetch and parse the manifest of a single channel (cached)
+    async fn fetch_channel(channel: &VsChannelSpec, cache_dir: &Path) -> Result<Self> {
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .build()
             .map_err(|e| MsvcKitError::Other(format!("Failed to create HTTP client: {}", e)))?;
 
         // Step 1: Fetch channel manifest (cached)
-        let channel_name = url_basename(VS_CHANNEL_URL);
-        let spinner = create_spinner(&format!("Fetching channel manifest: {}", channel_name));
-        tracing::debug!("Fetching channel manifest from {}", VS_CHANNEL_URL);
+        let channel_label = format!("{} channel manifest", channel);
+        let spinner = create_spinner(&format!("Fetching {}", channel_label));
+        tracing::debug!("Fetching {} from {}", channel_label, channel.channel_url);
 
-        let channel_cache = cache_dir.join("channel.json");
+        let channel_cache = cache_dir.join(channel.channel_cache_file());
         let (channel_bytes, channel_cached) = fetch_bytes_with_cache(
             &client,
-            VS_CHANNEL_URL,
+            &channel.channel_url,
             &channel_cache,
             &spinner,
-            &format!("Downloading channel manifest: {}", channel_name),
-            &channel_name,
+            &format!("Downloading {}", channel_label),
+            &channel.cache_slug(),
         )
-        .await?;
+        .await
+        .map_err(|err| classify_channel_error(channel, err))?;
 
         if channel_cached {
             tracing::debug!("Using cached channel manifest from {:?}", channel_cache);
         }
 
-        spinner.set_message(format!("Parsing channel manifest: {}", channel_name));
-        let channel_manifest: ChannelManifest = serde_json::from_slice(&channel_bytes)?;
+        spinner.set_message(format!("Parsing {}", channel_label));
+        let channel_manifest = match parse_channel_manifest(&channel_bytes) {
+            Ok(manifest) => manifest,
+            Err(reason) => {
+                // Never keep a non-manifest body (an unpublished channel often
+                // serves an HTML page) in the cache: it would mask the channel
+                // once upstream publishes the real manifest.
+                discard_cached_channel(&channel_cache).await;
+                spinner.finish_and_clear();
+                return Err(channel_unavailable(channel, reason));
+            }
+        };
 
         // Show channel info if available
         if let Some(ref info) = channel_manifest.info {
@@ -173,16 +283,20 @@ impl VsManifest {
             .find(|item| item.id == "Microsoft.VisualStudio.Manifests.VisualStudio")
             .ok_or_else(|| {
                 spinner.finish_and_clear();
-                MsvcKitError::Other("Manifest entry missing in channel".to_string())
+                channel_unavailable(
+                    channel,
+                    "the channel manifest has no Microsoft.VisualStudio.Manifests.VisualStudio entry",
+                )
             })?;
 
         let manifest_url = manifest_item
             .payloads
             .first()
             .map(|p| p.url.clone())
+            .filter(|url| !url.trim().is_empty())
             .ok_or_else(|| {
                 spinner.finish_and_clear();
-                MsvcKitError::Other("Manifest URL missing".to_string())
+                channel_unavailable(channel, "the channel manifest has no manifest payload URL")
             })?;
 
         let manifest_file_name = manifest_item
@@ -257,13 +371,23 @@ impl VsManifest {
 
         let _ = done_tx.send(());
 
+        if manifest.packages.is_empty() {
+            spinner.finish_and_clear();
+            return Err(channel_unavailable(
+                channel,
+                "the package manifest does not expose any packages",
+            ));
+        }
+
         spinner.finish_with_message(format!(
-            "Loaded manifest with {} packages",
+            "Loaded {} with {} packages",
+            channel,
             manifest.packages.len()
         ));
 
         tracing::info!(
-            "Loaded VS manifest with {} packages",
+            "Loaded {} with {} packages",
+            channel,
             manifest.packages.len()
         );
         Ok(manifest)
@@ -597,6 +721,55 @@ impl VsManifest {
             payloads,
             total_size,
         }
+    }
+}
+
+/// Parse a channel manifest body, reporting *why* it is unusable
+///
+/// Upstream serves an HTML page instead of JSON while a channel has not been
+/// published yet; that must not surface as an opaque serde error.
+fn parse_channel_manifest(bytes: &[u8]) -> std::result::Result<ChannelManifest, String> {
+    let first = bytes
+        .iter()
+        .find(|byte| !byte.is_ascii_whitespace())
+        .copied();
+
+    match first {
+        Some(b'<') => Err(
+            "the server returned an HTML page instead of a JSON manifest \
+            (the channel is probably not published yet)"
+                .to_string(),
+        ),
+        Some(b'{') => serde_json::from_slice(bytes)
+            .map_err(|e| format!("the response is not a valid channel manifest: {}", e)),
+        _ => Err("the server returned an empty or non-JSON response".to_string()),
+    }
+}
+
+/// Remove a cached channel manifest that turned out to be unusable
+async fn discard_cached_channel(cache_file: &Path) {
+    let _ = tokio::fs::remove_file(cache_file).await;
+    let _ = tokio::fs::remove_file(meta_path_for(cache_file)).await;
+}
+
+/// Build a [`MsvcKitError::ChannelUnavailable`] for a channel
+fn channel_unavailable(channel: &VsChannelSpec, reason: impl Into<String>) -> MsvcKitError {
+    MsvcKitError::ChannelUnavailable {
+        channel: channel.display_name(),
+        url: channel.channel_url.clone(),
+        reason: reason.into(),
+    }
+}
+
+/// Decide whether a channel fetch error means "this channel is unusable"
+///
+/// Transport and IO failures say nothing about the channel itself, so they stay
+/// fatal. HTTP level problems (404, non-success status, ...) are reported as an
+/// unavailable channel so auto-selection can fall back to an older release.
+fn classify_channel_error(channel: &VsChannelSpec, err: MsvcKitError) -> MsvcKitError {
+    match err {
+        MsvcKitError::Network(_) | MsvcKitError::Io(_) => err,
+        other => channel_unavailable(channel, other.to_string()),
     }
 }
 
@@ -1308,5 +1481,257 @@ mod tests {
         assert!(arm64_packages
             .iter()
             .any(|p| p.id == "Win11SDK_10.0.26100_Headers"));
+    }
+
+    /// Build a minimal channel manifest body pointing at `vsman_url`
+    fn channel_manifest_body(vsman_url: &str) -> String {
+        format!(
+            r#"{{
+                "manifestVersion": "1.1",
+                "info": {{ "productDisplayVersion": "18.0.0" }},
+                "channelItems": [
+                    {{
+                        "id": "Microsoft.VisualStudio.Manifests.VisualStudio",
+                        "version": "18.0.0",
+                        "type": "Manifest",
+                        "payloads": [
+                            {{ "fileName": "VisualStudio.vsman", "url": "{}", "size": 64 }}
+                        ]
+                    }}
+                ]
+            }}"#,
+            vsman_url
+        )
+    }
+
+    /// Build a minimal VS package manifest body
+    fn vs_manifest_body() -> String {
+        r#"{
+            "manifestVersion": "1.1",
+            "packages": [
+                {
+                    "id": "Microsoft.VC.14.50.Tools.HostX64.TargetX64.base",
+                    "version": "14.50.1000",
+                    "type": "Vsix",
+                    "chip": "x64",
+                    "payloads": []
+                }
+            ]
+        }"#
+        .to_string()
+    }
+
+    #[test]
+    fn html_response_is_reported_as_unpublished_channel() {
+        let body = b"<!doctype html><html lang=\"en\"><body>Not found</body></html>";
+        let err = parse_channel_manifest(body).unwrap_err();
+
+        assert!(err.contains("HTML"), "{}", err);
+        assert!(err.contains("not published"), "{}", err);
+    }
+
+    #[test]
+    fn empty_response_is_rejected() {
+        let err = parse_channel_manifest(b"   \n\t ").unwrap_err();
+        assert!(err.contains("empty"), "{}", err);
+    }
+
+    #[test]
+    fn malformed_json_is_rejected_with_context() {
+        let err = parse_channel_manifest(b"{\"manifestVersion\": ").unwrap_err();
+        assert!(err.contains("not a valid channel manifest"), "{}", err);
+    }
+
+    #[test]
+    fn valid_channel_manifest_is_parsed() {
+        let body = channel_manifest_body("https://example.com/VisualStudio.vsman");
+        let manifest = parse_channel_manifest(body.as_bytes()).expect("valid channel manifest");
+
+        assert_eq!(
+            manifest.info.and_then(|info| info.product_display_version),
+            Some("18.0.0".to_string())
+        );
+        assert_eq!(manifest.channel_items.len(), 1);
+    }
+
+    #[test]
+    fn http_level_failures_are_reported_as_unavailable_channel() {
+        let channel = VsChannelSpec::from_major(18);
+        let err = classify_channel_error(
+            &channel,
+            MsvcKitError::Other(
+                "Failed to fetch https://aka.ms/vs/18/release/channel: HTTP 404".to_string(),
+            ),
+        );
+
+        match err {
+            MsvcKitError::ChannelUnavailable {
+                channel: name,
+                url,
+                reason,
+            } => {
+                assert_eq!(name, "Visual Studio 2026 (v18)");
+                assert!(url.contains("/vs/18/"), "{}", url);
+                assert!(reason.contains("404"), "{}", reason);
+            }
+            other => panic!("expected ChannelUnavailable, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn pinned_html_channel_fails_cleanly_without_poisoning_the_cache() {
+        let mut server = mockito::Server::new_async().await;
+        let html = server
+            .mock("GET", "/vs/18/release/channel")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<!doctype html><html>not published yet</html>")
+            .create_async()
+            .await;
+
+        let cache_dir = tempfile::tempdir().unwrap();
+        let channel = VsChannelSpec::new(
+            18,
+            Some(2026),
+            format!("{}/vs/18/release/channel", server.url()),
+        );
+
+        let err = VsManifest::fetch_with_channel(&channel, cache_dir.path())
+            .await
+            .expect_err("HTML channel must not be treated as a manifest");
+
+        match err {
+            MsvcKitError::ChannelUnavailable { reason, .. } => {
+                assert!(reason.contains("HTML"), "{}", reason)
+            }
+            other => panic!("expected ChannelUnavailable, got {other:?}"),
+        }
+
+        html.assert_async().await;
+        assert!(
+            !cache_dir.path().join("channel-v18.json").exists(),
+            "an unpublished channel body must not stay in the cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn pinned_channel_serves_a_manifest() {
+        let mut server = mockito::Server::new_async().await;
+        let vsman_url = format!("{}/vsman/VisualStudio.vsman", server.url());
+
+        let channel_mock = server
+            .mock("GET", "/vs/18/release/channel")
+            .with_status(200)
+            .with_body(channel_manifest_body(&vsman_url))
+            .create_async()
+            .await;
+        let vsman_mock = server
+            .mock("GET", "/vsman/VisualStudio.vsman")
+            .with_status(200)
+            .with_body(vs_manifest_body())
+            .create_async()
+            .await;
+
+        let cache_dir = tempfile::tempdir().unwrap();
+        let channel = VsChannelSpec::new(
+            18,
+            Some(2026),
+            format!("{}/vs/18/release/channel", server.url()),
+        );
+
+        let manifest = VsManifest::fetch_with_channel(&channel, cache_dir.path())
+            .await
+            .expect("manifest should load");
+
+        assert_eq!(manifest.list_msvc_versions(), vec!["14.50".to_string()]);
+        channel_mock.assert_async().await;
+        vsman_mock.assert_async().await;
+        assert!(cache_dir.path().join("channel-v18.json").exists());
+    }
+
+    #[tokio::test]
+    async fn auto_selection_falls_back_to_the_next_channel() {
+        let mut server = mockito::Server::new_async().await;
+        let vsman_url = format!("{}/vsman/VisualStudio.vsman", server.url());
+
+        // Newest channel: upstream has not published a JSON manifest yet.
+        let unpublished = server
+            .mock("GET", "/vs/19/release/channel")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<!doctype html><html>search results</html>")
+            .create_async()
+            .await;
+        // Older channel: serves a real manifest.
+        let published = server
+            .mock("GET", "/vs/18/release/channel")
+            .with_status(200)
+            .with_body(channel_manifest_body(&vsman_url))
+            .create_async()
+            .await;
+        let vsman = server
+            .mock("GET", "/vsman/VisualStudio.vsman")
+            .with_status(200)
+            .with_body(vs_manifest_body())
+            .create_async()
+            .await;
+
+        let cache_dir = tempfile::tempdir().unwrap();
+        let candidates = vec![
+            VsChannelSpec::new(19, None, format!("{}/vs/19/release/channel", server.url())),
+            VsChannelSpec::new(
+                18,
+                Some(2026),
+                format!("{}/vs/18/release/channel", server.url()),
+            ),
+        ];
+
+        let (manifest, used) = VsManifest::fetch_auto_from(&candidates, cache_dir.path())
+            .await
+            .expect("should fall back to the published channel");
+
+        assert_eq!(used.major, 18);
+        assert_eq!(manifest.list_msvc_versions(), vec!["14.50".to_string()]);
+        unpublished.assert_async().await;
+        published.assert_async().await;
+        vsman.assert_async().await;
+        assert!(
+            !cache_dir.path().join("channel-v19.json").exists(),
+            "the unpublished channel must not be cached"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_selection_reports_when_no_channel_is_available() {
+        let mut server = mockito::Server::new_async().await;
+        let unavailable = server
+            .mock("GET", "/vs/19/release/channel")
+            .with_status(200)
+            .with_body("<!doctype html><html>nope</html>")
+            .create_async()
+            .await;
+
+        let cache_dir = tempfile::tempdir().unwrap();
+        let candidates = vec![VsChannelSpec::new(
+            19,
+            None,
+            format!("{}/vs/19/release/channel", server.url()),
+        )];
+
+        let err = VsManifest::fetch_auto_from(&candidates, cache_dir.path())
+            .await
+            .expect_err("no channel is usable");
+
+        match err {
+            MsvcKitError::ChannelUnavailable { reason, .. } => {
+                assert!(
+                    reason.contains("no channel serves a usable manifest"),
+                    "{}",
+                    reason
+                )
+            }
+            other => panic!("expected ChannelUnavailable, got {other:?}"),
+        }
+        unavailable.assert_async().await;
     }
 }

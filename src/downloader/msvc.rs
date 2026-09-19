@@ -39,7 +39,10 @@ impl MsvcDownloader {
 
     /// Preview what would be downloaded (dry-run mode)
     pub async fn preview(&self) -> Result<DownloadPreview> {
-        let manifest = VsManifest::fetch().await?;
+        let cache_dir = self.downloader.manifest_cache_dir();
+        let selection = self.downloader.options.vs_channel_selection()?;
+        let (manifest, channel) = VsManifest::fetch_with_selection(selection, &cache_dir).await?;
+        tracing::debug!("Using {} for package discovery", channel);
 
         let available_versions = manifest.list_msvc_versions();
         let version = self
@@ -120,7 +123,9 @@ impl MsvcDownloader {
 
         // Use custom cache dir if a cache_manager was injected
         let cache_dir = self.downloader.manifest_cache_dir();
-        let manifest = VsManifest::fetch_with_cache_dir(&cache_dir).await?;
+        let selection = self.downloader.options.vs_channel_selection()?;
+        let (manifest, channel) = VsManifest::fetch_with_selection(selection, &cache_dir).await?;
+        tracing::info!("Using {} for package discovery", channel);
 
         // List available versions for debugging
         let available_versions = manifest.list_msvc_versions();

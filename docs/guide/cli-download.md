@@ -132,6 +132,25 @@ Supported architectures:
 - `arm64` - ARM64
 - `arm` - ARM 32-bit (target only)
 
+### Visual Studio Channel
+
+Packages are discovered from a Visual Studio channel manifest. By default
+msvc-kit uses the newest channel that serves a manifest; pin one to stay on a
+specific Visual Studio release:
+
+```bash
+# Pin by major version or release year
+msvc-kit download --vs-channel 17
+msvc-kit download --vs-channel 2022
+
+# Environment variable / configuration
+MSVC_KIT_VS_CHANNEL=17 msvc-kit download
+msvc-kit config --set-vs-channel 2022
+```
+
+See [Visual Studio Versions & Channels](./vs-versions.md) for the full list and
+for how to add a new release.
+
 ### Download Options
 
 ```bash

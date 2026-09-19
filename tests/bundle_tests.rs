@@ -262,6 +262,7 @@ fn test_bundle_options_custom() {
         host_arch: Architecture::X64,
         msvc_version: Some("14.44".to_string()),
         sdk_version: Some("10.0.26100.0".to_string()),
+        vs_channel: Some("2026".to_string()),
         parallel_downloads: 16,
     };
 
@@ -290,6 +291,7 @@ fn test_bundle_options_clone() {
         host_arch: Architecture::X64,
         msvc_version: Some("14.43".to_string()),
         sdk_version: None,
+        vs_channel: None,
         parallel_downloads: 4,
     };
 

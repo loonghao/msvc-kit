@@ -86,6 +86,35 @@ pub enum MsvcKitError {
     #[error("Platform not supported: {0}")]
     UnsupportedPlatform(String),
 
+    /// Unknown Visual Studio channel selector
+    #[error(
+        "Unknown Visual Studio channel '{selector}'. Known channels: {known}. \
+         A bare major version (e.g. 19) also works and resolves to the aka.ms channel URL."
+    )]
+    UnknownVsChannel {
+        /// The selector the user provided
+        selector: String,
+        /// Comma separated list of known channels
+        known: String,
+    },
+
+    /// A Visual Studio channel manifest is not published or not usable
+    ///
+    /// Raised when a channel URL does not serve a JSON manifest yet (upstream
+    /// often serves an HTML page until a channel is published), or when the
+    /// manifest does not expose any packages. Auto selection skips such a
+    /// channel and falls back to the next one; an explicitly pinned channel
+    /// reports this error to the caller.
+    #[error("Visual Studio channel {channel} is not available ({url}): {reason}")]
+    ChannelUnavailable {
+        /// Channel name, e.g. `Visual Studio 2026 (v18)`
+        channel: String,
+        /// Channel manifest URL
+        url: String,
+        /// Why the channel cannot be used
+        reason: String,
+    },
+
     /// Download cancelled
     #[error("Download cancelled by user")]
     Cancelled,

@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use crate::error::Result;
 use crate::installer::InstallInfo;
 use crate::version::Architecture;
+use crate::vs_channel::VsChannelSelection;
 
 /// Optional MSVC component categories that can be included in downloads.
 ///
@@ -163,6 +164,13 @@ pub struct DownloadOptions {
     /// Custom cache manager (None = use default file system cache)
     pub cache_manager: Option<BoxedCacheManager>,
 
+    /// Visual Studio channel used for manifest discovery (None = auto)
+    ///
+    /// Accepts a major version (`17`, `v17`), a release year (`2022`) or the
+    /// keyword `auto` / `latest`. `None` picks the newest channel that serves a
+    /// usable manifest. See [`crate::vs_channel`].
+    pub vs_channel: Option<String>,
+
     /// Dry-run mode: preview what would be downloaded without actually downloading
     pub dry_run: bool,
 
@@ -194,6 +202,7 @@ impl std::fmt::Debug for DownloadOptions {
             .field("http_client", &self.http_client.is_some())
             .field("progress_handler", &self.progress_handler.is_some())
             .field("cache_manager", &self.cache_manager.is_some())
+            .field("vs_channel", &self.vs_channel)
             .field("dry_run", &self.dry_run)
             .field("include_components", &self.include_components)
             .field("exclude_patterns", &self.exclude_patterns)
@@ -258,6 +267,7 @@ impl Default for DownloadOptions {
             http_client: None,
             progress_handler: None,
             cache_manager: None,
+            vs_channel: std::env::var(crate::vs_channel::VS_CHANNEL_ENV_VAR).ok(),
             dry_run,
             include_components,
             exclude_patterns,
@@ -339,6 +349,23 @@ impl DownloadOptionsBuilder {
         self
     }
 
+    /// Pin the Visual Studio channel used for manifest discovery
+    ///
+    /// Accepts a major version (`18`), a release year (`2026`) or `auto`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use msvc_kit::DownloadOptions;
+    ///
+    /// // Discover packages from the Visual Studio 2026 channel
+    /// let options = DownloadOptions::builder().vs_channel("2026").build();
+    /// ```
+    pub fn vs_channel(mut self, channel: impl Into<String>) -> Self {
+        self.options.vs_channel = Some(channel.into());
+        self
+    }
+
     /// Enable dry-run mode (preview without downloading)
     pub fn dry_run(mut self, dry_run: bool) -> Self {
         self.options.dry_run = dry_run;
@@ -405,6 +432,15 @@ impl DownloadOptionsBuilder {
     /// Build the options
     pub fn build(self) -> DownloadOptions {
         self.options
+    }
+}
+
+impl DownloadOptions {
+    /// Resolve the configured Visual Studio channel selection
+    ///
+    /// Returns an error when the selector does not reference a valid channel.
+    pub fn vs_channel_selection(&self) -> Result<VsChannelSelection> {
+        VsChannelSelection::from_optional(self.vs_channel.as_deref())
     }
 }
 
@@ -521,6 +557,11 @@ pub struct AvailableVersions {
     pub latest_msvc: Option<String>,
     /// Latest SDK version
     pub latest_sdk: Option<String>,
+    /// Visual Studio channel that served the versions (e.g. "Visual Studio 2026 (v18)")
+    ///
+    /// Useful for diagnostics: with automatic selection the channel depends on
+    /// what upstream has published.
+    pub channel: Option<String>,
 }
 
 /// Fetch available MSVC and Windows SDK versions from Microsoft servers
@@ -553,12 +594,40 @@ pub struct AvailableVersions {
 /// }
 /// ```
 pub async fn list_available_versions() -> Result<AvailableVersions> {
-    let manifest = VsManifest::fetch().await?;
+    list_available_versions_with_selection(VsChannelSelection::Auto).await
+}
+
+/// Fetch available MSVC and Windows SDK versions from a specific channel
+///
+/// Like [`list_available_versions`] but with an explicit Visual Studio channel,
+/// e.g. `VsChannelSelection::Pinned(VsChannelSpec::from_major(18))` for the
+/// Visual Studio 2026 channel.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use msvc_kit::list_available_versions_with_selection;
+/// use msvc_kit::vs_channel::{VsChannelSelection, VsChannelSpec};
+///
+/// #[tokio::main]
+/// async fn main() -> anyhow::Result<()> {
+///     let selection = VsChannelSelection::Pinned(VsChannelSpec::from_major(18));
+///     let versions = list_available_versions_with_selection(selection).await?;
+///     println!("channel: {:?}", versions.channel);
+///     Ok(())
+/// }
+/// ```
+pub async fn list_available_versions_with_selection(
+    selection: VsChannelSelection,
+) -> Result<AvailableVersions> {
+    let cache_dir = cache::default_manifest_cache_dir();
+    let (manifest, channel) = VsManifest::fetch_with_selection(selection, &cache_dir).await?;
 
     Ok(AvailableVersions {
         msvc_versions: manifest.list_msvc_versions(),
         sdk_versions: manifest.list_sdk_versions(),
         latest_msvc: manifest.get_latest_msvc_version(),
         latest_sdk: manifest.get_latest_sdk_version(),
+        channel: Some(channel.display_name()),
     })
 }

@@ -23,7 +23,13 @@ Installed SDK versions:
 
 ```bash
 msvc-kit list --available
+
+# Query a specific Visual Studio channel
+msvc-kit list --available --vs-channel 2026
 ```
+
+The command prints which Visual Studio channel served the versions. See
+[Visual Studio Versions & Channels](./vs-versions.md) for channel selection.
 
 Output:
 ```
