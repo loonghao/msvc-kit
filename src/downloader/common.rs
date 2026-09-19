@@ -66,14 +66,18 @@ impl CommonDownloader {
     }
 
     /// Get the manifest cache directory.
-    /// If a custom cache manager is set, use its cache_dir/manifests;
-    /// otherwise fall back to the default location.
+    ///
+    /// Resolution order: an injected cache manager (`cache_dir/manifests`), the
+    /// explicit `manifest_cache_dir` from the download options, and finally the
+    /// platform default location.
     pub fn manifest_cache_dir(&self) -> PathBuf {
         if let Some(ref cm) = self.cache_manager {
-            cm.cache_dir().join("manifests")
-        } else {
-            super::cache::default_manifest_cache_dir()
+            return cm.cache_dir().join("manifests");
         }
+        if let Some(ref dir) = self.options.manifest_cache_dir {
+            return dir.clone();
+        }
+        super::cache::default_manifest_cache_dir()
     }
 
     /// Download packages with progress display and local index for fast skip

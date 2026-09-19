@@ -39,7 +39,8 @@ impl MsvcDownloader {
 
     /// Preview what would be downloaded (dry-run mode)
     pub async fn preview(&self) -> Result<DownloadPreview> {
-        let manifest = VsManifest::fetch().await?;
+        let manifest =
+            VsManifest::fetch_with_cache_dir(&self.downloader.manifest_cache_dir()).await?;
 
         let available_versions = manifest.list_msvc_versions();
         let version = self
