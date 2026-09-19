@@ -38,6 +38,7 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 - **Manifest caching** with ETag/Last-Modified conditional requests
 - **TLS backend** uses `native-tls` (Windows schannel) to avoid `rustls`/`awslc-sys` build issues
 - **Multi-format extraction** (VSIX, MSI, CAB)
+- **Visual Studio channel selection** - auto-selects the newest published channel (VS 2026 / VS 2022), pinnable via `--vs-channel`
 - **Hash verification** with SHA256
 - **Self-update** via [axoupdater](https://github.com/axodotdev/axoupdater), compatible with cargo-dist releases
 
@@ -118,6 +119,9 @@ msvc-kit download --parallel-downloads 8
 
 # Skip hash verification
 msvc-kit download --no-verify
+
+# Pin the Visual Studio channel (default: newest published channel)
+msvc-kit download --vs-channel 2022
 ```
 
 > **Note:** MSVC version can be specified as short format (e.g., `14.44`) which auto-resolves to the latest build, or full format (e.g., `14.44.34823`) for a specific build.

@@ -92,14 +92,15 @@ pub mod installer;
 pub mod query;
 pub mod scripts;
 pub mod version;
+pub mod vs_channel;
 
 // Re-export main types and functions
 pub use config::{load_config, save_config, MsvcKitConfig};
 pub use downloader::{
-    download_all, download_msvc, download_sdk, list_available_versions, AvailableVersions,
-    BoxedCacheManager, BoxedProgressHandler, CacheManager, ComponentDownloader, ComponentType,
-    DownloadOptions, DownloadOptionsBuilder, FileSystemCacheManager, MsvcComponent,
-    ProgressHandler,
+    download_all, download_msvc, download_sdk, list_available_versions,
+    list_available_versions_with_selection, AvailableVersions, BoxedCacheManager,
+    BoxedProgressHandler, CacheManager, ComponentDownloader, ComponentType, DownloadOptions,
+    DownloadOptionsBuilder, FileSystemCacheManager, MsvcComponent, ProgressHandler,
 };
 pub use env::{get_env_vars, setup_environment, MsvcEnvironment, ToolPaths};
 pub use error::{MsvcKitError, Result};
@@ -113,6 +114,10 @@ pub use scripts::{
     GeneratedScripts, ScriptContext, ShellType,
 };
 pub use version::{Architecture, MsvcVersion, SdkVersion};
+pub use vs_channel::{
+    known_channels, parse_channel_selector, VsChannelEntry, VsChannelSelection, VsChannelSpec,
+    VS_CHANNELS, VS_CHANNEL_ENV_VAR, VS_CHANNEL_URL_TEMPLATE,
+};
 
 // Re-export bundle types
 pub use bundle::{create_bundle, discover_bundle, BundleLayout, BundleOptions, BundleResult};

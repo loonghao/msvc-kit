@@ -53,6 +53,7 @@
 //!         host_arch: Architecture::X64,
 //!         msvc_version: None,  // Use latest
 //!         sdk_version: None,   // Use latest
+//!         vs_channel: None,    // Use the newest published VS channel
 //!         parallel_downloads: 8,
 //!     };
 //!     
@@ -92,6 +93,10 @@ pub struct BundleOptions {
     pub msvc_version: Option<String>,
     /// SDK version (None = latest)
     pub sdk_version: Option<String>,
+    /// Visual Studio channel used for manifest discovery (None = auto)
+    ///
+    /// Accepts a major version (`18`), a release year (`2026`) or `auto`.
+    pub vs_channel: Option<String>,
     /// Number of parallel downloads
     pub parallel_downloads: usize,
 }
@@ -104,6 +109,7 @@ impl Default for BundleOptions {
             host_arch: Architecture::host(),
             msvc_version: None,
             sdk_version: None,
+            vs_channel: std::env::var(crate::vs_channel::VS_CHANNEL_ENV_VAR).ok(),
             parallel_downloads: 8,
         }
     }
@@ -172,6 +178,7 @@ pub async fn create_bundle(options: BundleOptions) -> Result<BundleResult> {
         http_client: None,
         progress_handler: None,
         cache_manager: None,
+        vs_channel: options.vs_channel.clone(),
         dry_run: false,
         include_components: Default::default(),
         exclude_patterns: Default::default(),
@@ -256,6 +263,7 @@ mod tests {
             http_client: None,
             progress_handler: None,
             cache_manager: None,
+            vs_channel: opts.vs_channel.clone(),
             dry_run: false,
             include_components: Default::default(),
             exclude_patterns: Default::default(),

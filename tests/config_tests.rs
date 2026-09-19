@@ -25,6 +25,7 @@ fn test_config_serde() {
         install_dir: PathBuf::from("C:/test"),
         default_msvc_version: Some("14.44".to_string()),
         default_sdk_version: Some("10.0.26100.0".to_string()),
+        default_vs_channel: Some("2026".to_string()),
         default_arch: Architecture::X86,
         verify_hashes: false,
         parallel_downloads: 8,
@@ -189,6 +190,23 @@ fn test_vs_channel_url() {
 }
 
 #[test]
+fn legacy_vs_channel_url_matches_the_registry() {
+    use msvc_kit::vs_channel::{entry_for_major, VS_CHANNEL_URL_TEMPLATE};
+
+    // The legacy constant must not drift away from the VS 2022 registry row.
+    assert_eq!(
+        msvc_kit::constants::VS_CHANNEL_URL,
+        entry_for_major(17).expect("VS 2022 row").channel_url
+    );
+
+    // And every known URL must be expressible through the template.
+    for entry in msvc_kit::VS_CHANNELS {
+        let from_template = VS_CHANNEL_URL_TEMPLATE.replace("{major}", &entry.major.to_string());
+        assert_eq!(entry.channel_url, from_template, "v{}", entry.major);
+    }
+}
+
+#[test]
 fn test_download_constants() {
     use msvc_kit::constants::download;
     assert_eq!(download::MAX_RETRIES, 4);
@@ -234,6 +252,7 @@ fn test_config_toml_roundtrip_all_fields() {
         install_dir: PathBuf::from("C:/msvc-kit"),
         default_msvc_version: Some("14.44".to_string()),
         default_sdk_version: Some("10.0.26100.0".to_string()),
+        default_vs_channel: Some("17".to_string()),
         default_arch: Architecture::Arm64,
         verify_hashes: false,
         parallel_downloads: 16,

@@ -7,6 +7,10 @@
 pub const USER_AGENT: &str = concat!("msvc-kit/", env!("CARGO_PKG_VERSION"));
 
 /// Visual Studio 2022 channel manifest URL
+///
+/// Deprecated for new code: this is the registry entry for VS 2022 in
+/// [`crate::vs_channel::VS_CHANNELS`], kept for backwards compatibility.
+/// Prefer selecting a channel through [`crate::vs_channel`].
 pub const VS_CHANNEL_URL: &str = "https://aka.ms/vs/17/release/channel";
 
 /// Download configuration
