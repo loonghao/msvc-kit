@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.2.16](https://github.com/loonghao/msvc-kit/compare/v0.2.15...v0.2.16) (2026-09-19)
+
+
+### Bug Fixes
+
+* honor installation directory environment override ([#146](https://github.com/loonghao/msvc-kit/issues/146)) ([1dab763](https://github.com/loonghao/msvc-kit/commit/1dab763a0dbadc5bf02db09006447d98b16aff3a))
+
+
+### Dependencies
+
+* update actions/checkout action to v7 ([#135](https://github.com/loonghao/msvc-kit/issues/135)) ([1a16c8a](https://github.com/loonghao/msvc-kit/commit/1a16c8a6ceac9c3fca629b6cd1f432fc9190cb60))
+* update codecov/codecov-action action to v7 ([#127](https://github.com/loonghao/msvc-kit/issues/127)) ([da0cab7](https://github.com/loonghao/msvc-kit/commit/da0cab7a1e1cfc005cc1238b98a91c678312a0b9))
+* update Rust crate anyhow to v1.0.104 ([#136](https://github.com/loonghao/msvc-kit/issues/136)) ([e0645cf](https://github.com/loonghao/msvc-kit/commit/e0645cf8a5a3a5fed979810907e97b094d188df2))
+* update Rust crate askama to v0.16.1 ([#145](https://github.com/loonghao/msvc-kit/issues/145)) ([f767979](https://github.com/loonghao/msvc-kit/commit/f76797970c0922845042a427474cac1001e8ada0))
+* update Rust crate async-trait to v0.1.92 ([#143](https://github.com/loonghao/msvc-kit/issues/143)) ([fd5e235](https://github.com/loonghao/msvc-kit/commit/fd5e235dec0b975adaf1ebb82dd4e29170ac0d36))
+* update Rust crate axoupdater to v0.10.2 ([#148](https://github.com/loonghao/msvc-kit/issues/148)) ([f9b968f](https://github.com/loonghao/msvc-kit/commit/f9b968f7e4851c943608f434337c72299e04a7d5))
+* update Rust crate clap to v4.6.7 ([#140](https://github.com/loonghao/msvc-kit/issues/140)) ([ef53907](https://github.com/loonghao/msvc-kit/commit/ef53907a55e963da73a1ce00dd0eb3e3e9bdcac2))
+* update Rust crate futures to v0.3.34 ([#149](https://github.com/loonghao/msvc-kit/issues/149)) ([9dc6dd3](https://github.com/loonghao/msvc-kit/commit/9dc6dd359ca2124c06be0401785fab3397114154))
+* update Rust crate indicatif to v0.18.6 ([#137](https://github.com/loonghao/msvc-kit/issues/137)) ([e633ca2](https://github.com/loonghao/msvc-kit/commit/e633ca22cb37502e65465af782a7fa68bedbe29e))
+* update Rust crate sha2 to 0.11 ([eef8541](https://github.com/loonghao/msvc-kit/commit/eef8541fef87833f4b06df619b9ebcb2379d83f4))
+* update Rust crate tokio to v1.53.1 ([#141](https://github.com/loonghao/msvc-kit/issues/141)) ([c7d7421](https://github.com/loonghao/msvc-kit/commit/c7d742128d64e30e68032541d6556b4012f22b25))
+* update Rust crate toml to v1.1.6 ([#139](https://github.com/loonghao/msvc-kit/issues/139)) ([eb7e113](https://github.com/loonghao/msvc-kit/commit/eb7e11397c3deaf7c4e9bef4cd135275a7652a45))
+
 ## [0.2.15](https://github.com/loonghao/msvc-kit/compare/v0.2.14...v0.2.15) (2026-06-10)
 
 
