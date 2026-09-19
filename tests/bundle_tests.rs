@@ -263,6 +263,7 @@ fn test_bundle_options_custom() {
         msvc_version: Some("14.44".to_string()),
         sdk_version: Some("10.0.26100.0".to_string()),
         vs_channel: Some("2026".to_string()),
+        manifest_cache_dir: Some(PathBuf::from("C:/custom-cache/manifests")),
         parallel_downloads: 16,
     };
 
@@ -271,6 +272,10 @@ fn test_bundle_options_custom() {
     assert_eq!(opts.host_arch, Architecture::X64);
     assert_eq!(opts.msvc_version, Some("14.44".to_string()));
     assert_eq!(opts.sdk_version, Some("10.0.26100.0".to_string()));
+    assert_eq!(
+        opts.manifest_cache_dir,
+        Some(PathBuf::from("C:/custom-cache/manifests"))
+    );
     assert_eq!(opts.parallel_downloads, 16);
 }
 
@@ -292,6 +297,7 @@ fn test_bundle_options_clone() {
         msvc_version: Some("14.43".to_string()),
         sdk_version: None,
         vs_channel: None,
+        manifest_cache_dir: None,
         parallel_downloads: 4,
     };
 

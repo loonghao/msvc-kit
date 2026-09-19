@@ -38,7 +38,7 @@ impl SdkDownloader {
 
     /// Preview what would be downloaded (dry-run mode)
     pub async fn preview(&self) -> Result<DownloadPreview> {
-        let cache_dir = self.downloader.manifest_cache_dir();
+        let cache_dir = self.downloader.configured_manifest_cache_dir();
         let selection = self.downloader.options.vs_channel_selection()?;
         let (manifest, channel) = VsManifest::fetch_with_selection(selection, &cache_dir).await?;
         tracing::debug!("Using {} for package discovery", channel);

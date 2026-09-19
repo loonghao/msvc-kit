@@ -66,14 +66,33 @@ impl CommonDownloader {
     }
 
     /// Get the manifest cache directory.
-    /// If a custom cache manager is set, use its cache_dir/manifests;
-    /// otherwise fall back to the default location.
+    ///
+    /// Resolution order: an injected cache manager (`cache_dir/manifests`), the
+    /// explicit `manifest_cache_dir` from the download options, and finally the
+    /// platform default location.
     pub fn manifest_cache_dir(&self) -> PathBuf {
         if let Some(ref cm) = self.cache_manager {
-            cm.cache_dir().join("manifests")
-        } else {
-            super::cache::default_manifest_cache_dir()
+            return cm.cache_dir().join("manifests");
         }
+        if let Some(ref dir) = self.options.manifest_cache_dir {
+            return dir.clone();
+        }
+        super::cache::default_manifest_cache_dir()
+    }
+
+    /// Get the manifest cache directory, falling back to the configuration.
+    ///
+    /// Same resolution order as [`Self::manifest_cache_dir`], except that a
+    /// missing `manifest_cache_dir` resolves to
+    /// [`MsvcKitConfig::manifest_cache_dir`](crate::MsvcKitConfig::manifest_cache_dir)
+    /// instead of the platform default. An unconfigured installation resolves
+    /// to the platform default either way, so the default behaviour is
+    /// unchanged.
+    pub fn configured_manifest_cache_dir(&self) -> PathBuf {
+        if self.cache_manager.is_some() || self.options.manifest_cache_dir.is_some() {
+            return self.manifest_cache_dir();
+        }
+        super::configured_manifest_cache_dir()
     }
 
     /// Download packages with progress display and local index for fast skip
