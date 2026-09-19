@@ -12,6 +12,14 @@ on:
       - "v*"
   workflow_dispatch:
 
+# One release at a time: once release-please authenticates with a PAT, the tag
+# it pushes re-triggers this workflow while the main-branch run is still
+# publishing the same version. The shared group queues that second run behind
+# the first one instead of publishing the release twice.
+concurrency:
+  group: release-${{ github.workflow }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pull-requests: write
@@ -27,10 +35,24 @@ jobs:
       tag_name: ${{ steps.release.outputs.tag_name }}
       version: ${{ steps.release.outputs.version }}
     steps:
+      # Release-please must authenticate with a PAT (or a GitHub App token),
+      # not with GITHUB_TOKEN: GitHub does not start `pull_request` or
+      # `pull_request_target` runs for refs pushed with GITHUB_TOKEN, so the
+      # release PR would never get any CI coverage. See
+      # https://github.com/googleapis/release-please-action#other-actions-on-release-please-prs
+      - name: Check release-please token
+        env:
+          RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+        run: |
+          if [[ -z "$RELEASE_PLEASE_TOKEN" && -z "$PERSONAL_ACCESS_TOKEN" ]]; then
+            echo "::warning title=Release PR gets no CI::Neither RELEASE_PLEASE_TOKEN nor PERSONAL_ACCESS_TOKEN is set; release-please falls back to GITHUB_TOKEN and the release PR will have no checks."
+          fi
+
       - uses: googleapis/release-please-action@v5
         id: release
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.PERSONAL_ACCESS_TOKEN || github.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
@@ -39,13 +61,27 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     outputs:
-      is_tag: "true"
+      is_tag: ${{ steps.dedupe.outputs.is_tag }}
       tag_name: ${{ github.ref_name }}
     steps:
-      - name: Tag detected
+      - name: Skip tags already published by the main-branch run
+        id: dedupe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
         run: |
-          echo "Tag push detected: ${{ github.ref_name }}"
-          echo "This will trigger the full release process"
+          # With a PAT, the tag pushed by release-please re-triggers this
+          # workflow. The `release` concurrency group orders that run behind the
+          # main-branch run, so if the release object exists here, the
+          # main-branch run already published this tag.
+          if gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Tag $TAG_NAME is already published; skipping the duplicate publish."
+            echo "is_tag=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Tag push detected: $TAG_NAME"
+            echo "This will trigger the full release process"
+            echo "is_tag=true" >> "$GITHUB_OUTPUT"
+          fi
 
   # Publish to crates.io
   crates-publish:
