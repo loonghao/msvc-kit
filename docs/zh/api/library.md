@@ -91,8 +91,54 @@ pub fn get_env_vars(env: &MsvcEnvironment) -> HashMap<String, String>;
 /// 从磁盘加载配置
 pub fn load_config() -> Result<MsvcKitConfig>;
 
+/// 加载已保存的设置，不应用临时环境变量覆盖
+pub fn load_persisted_config() -> Result<MsvcKitConfig>;
+
 /// 保存配置到磁盘
 pub fn save_config(config: &MsvcKitConfig) -> Result<()>;
+```
+
+### 配置文件位置
+
+```rust
+/// 配置文件名
+pub const CONFIG_FILE_NAME: &str = "config.toml";
+
+/// 切换到便携模式的标记文件
+pub const PORTABLE_MARKER_FILE: &str = "msvc-kit.portable";
+
+/// 指定配置文件或目录的环境变量
+pub const CONFIG_ENV_VAR: &str = "MSVC_KIT_CONFIG";
+
+/// 启用便携模式的环境变量
+pub const PORTABLE_ENV_VAR: &str = "MSVC_KIT_PORTABLE";
+
+/// 解析后的配置文件位置
+///
+/// 优先级：`--config` / `set_config_path_override` > `MSVC_KIT_CONFIG`
+/// > 便携模式（可执行文件旁的 config.toml）> 每用户配置目录。
+pub fn get_config_path() -> PathBuf;
+
+/// 可执行文件所在目录
+pub fn exe_dir() -> Option<PathBuf>;
+
+/// 是否处于便携模式
+pub fn is_portable_mode() -> bool;
+
+/// 为当前进程固定配置文件（CLI 的 `--config`）
+pub fn set_config_path_override(path: impl Into<PathBuf>);
+
+/// 已设置的显式配置文件路径
+pub fn config_path_override() -> Option<PathBuf>;
+
+/// 清除显式配置文件路径
+pub fn clear_config_path_override();
+
+/// 在可执行文件旁创建便携标记文件
+pub fn enable_portable_mode() -> Result<()>;
+
+/// 删除便携标记文件
+pub fn disable_portable_mode() -> Result<()>;
 ```
 
 ## 重新导出的类型

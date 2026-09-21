@@ -53,6 +53,19 @@ fn describe_vs_channel(selector: Option<&str>) -> String {
     }
 }
 
+/// Explain why the current configuration file location was chosen
+fn describe_config_source(config_flag: bool) -> &'static str {
+    if config_flag {
+        "--config"
+    } else if std::env::var_os(msvc_kit::CONFIG_ENV_VAR).is_some() {
+        msvc_kit::CONFIG_ENV_VAR
+    } else if msvc_kit::config::is_portable_mode() {
+        "portable mode, next to the executable"
+    } else {
+        "per-user configuration directory"
+    }
+}
+
 fn infer_self_update_install_root(exe_path: &std::path::Path) -> Option<PathBuf> {
     let exe_dir = exe_path.parent()?;
     if exe_dir.file_name().is_some_and(|name| name == "bin") {
@@ -153,8 +166,9 @@ struct Cli {
     #[arg(short, long, global = true)]
     verbose: bool,
 
-    /// Configuration file path
-    #[arg(short, long, global = true)]
+    /// Configuration file path (directory or file; overrides portable mode and
+    /// `MSVC_KIT_CONFIG`)
+    #[arg(long, global = true)]
     config: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -298,6 +312,14 @@ enum Commands {
         /// Reset configuration to defaults
         #[arg(long)]
         reset: bool,
+
+        /// Store the configuration file next to the msvc-kit executable (portable mode)
+        #[arg(long, conflicts_with = "no_portable")]
+        portable: bool,
+
+        /// Leave portable mode and use the per-user configuration directory again
+        #[arg(long)]
+        no_portable: bool,
     },
 
     /// Print environment variables for shell integration
@@ -410,6 +432,13 @@ enum Commands {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    // `--config` is global: it applies to every subcommand, including the ones
+    // that load or persist configuration internally.
+    let config_flag = cli.config.clone();
+    if let Some(ref path) = config_flag {
+        msvc_kit::config::set_config_path_override(path.clone());
+    }
+
     // Initialize logging
     let filter = if cli.verbose {
         EnvFilter::new("debug")
@@ -422,8 +451,14 @@ async fn main() -> anyhow::Result<()> {
         .with(filter)
         .init();
 
-    // Load configuration
-    let mut config = load_config().unwrap_or_default();
+    // Load configuration, falling back to defaults but telling the user why
+    let mut config = match load_config() {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Warning: using default configuration: {e}");
+            MsvcKitConfig::default()
+        }
+    };
 
     // Handle the case where no subcommand is provided (for winget compatibility)
     let command = match cli.command {
@@ -758,7 +793,38 @@ async fn main() -> anyhow::Result<()> {
             set_sdk,
             set_vs_channel,
             reset,
+            portable,
+            no_portable,
         } => {
+            if (portable || no_portable) && config_flag.is_some() {
+                anyhow::bail!(
+                    "--portable and --no-portable cannot be combined with --config, which always selects the configuration file"
+                );
+            }
+
+            // Enabling portable mode seeds the portable file with the settings
+            // used so far. Disabling it only drops the marker, so neither the
+            // portable file nor the per-user configuration is overwritten.
+            if portable {
+                let persisted = msvc_kit::config::load_persisted_config()?;
+                msvc_kit::config::enable_portable_mode().map_err(|e| {
+                    anyhow::anyhow!("could not enable portable mode: {e}. The directory holding the msvc-kit executable must be writable.")
+                })?;
+                msvc_kit::config::save_config(&persisted)?;
+                config = persisted;
+                println!("Portable mode enabled.\n");
+            } else if no_portable {
+                let portable_path = msvc_kit::config::get_config_path();
+                msvc_kit::config::disable_portable_mode().map_err(|e| {
+                    anyhow::anyhow!("could not disable portable mode: {e}. The directory holding the msvc-kit executable must be writable.")
+                })?;
+                config = msvc_kit::config::load_persisted_config()?;
+                println!(
+                    "Portable mode disabled; the portable configuration is kept at {}.\n",
+                    portable_path.display()
+                );
+            }
+
             if reset {
                 config = MsvcKitConfig::default();
                 save_config(&config)?;
@@ -788,6 +854,11 @@ async fn main() -> anyhow::Result<()> {
             }
 
             println!("Current configuration:\n");
+            println!(
+                "  Config file: {} ({})",
+                msvc_kit::config::get_config_path().display(),
+                describe_config_source(config_flag.is_some())
+            );
             println!("  Install directory: {}", config.install_dir.display());
             println!(
                 "  Cache directory: {}",
@@ -1429,6 +1500,12 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_definition_is_valid() {
+        // Catches duplicate short/long flags across global and subcommand args.
+        Cli::command().debug_assert();
+    }
 
     #[test]
     fn infer_self_update_install_root_strips_bin_directory() {

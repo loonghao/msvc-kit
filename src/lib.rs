@@ -95,7 +95,11 @@ pub mod version;
 pub mod vs_channel;
 
 // Re-export main types and functions
-pub use config::{load_config, save_config, MsvcKitConfig};
+pub use config::{
+    clear_config_path_override, config_path_override, disable_portable_mode, enable_portable_mode,
+    get_config_path, is_portable_mode, load_config, save_config, set_config_path_override,
+    MsvcKitConfig, CONFIG_ENV_VAR, CONFIG_FILE_NAME, PORTABLE_ENV_VAR, PORTABLE_MARKER_FILE,
+};
 pub use downloader::{
     download_all, download_msvc, download_sdk, list_available_versions,
     list_available_versions_with_selection, AvailableVersions, BoxedCacheManager,

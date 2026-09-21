@@ -1,10 +1,43 @@
 //! Configuration management for msvc-kit
 
 use serde::{Deserialize, Serialize};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
-use crate::error::Result;
+use crate::error::{MsvcKitError, Result};
 use crate::version::Architecture;
+
+/// File name of the CLI configuration file
+pub const CONFIG_FILE_NAME: &str = "config.toml";
+
+/// Marker file that switches an installation into portable mode
+///
+/// While this file sits next to the `msvc-kit` executable, the configuration
+/// file is read from and written to that directory instead of the per-user
+/// configuration directory.
+pub const PORTABLE_MARKER_FILE: &str = "msvc-kit.portable";
+
+/// Environment variable pointing at a specific configuration file or directory
+pub const CONFIG_ENV_VAR: &str = "MSVC_KIT_CONFIG";
+
+/// Environment variable that enables portable mode (`1`, `true`, `yes`, `on`)
+pub const PORTABLE_ENV_VAR: &str = "MSVC_KIT_PORTABLE";
+
+/// Content written to [`PORTABLE_MARKER_FILE`] so the file explains itself
+const PORTABLE_MARKER_TEXT: &str = "\
+This file enables msvc-kit portable mode.
+
+While it exists next to msvc-kit.exe, msvc-kit reads and writes its
+configuration (config.toml) in this directory instead of the per-user
+configuration directory.
+
+Delete this file, or run `msvc-kit config --no-portable`, to use the per-user
+configuration directory again.
+";
+
+/// Explicit configuration path for the current process, set from `--config`
+static CONFIG_PATH_OVERRIDE: RwLock<Option<PathBuf>> = RwLock::new(None);
 
 /// Main configuration structure for msvc-kit
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,13 +163,182 @@ fn dirs_fallback() -> PathBuf {
     }
 }
 
-/// Get the configuration file path
+/// Directory holding the running executable, if it can be determined
+pub fn exe_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+}
+
+/// Configuration file location used by [`load_config`] and [`save_config`]
+///
+/// Precedence:
+///
+/// 1. an explicit path from `--config` / [`set_config_path_override`]
+/// 2. [`CONFIG_ENV_VAR`] (`MSVC_KIT_CONFIG`)
+/// 3. portable mode: `config.toml` next to the executable
+/// 4. the per-user configuration directory of the platform
 pub fn get_config_path() -> PathBuf {
-    if let Some(proj_dirs) = directories::ProjectDirs::from("com", "loonghao", "msvc-kit") {
-        proj_dirs.config_dir().join("config.toml")
-    } else {
-        get_default_install_dir().join("config.toml")
+    let explicit = config_path_override();
+    let env_path = std::env::var_os(CONFIG_ENV_VAR);
+    let exe_dir = exe_dir();
+    let portable_env = std::env::var_os(PORTABLE_ENV_VAR);
+    let marker_present = exe_dir.as_deref().is_some_and(portable_marker_exists);
+
+    ConfigPathInput {
+        explicit: explicit.as_deref(),
+        env_path: env_path.as_deref(),
+        exe_dir: exe_dir.as_deref(),
+        portable_env: portable_env.as_deref(),
+        marker_present,
     }
+    .resolve()
+}
+
+/// Whether the current installation stores its configuration next to the executable
+pub fn is_portable_mode() -> bool {
+    let exe_dir = exe_dir();
+    let portable_env = std::env::var_os(PORTABLE_ENV_VAR);
+    let marker_present = exe_dir.as_deref().is_some_and(portable_marker_exists);
+
+    ConfigPathInput {
+        exe_dir: exe_dir.as_deref(),
+        portable_env: portable_env.as_deref(),
+        marker_present,
+        ..ConfigPathInput::default()
+    }
+    .portable_dir()
+    .is_some()
+}
+
+/// Pin the configuration file for the rest of the process
+///
+/// Used by the CLI to honor the global `--config` flag, which applies to
+/// commands that load or persist configuration internally.
+pub fn set_config_path_override(path: impl Into<PathBuf>) {
+    if let Ok(mut guard) = CONFIG_PATH_OVERRIDE.write() {
+        *guard = Some(path.into());
+    }
+}
+
+/// Explicit configuration path previously set with [`set_config_path_override`]
+pub fn config_path_override() -> Option<PathBuf> {
+    CONFIG_PATH_OVERRIDE.read().ok()?.clone()
+}
+
+/// Drop an explicit configuration path set with [`set_config_path_override`]
+pub fn clear_config_path_override() {
+    if let Ok(mut guard) = CONFIG_PATH_OVERRIDE.write() {
+        *guard = None;
+    }
+}
+
+/// Switch the installation to portable mode
+///
+/// Creates [`PORTABLE_MARKER_FILE`] next to the executable; every later
+/// command reads and writes `config.toml` in that directory.
+pub fn enable_portable_mode() -> Result<()> {
+    let dir = portable_exe_dir()?;
+    std::fs::write(dir.join(PORTABLE_MARKER_FILE), PORTABLE_MARKER_TEXT)?;
+    Ok(())
+}
+
+/// Leave portable mode and use the per-user configuration directory again
+///
+/// Only the marker file is removed: a `config.toml` next to the executable and
+/// the per-user configuration are left untouched.
+pub fn disable_portable_mode() -> Result<()> {
+    let dir = portable_exe_dir()?;
+    let marker = dir.join(PORTABLE_MARKER_FILE);
+    if marker.is_file() {
+        std::fs::remove_file(marker)?;
+    }
+    Ok(())
+}
+
+fn portable_exe_dir() -> Result<PathBuf> {
+    exe_dir().ok_or_else(|| {
+        MsvcKitError::Config(
+            "cannot change portable mode: unable to locate the msvc-kit executable".to_string(),
+        )
+    })
+}
+
+/// Inputs used to resolve the configuration file location
+///
+/// Kept separate from [`get_config_path`] so the precedence rules can be
+/// tested without touching process-wide state.
+#[derive(Debug, Default, Clone, Copy)]
+struct ConfigPathInput<'a> {
+    /// Path from `--config` / [`set_config_path_override`]
+    explicit: Option<&'a Path>,
+    /// Raw value of [`CONFIG_ENV_VAR`]
+    env_path: Option<&'a OsStr>,
+    /// Directory holding the running executable, when known
+    exe_dir: Option<&'a Path>,
+    /// Raw value of [`PORTABLE_ENV_VAR`]
+    portable_env: Option<&'a OsStr>,
+    /// Whether [`PORTABLE_MARKER_FILE`] exists next to the executable
+    marker_present: bool,
+}
+
+impl ConfigPathInput<'_> {
+    fn resolve(&self) -> PathBuf {
+        if let Some(path) = self.explicit {
+            return with_config_file_name(path);
+        }
+
+        if let Some(path) = self.env_path.filter(|value| !value.is_empty()) {
+            return with_config_file_name(Path::new(path));
+        }
+
+        if let Some(dir) = self.portable_dir() {
+            return dir.join(CONFIG_FILE_NAME);
+        }
+
+        default_config_path()
+    }
+
+    /// Directory used in portable mode, if portable mode is active
+    fn portable_dir(&self) -> Option<&Path> {
+        let dir = self.exe_dir?;
+        if env_flag_enabled(self.portable_env) || self.marker_present {
+            return Some(dir);
+        }
+        None
+    }
+}
+
+/// Treat a user supplied path as the configuration file, appending
+/// [`CONFIG_FILE_NAME`] when a directory was given
+fn with_config_file_name(path: &Path) -> PathBuf {
+    if path.is_dir() || path.file_name().is_none() {
+        path.join(CONFIG_FILE_NAME)
+    } else {
+        path.to_path_buf()
+    }
+}
+
+fn default_config_path() -> PathBuf {
+    if let Some(proj_dirs) = directories::ProjectDirs::from("com", "loonghao", "msvc-kit") {
+        proj_dirs.config_dir().join(CONFIG_FILE_NAME)
+    } else {
+        get_default_install_dir().join(CONFIG_FILE_NAME)
+    }
+}
+
+fn portable_marker_exists(dir: &Path) -> bool {
+    dir.join(PORTABLE_MARKER_FILE).is_file()
+}
+
+/// Interpret an environment variable as a boolean switch
+fn env_flag_enabled(value: Option<&OsStr>) -> bool {
+    value.and_then(|value| value.to_str()).is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 /// Load configuration from disk
@@ -154,7 +356,13 @@ pub fn load_persisted_config() -> Result<MsvcKitConfig> {
 
     if config_path.exists() {
         let content = std::fs::read_to_string(&config_path)?;
-        let config: MsvcKitConfig = toml::from_str(&content)?;
+        let config: MsvcKitConfig = toml::from_str(&content).map_err(|e| {
+            MsvcKitError::Config(format!(
+                "invalid configuration file {}: {}",
+                config_path.display(),
+                e
+            ))
+        })?;
         return Ok(config);
     }
 
@@ -356,5 +564,154 @@ mod tests {
             ..MsvcKitConfig::default()
         };
         assert_eq!(config.effective_cache_dir(), default_cache_root());
+    }
+
+    // ========================================================================
+    // Configuration file location tests
+    // ========================================================================
+
+    fn input<'a>(explicit: Option<&'a Path>) -> ConfigPathInput<'a> {
+        ConfigPathInput {
+            explicit,
+            ..ConfigPathInput::default()
+        }
+    }
+
+    #[test]
+    fn explicit_path_wins_over_everything_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_dir = dir.path().join("from-env");
+        let exe = dir.path().join("exe");
+
+        let resolved = ConfigPathInput {
+            explicit: Some(dir.path().join("explicit.toml").as_path()),
+            env_path: Some(OsStr::new(&env_dir)),
+            exe_dir: Some(exe.as_path()),
+            portable_env: Some(OsStr::new("1")),
+            marker_present: true,
+        }
+        .resolve();
+
+        assert_eq!(resolved, dir.path().join("explicit.toml"));
+    }
+
+    #[test]
+    fn env_path_wins_over_portable_and_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join("env-config.toml");
+        let exe = dir.path().join("exe");
+
+        let resolved = ConfigPathInput {
+            env_path: Some(OsStr::new(&env_path)),
+            exe_dir: Some(exe.as_path()),
+            marker_present: true,
+            ..ConfigPathInput::default()
+        }
+        .resolve();
+
+        assert_eq!(resolved, env_path);
+    }
+
+    #[test]
+    fn portable_marker_relocates_the_config_next_to_the_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("exe");
+
+        let resolved = ConfigPathInput {
+            exe_dir: Some(exe.as_path()),
+            marker_present: true,
+            ..ConfigPathInput::default()
+        }
+        .resolve();
+
+        assert_eq!(resolved, exe.join(CONFIG_FILE_NAME));
+    }
+
+    #[test]
+    fn portable_env_relocates_the_config_next_to_the_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("exe");
+
+        let resolved = ConfigPathInput {
+            exe_dir: Some(exe.as_path()),
+            portable_env: Some(OsStr::new("true")),
+            ..ConfigPathInput::default()
+        }
+        .resolve();
+
+        assert_eq!(resolved, exe.join(CONFIG_FILE_NAME));
+    }
+
+    #[test]
+    fn without_portable_signals_the_platform_path_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let resolved = ConfigPathInput {
+            exe_dir: Some(dir.path()),
+            ..ConfigPathInput::default()
+        }
+        .resolve();
+
+        assert_eq!(resolved, default_config_path());
+    }
+
+    #[test]
+    fn portable_dir_is_none_without_marker_or_env() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(input(None).portable_dir().is_none());
+        assert!(ConfigPathInput {
+            exe_dir: Some(dir.path()),
+            ..ConfigPathInput::default()
+        }
+        .portable_dir()
+        .is_none());
+    }
+
+    #[test]
+    fn directory_paths_get_the_config_file_name_appended() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            with_config_file_name(dir.path()),
+            dir.path().join(CONFIG_FILE_NAME)
+        );
+
+        let file = dir.path().join("custom.toml");
+        assert_eq!(with_config_file_name(&file), file);
+    }
+
+    #[test]
+    fn env_flag_accepts_common_truthy_values() {
+        for value in ["1", "true", "TRUE", " yes ", "on"] {
+            assert!(env_flag_enabled(Some(OsStr::new(value))), "{value}");
+        }
+        for value in ["", "0", "false", "no", "off", "maybe"] {
+            assert!(!env_flag_enabled(Some(OsStr::new(value))), "{value}");
+        }
+        assert!(!env_flag_enabled(None));
+    }
+
+    #[test]
+    fn portable_marker_is_detected_next_to_the_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!portable_marker_exists(dir.path()));
+
+        std::fs::write(dir.path().join(PORTABLE_MARKER_FILE), "").unwrap();
+        assert!(portable_marker_exists(dir.path()));
+
+        std::fs::remove_file(dir.path().join(PORTABLE_MARKER_FILE)).unwrap();
+        assert!(!portable_marker_exists(dir.path()));
+    }
+
+    #[test]
+    fn set_and_clear_config_path_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("override.toml");
+
+        set_config_path_override(path.clone());
+        assert_eq!(config_path_override().as_deref(), Some(path.as_path()));
+        assert_eq!(get_config_path(), path);
+
+        clear_config_path_override();
+        assert!(config_path_override().is_none());
     }
 }
