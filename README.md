@@ -245,6 +245,15 @@ msvc-kit config --set-sdk 10.0.26100.0 # Set default SDK version
 msvc-kit config --reset                # Reset to defaults
 ```
 
+Portable mode keeps `config.toml` next to the executable, and `--config` points a
+single run at any file or directory:
+
+```bash
+msvc-kit config --portable                    # config.toml next to msvc-kit.exe
+msvc-kit config --no-portable                 # back to the per-user directory
+msvc-kit --config D:\portable\my.toml config  # use a specific file
+```
+
 #### Print Environment Variables
 
 ```bash

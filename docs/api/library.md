@@ -161,8 +161,55 @@ let ctx = ScriptContext::absolute(
 /// Load configuration from disk
 pub fn load_config() -> Result<MsvcKitConfig>;
 
+/// Load stored settings without transient environment overrides
+pub fn load_persisted_config() -> Result<MsvcKitConfig>;
+
 /// Save configuration to disk
 pub fn save_config(config: &MsvcKitConfig) -> Result<()>;
+```
+
+### Configuration Location
+
+```rust
+/// File name of the CLI configuration file
+pub const CONFIG_FILE_NAME: &str = "config.toml";
+
+/// Marker file that switches an installation into portable mode
+pub const PORTABLE_MARKER_FILE: &str = "msvc-kit.portable";
+
+/// Environment variable pointing at a specific configuration file or directory
+pub const CONFIG_ENV_VAR: &str = "MSVC_KIT_CONFIG";
+
+/// Environment variable that enables portable mode
+pub const PORTABLE_ENV_VAR: &str = "MSVC_KIT_PORTABLE";
+
+/// Resolved configuration file location
+///
+/// Precedence: `--config` / `set_config_path_override` > `MSVC_KIT_CONFIG`
+/// > portable mode (`config.toml` next to the executable)
+/// > per-user configuration directory.
+pub fn get_config_path() -> PathBuf;
+
+/// Directory holding the running executable, if it can be determined
+pub fn exe_dir() -> Option<PathBuf>;
+
+/// Whether the installation stores its configuration next to the executable
+pub fn is_portable_mode() -> bool;
+
+/// Pin the configuration file for the rest of the process (CLI `--config`)
+pub fn set_config_path_override(path: impl Into<PathBuf>);
+
+/// Explicit configuration path set with `set_config_path_override`
+pub fn config_path_override() -> Option<PathBuf>;
+
+/// Drop an explicit configuration path
+pub fn clear_config_path_override();
+
+/// Create the portable marker file next to the executable
+pub fn enable_portable_mode() -> Result<()>;
+
+/// Remove the portable marker file
+pub fn disable_portable_mode() -> Result<()>;
 ```
 
 ## Re-exported Types

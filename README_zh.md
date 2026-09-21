@@ -246,6 +246,14 @@ msvc-kit config --set-sdk 10.0.26100.0 # 设置默认 SDK 版本
 msvc-kit config --reset                # 重置为默认值
 ```
 
+便携模式把 `config.toml` 放在可执行文件旁，`--config` 可让单次运行使用任意文件或目录：
+
+```bash
+msvc-kit config --portable                    # config.toml 与 msvc-kit.exe 同目录
+msvc-kit config --no-portable                 # 回到每用户配置目录
+msvc-kit --config D:\portable\my.toml config  # 使用指定文件
+```
+
 ### 打印环境变量
 
 ```bash
