@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.17](https://github.com/loonghao/msvc-kit/compare/v0.2.16...v0.2.17) (2026-09-21)
+
+
+### Features
+
+* **config:** portable mode and selectable configuration file ([52c7d1e](https://github.com/loonghao/msvc-kit/commit/52c7d1ebb985148b30c510ef218de8e87caa1d40))
+* **vs-channel:** data-driven Visual Studio channel registry with VS 2026 support ([2e22ea9](https://github.com/loonghao/msvc-kit/commit/2e22ea9c2af21a2372c927bfec04e45650f572cc))
+
+
+### Bug Fixes
+
+* **config:** wire cache_dir into every manifest read path ([0822ada](https://github.com/loonghao/msvc-kit/commit/0822adaab681ec93a7ea0077f93878bc66cfe177))
+
 ## [0.2.16](https://github.com/loonghao/msvc-kit/compare/v0.2.15...v0.2.16) (2026-09-19)
 
 
