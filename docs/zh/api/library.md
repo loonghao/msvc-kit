@@ -8,7 +8,7 @@ msvc-kit 可以作为 Rust 库使用，以编程方式访问 MSVC 工具链管�
 
 ```toml
 [dependencies]
-msvc-kit = "0.1"
+msvc-kit = "0.2"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -43,6 +43,24 @@ async fn main() -> msvc_kit::Result<()> {
 ```
 
 ## 主要类型
+
+### 版本发现函数
+
+```rust
+/// 从微软服务器获取可用版本
+pub async fn list_available_versions() -> Result<AvailableVersions>;
+
+/// 可用版本信息
+pub struct AvailableVersions {
+    pub msvc_versions: Vec<String>,  // 例如 ["14.44", "14.43", "14.42"]
+    pub sdk_versions: Vec<String>,   // 例如 ["10.0.26100.0", "10.0.22621.0"]
+    pub latest_msvc: Option<String>, // 例如 Some("14.44")
+    pub latest_sdk: Option<String>,  // 例如 Some("10.0.26100.0")
+    /// 提供这些版本的 Visual Studio channel，例如 Some("Visual Studio 2026 (v18)")。
+    /// 自动选择时具体 channel 取决于上游已发布的内容。
+    pub channel: Option<String>,
+}
+```
 
 ### 下载函数
 
@@ -164,7 +182,7 @@ async fn example() {
     
     match download_msvc(&options).await {
         Ok(info) => println!("安装到 {:?}", info.install_path),
-        Err(MsvcKitError::NetworkError(e)) => eprintln!("网络错误: {}", e),
+        Err(MsvcKitError::Network(e)) => eprintln!("网络错误: {}", e),
         Err(MsvcKitError::VersionNotFound(v)) => eprintln!("版本未找到: {}", v),
         Err(e) => eprintln!("错误: {}", e),
     }
@@ -175,42 +193,40 @@ async fn example() {
 
 msvc-kit 提供可选的 features 以减少依赖冲突：
 
+| Feature | 默认 | 引入依赖 |
+|---------|------|----------|
+| `self-update` | 是 | [axoupdater](https://github.com/axodotdev/axoupdater) |
+| `native-tls` | 是 | `reqwest/native-tls`（Windows 上为 SChannel） |
+| `rustls-tls` | 否 | `reqwest/rustls` |
+
 ### `self-update`（默认启用）
 
-启用 CLI 自更新功能。此 feature 包含 `self_update` crate，它依赖于 `lzma-sys`。
+启用 `msvc-kit update` 命令，它通过 `axoupdater` 查询 GitHub Releases。
+可执行文件本身只在该 feature 启用时构建，因此库使用者可以去掉它。
 
 ```toml
 # 包含 self-update（默认）
 [dependencies]
-msvc-kit = "0.1"
+msvc-kit = "0.2"
 
 # 或显式启用
 [dependencies]
-msvc-kit = { version = "0.1", features = ["self-update"] }
+msvc-kit = { version = "0.2", features = ["self-update"] }
 ```
 
 ### 仅库使用（无自更新）
 
-如果你将 msvc-kit 作为库使用，并遇到依赖冲突（例如与 `liblzma-sys`），可以禁用默认 features：
-
 ```toml
 [dependencies]
-msvc-kit = { version = "0.1", default-features = false }
-```
-
-这在将 msvc-kit 集成到使用不同 LZMA 实现的项目时很有用，可以避免 `lzma-sys` 冲突：
-
-```
-error: the crate `lzma` is compiled multiple times, possibly with different configurations
-  - crate `liblzma_sys` links to native library `lzma`
-  - crate `lzma_sys` links to native library `lzma`
+msvc-kit = { version = "0.2", default-features = false }
 ```
 
 ## 线程安全
 
 - `DownloadOptions`、`InstallInfo`、`MsvcEnvironment` 是 `Send + Sync`
 - 下载函数是异步的，可以从任何运行时调用
-- 配置函数使用文件锁以支持并发访问
+- 配置保存在单个 TOML 文件中且没有加锁，因此多个进程同时执行
+  `msvc-kit config` 写入时可能互相覆盖
 
 ## 下一步
 

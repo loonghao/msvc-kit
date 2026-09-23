@@ -16,13 +16,16 @@ msvc-kit 支持多种 CPU 架构，包括主机（构建机器）和目标（输
 - **主机架构**：构建机器的 CPU 架构
 - **目标架构**：编译后二进制文件的 CPU 架构
 
+`msvc-kit download` 会根据当前运行的机器自动检测主机架构，没有对应的 flag：
+它始终下载与主机匹配的交叉编译器。`--host-arch` 只有 `msvc-kit bundle` 支持。
+
 ### 原生编译
 
 构建机器和输出具有相同的架构：
 
 ```bash
 # 在 x64 机器上，构建 x64 二进制文件
-msvc-kit download --host-arch x64 --arch x64
+msvc-kit download --arch x64
 ```
 
 ### 交叉编译
@@ -31,10 +34,10 @@ msvc-kit download --host-arch x64 --arch x64
 
 ```bash
 # 在 x64 机器上，构建 ARM64 二进制文件
-msvc-kit download --host-arch x64 --arch arm64
+msvc-kit download --arch arm64
 
 # 在 x64 机器上，构建 x86（32 位）二进制文件
-msvc-kit download --host-arch x64 --arch x86
+msvc-kit download --arch x86
 ```
 
 ## 架构过滤
@@ -162,7 +165,7 @@ msvc-kit download --arch x64
 ### 在 64 位 Windows 上构建 32 位程序
 
 ```bash
-msvc-kit download --host-arch x64 --arch x86
+msvc-kit download --arch x86
 msvc-kit setup --script --shell powershell | Invoke-Expression
 
 # cl.exe 现在针对 x86
@@ -173,7 +176,7 @@ cl /c myfile.cpp  # 生成 x86 目标文件
 
 ```bash
 # 在 x64 机器上
-msvc-kit download --host-arch x64 --arch arm64
+msvc-kit download --arch arm64
 msvc-kit setup --script --shell powershell | Invoke-Expression
 
 # cl.exe 现在针对 ARM64

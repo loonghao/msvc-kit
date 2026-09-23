@@ -23,7 +23,7 @@ This is documented in the [winget validation guide](https://github.com/microsoft
 
 ### Implementation in msvc-kit
 
-In `src/bin/msvc-kit.rs`, lines 228-235:
+In `src/bin/msvc-kit.rs`, `main()`:
 
 ```rust
 // Handle the case where no subcommand is provided (for winget compatibility)
@@ -32,14 +32,15 @@ let command = match cli.command {
     None => {
         // Print help and exit with code 0 for winget validation
         Cli::command().print_help().unwrap();
-        std::process::exit(0);
+        return Ok(());
     }
 };
 ```
 
 **Key points:**
 - When no subcommand is provided, we print the help text
-- We explicitly call `std::process::exit(0)` to ensure exit code 0
+- We return `Ok(())` from `main`, which exits with code 0; the code does **not**
+  call `std::process::exit(0)`
 - This behavior is specifically designed for winget compatibility
 
 ## Exit Code Matrix
@@ -103,7 +104,7 @@ When adding new commands or modifying existing ones:
 1. **Always return appropriate exit codes**:
    - Use `Ok(())` for success (exits with 0)
    - Use `anyhow::bail!()` or `Err()` for errors (exits with 1)
-   - Use `std::process::exit(0)` only when explicitly needed
+   - Prefer returning from `main` over `std::process::exit()`
 
 2. **Add tests for new commands**:
    - Test success cases exit with 0

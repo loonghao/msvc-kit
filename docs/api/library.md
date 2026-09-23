@@ -8,7 +8,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-msvc-kit = "0.1"
+msvc-kit = "0.2"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -56,6 +56,11 @@ pub struct AvailableVersions {
     pub sdk_versions: Vec<String>,   // e.g., ["10.0.26100.0", "10.0.22621.0"]
     pub latest_msvc: Option<String>, // e.g., Some("14.44")
     pub latest_sdk: Option<String>,  // e.g., Some("10.0.26100.0")
+    /// Visual Studio channel that served the versions, e.g.
+    /// Some("Visual Studio 2026 (v18)"). `None` for callers that build the
+    /// value themselves; with automatic selection the channel depends on what
+    /// upstream has published.
+    pub channel: Option<String>,
 }
 ```
 
@@ -236,7 +241,7 @@ async fn example() {
     
     match download_msvc(&options).await {
         Ok(info) => println!("Installed to {:?}", info.install_path),
-        Err(MsvcKitError::NetworkError(e)) => eprintln!("Network error: {}", e),
+        Err(MsvcKitError::Network(e)) => eprintln!("Network error: {}", e),
         Err(MsvcKitError::VersionNotFound(v)) => eprintln!("Version not found: {}", v),
         Err(e) => eprintln!("Error: {}", e),
     }
@@ -247,42 +252,41 @@ async fn example() {
 
 msvc-kit provides optional features to reduce dependency conflicts:
 
+| Feature | Default | Pulls in |
+|---------|---------|----------|
+| `self-update` | yes | [axoupdater](https://github.com/axodotdev/axoupdater) |
+| `native-tls` | yes | `reqwest/native-tls` (SChannel on Windows) |
+| `rustls-tls` | no | `reqwest/rustls` |
+
 ### `self-update` (default)
 
-Enables the CLI self-update functionality. This feature includes the `self_update` crate which depends on `lzma-sys`.
+Enables the `msvc-kit update` command, which queries GitHub Releases through
+`axoupdater`. The binary itself is only built when the feature is enabled, so
+library users can drop it.
 
 ```toml
 # Include self-update (default)
 [dependencies]
-msvc-kit = "0.1"
+msvc-kit = "0.2"
 
 # Or explicitly enable
 [dependencies]
-msvc-kit = { version = "0.1", features = ["self-update"] }
+msvc-kit = { version = "0.2", features = ["self-update"] }
 ```
 
 ### Library-only Usage (No Self-update)
 
-If you're using msvc-kit as a library and encounter dependency conflicts (e.g., with `liblzma-sys`), you can disable the default features:
-
 ```toml
 [dependencies]
-msvc-kit = { version = "0.1", default-features = false }
-```
-
-This is useful when integrating msvc-kit into projects that use different LZMA implementations, avoiding the `lzma-sys` conflict:
-
-```
-error: the crate `lzma` is compiled multiple times, possibly with different configurations
-  - crate `liblzma_sys` links to native library `lzma`
-  - crate `lzma_sys` links to native library `lzma`
+msvc-kit = { version = "0.2", default-features = false }
 ```
 
 ## Thread Safety
 
 - `DownloadOptions`, `InstallInfo`, `MsvcEnvironment` are `Send + Sync`
 - Download functions are async and can be called from any runtime
-- Configuration functions use file locking for concurrent access
+- Configuration lives in a single TOML file with no locking, so concurrent
+  `msvc-kit config` writes from separate processes can race
 
 ## Next Steps
 

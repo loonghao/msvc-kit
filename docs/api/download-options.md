@@ -36,28 +36,80 @@ pub struct DownloadOptions {
     /// Custom cache manager (None = use default file system cache)
     pub cache_manager: Option<BoxedCacheManager>,
     
+    /// Visual Studio channel used for manifest discovery (None = auto)
+    ///
+    /// Accepts a major version (`17`, `v17`), a release year (`2022`) or the
+    /// keyword `auto` / `latest`. `None` picks the newest channel that serves a
+    /// usable manifest.
+    pub vs_channel: Option<String>,
+    
+    /// Directory that stores cached Visual Studio manifests.
+    ///
+    /// `None` falls back to the platform default (or to the cache manager's
+    /// directory when one is injected). Set it to
+    /// `MsvcKitConfig::manifest_cache_dir()` to wire the configured cache
+    /// directory into the downloader.
+    pub manifest_cache_dir: Option<PathBuf>,
+    
     /// Dry-run mode: preview without downloading
     pub dry_run: bool,
+
+    /// Additional MSVC components to include (default: empty = standard install)
+    ///
+    /// By default the standard toolchain (Tools, CRT, MFC, ATL) is downloaded.
+    /// Use this to opt into extras such as Spectre-mitigated libraries.
+    pub include_components: HashSet<MsvcComponent>,
+
+    /// Package ID patterns to exclude (case-insensitive substring match)
+    pub exclude_patterns: Vec<String>,
 }
 ```
 
 ## Default Values
 
+`Default::default()` reads the environment, so it is not a fixed table:
+
 ```rust
 impl Default for DownloadOptions {
     fn default() -> Self {
         Self {
-            target_dir: default_install_dir(),
-            msvc_version: None,      // Latest
-            sdk_version: None,       // Latest
-            arch: Architecture::X64,
-            host_arch: None,         // Auto-detect
-            verify_hashes: true,
-            parallel_downloads: 4,
+            // `MSVC_KIT_INSTALL_DIR`, else the relative path "msvc-kit"
+            target_dir: ...,
+            msvc_version: std::env::var("MSVC_KIT_MSVC_VERSION").ok(),
+            sdk_version: std::env::var("MSVC_KIT_SDK_VERSION").ok(),
+            arch: Architecture::host(),
+            host_arch: None,                 // Auto-detect
+            verify_hashes: true,             // MSVC_KIT_VERIFY_HASHES
+            parallel_downloads: 4,           // MSVC_KIT_PARALLEL_DOWNLOADS
+            http_client: None,
+            progress_handler: None,
+            cache_manager: None,
+            vs_channel: std::env::var("MSVC_KIT_VS_CHANNEL").ok(),
+            manifest_cache_dir: None,        // platform default cache root
+            dry_run: false,                  // MSVC_KIT_DRY_RUN
+            include_components: ...,         // MSVC_KIT_INCLUDE_COMPONENTS
+            exclude_patterns: ...,           // MSVC_KIT_EXCLUDE_PATTERNS
         }
     }
 }
 ```
+
+Recognised environment variables:
+
+| Variable | Effect | Default when unset |
+|----------|--------|--------------------|
+| `MSVC_KIT_INSTALL_DIR` | Target directory | `msvc-kit` (relative to the working directory) |
+| `MSVC_KIT_MSVC_VERSION` | MSVC version | `None` (latest) |
+| `MSVC_KIT_SDK_VERSION` | SDK version | `None` (latest) |
+| `MSVC_KIT_PARALLEL_DOWNLOADS` | Concurrent downloads | `4` |
+| `MSVC_KIT_VERIFY_HASHES` | Hash verification | `true` (anything but `0`/`false`/`no`) |
+| `MSVC_KIT_DRY_RUN` | Preview mode | `false` (`1`/`true`/`yes` enables) |
+| `MSVC_KIT_VS_CHANNEL` | Visual Studio channel | `None` (auto) |
+| `MSVC_KIT_INCLUDE_COMPONENTS` | Comma separated components | empty |
+| `MSVC_KIT_EXCLUDE_PATTERNS` | Comma separated patterns | empty |
+
+These apply to the library only. The CLI builds its `DownloadOptions` from flags
+and the configuration file and does not read them.
 
 ## Usage Examples
 
@@ -126,8 +178,16 @@ let options = DownloadOptions {
 
 ### target_dir
 
-Installation directory. Defaults to:
-- Windows: `%LOCALAPPDATA%\loonghao\msvc-kit`
+Installation directory. `DownloadOptions::default()` uses `MSVC_KIT_INSTALL_DIR`
+when set and the relative path `msvc-kit` otherwise; it does **not** use the CLI
+configuration. To install where the CLI would, pass
+`load_config()?.install_dir`:
+
+```rust
+let options = DownloadOptions::builder()
+    .target_dir(msvc_kit::load_config()?.install_dir)
+    .build();
+```
 
 ### msvc_version
 
@@ -192,6 +252,29 @@ let options = DownloadOptions::builder()
 ### dry_run
 
 When `true`, shows what would be downloaded without actually downloading.
+
+### include_components / exclude_patterns
+
+`include_components` adds optional components on top of the standard toolchain:
+`MsvcComponent::Spectre`, `Mfc`, `Atl`, `Asan`, `Uwp`, `Cli`, `Modules`,
+`Redist` and `Custom(String)`. `exclude_patterns` drops any package whose id
+contains one of the patterns (case-insensitive).
+
+```rust
+use msvc_kit::{DownloadOptions, MsvcComponent};
+
+let options = DownloadOptions::builder()
+    .include_components([MsvcComponent::Spectre, MsvcComponent::Mfc])
+    .exclude_pattern("arm64")
+    .build();
+```
+
+### vs_channel / manifest_cache_dir
+
+`vs_channel` pins the Visual Studio channel used for package discovery
+(`"17"`, `"2022"`, `"auto"`, …). `manifest_cache_dir` controls where the channel
+manifest is cached; leave it `None` for the platform default, or pass
+`config.manifest_cache_dir()` to follow the configured cache directory.
 
 ## Builder Pattern
 

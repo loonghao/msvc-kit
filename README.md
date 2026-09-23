@@ -105,8 +105,7 @@ msvc-kit download \
   --msvc-version 14.44 \
   --sdk-version 10.0.26100.0 \
   --target C:\msvc-kit \
-  --arch x64 \
-  --host-arch x64
+  --arch x64
 
 # Download only MSVC (skip SDK)
 msvc-kit download --no-sdk
@@ -122,7 +121,18 @@ msvc-kit download --no-verify
 
 # Pin the Visual Studio channel (default: newest published channel)
 msvc-kit download --vs-channel 2022
+
+# Add optional MSVC components (repeatable)
+msvc-kit download --include-component spectre --include-component mfc
+
+# Exclude packages by case-insensitive substring match (repeatable)
+msvc-kit download --exclude-pattern arm64
 ```
+
+The host architecture is detected automatically. Only `msvc-kit bundle` takes an
+explicit `--host-arch`; `msvc-kit download` derives it from the running machine.
+`--include-component` accepts `spectre`, `mfc`, `atl`, `asan`, `uwp`, `cli`,
+`modules`, `redist` and `custom:<pattern>`.
 
 > **Note:** MSVC version can be specified as short format (e.g., `14.44`) which auto-resolves to the latest build, or full format (e.g., `14.44.34823`) for a specific build.
 
@@ -164,7 +174,7 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 # Or for CMD
 msvc-kit setup --script --shell cmd > setup.bat && setup.bat
 
-# Portable script (rewrites install root to %~dp0runtime)
+# Portable script (paths relative to the script's own directory)
 msvc-kit setup --script --shell cmd --portable-root "%~dp0runtime" > setup.bat
 
 # Or for Bash/WSL
@@ -235,15 +245,20 @@ msvc-kit clean --all --cache          # Also clear download cache
 
 #### Configuration
 
-Config file: `%LOCALAPPDATA%\loonghao\msvc-kit\config\config.toml`
+Config file (Windows): `%APPDATA%\loonghao\msvc-kit\config\config.toml`
 
 ```bash
 msvc-kit config                        # Show current config
 msvc-kit config --set-dir C:\msvc-kit  # Set install directory
 msvc-kit config --set-msvc 14.44       # Set default MSVC version
 msvc-kit config --set-sdk 10.0.26100.0 # Set default SDK version
+msvc-kit config --set-vs-channel 2022  # Set default Visual Studio channel
 msvc-kit config --reset                # Reset to defaults
 ```
+
+`msvc-kit config` prints the configuration file it resolved and the cache
+directory in use. See [Default paths](#default-paths) for the platform
+locations.
 
 Portable mode keeps `config.toml` next to the executable, and `--config` points a
 single run at any file or directory:
@@ -260,6 +275,21 @@ msvc-kit --config D:\portable\my.toml config  # use a specific file
 msvc-kit env                  # Print as shell script
 msvc-kit env --format json    # Print as JSON
 ```
+
+### Environment Variables
+
+| Variable | Scope | Effect |
+|----------|-------|--------|
+| `MSVC_KIT_DIR` | CLI + library | Overrides the installation directory |
+| `MSVC_KIT_CONFIG` | CLI + library | Selects the configuration file or directory |
+| `MSVC_KIT_PORTABLE` | CLI + library | `1`, `true`, `yes` or `on` enables portable mode for a single run |
+| `MSVC_KIT_VS_CHANNEL` | CLI + library | Pins the Visual Studio channel (`17`, `2022`, `auto`, …) |
+| `MSVC_KIT_INNER_PROGRESS` | CLI + library | Detailed extraction progress |
+| `MSVC_KIT_INSTALL_DIR`, `MSVC_KIT_MSVC_VERSION`, `MSVC_KIT_SDK_VERSION`, `MSVC_KIT_PARALLEL_DOWNLOADS`, `MSVC_KIT_VERIFY_HASHES`, `MSVC_KIT_DRY_RUN`, `MSVC_KIT_INCLUDE_COMPONENTS`, `MSVC_KIT_EXCLUDE_PATTERNS` | library only | Read by `DownloadOptions::default()`; the CLI builds its options from flags and the configuration file instead |
+
+Two global flags apply to every subcommand: `--config <PATH>` points a single
+run at another configuration file or directory, and `--verbose` raises the log
+level to `debug`.
 
 #### Self-Update
 
@@ -324,15 +354,25 @@ msvc-kit can provision the exact MSVC version required by the engine:
     & $msvcKitExe install-into-vs --dir $msvcTargetDir
 ```
 
-### Caching & Progress
+### Default paths
+
+| Path | Windows | Linux | macOS |
+|------|---------|-------|-------|
+| Installation root | `%LOCALAPPDATA%\loonghao\msvc-kit\data` | `$XDG_DATA_HOME/msvc-kit` (default `~/.local/share/msvc-kit`) | `~/Library/Application Support/com.loonghao.msvc-kit` |
+| Configuration file | `%APPDATA%\loonghao\msvc-kit\config\config.toml` | `$XDG_CONFIG_HOME/msvc-kit/config.toml` (default `~/.config/msvc-kit/config.toml`) | `~/Library/Application Support/com.loonghao.msvc-kit/config.toml` |
+| Cache root | `%LOCALAPPDATA%\loonghao\msvc-kit\cache` | `$XDG_CACHE_HOME/msvc-kit` (default `~/.cache/msvc-kit`) | `~/Library/Caches/com.loonghao.msvc-kit` |
+
+The cache root holds the manifest cache (`<cache root>/manifests/`). It follows
+the installation root: `MSVC_KIT_DIR`, `config --set-dir` and an explicit
+`cache_dir` in the TOML all relocate it.
 
 ### Caching & Progress
 
 | Cache Type | Location | Description |
 |------------|----------|-------------|
-| Download index | `downloads/{msvc\|sdk}/.../index.db` | redb database for tracking download status |
-| Manifest cache | `<cache dir>/manifests/` | Cached VS manifests with ETag/Last-Modified; follows `MSVC_KIT_DIR` and `config --set-dir` |
-| Extraction markers | `.msvc-kit-extracted/` | Skip already-extracted packages |
+| Download index | `<install dir>/downloads/{msvc\|sdk}/.../index.db` | redb database for tracking download status |
+| Manifest cache | `<cache root>/manifests/` | Cached VS manifests with ETag/Last-Modified; follows `MSVC_KIT_DIR` and `config --set-dir` |
+| Extraction markers | `<install dir>/.msvc-kit-extracted/` | Skip already-extracted packages |
 
 - **Progress display**: Single-line spinner by default. Set `MSVC_KIT_INNER_PROGRESS=1` for detailed file progress.
 - **Skip logic**: Downloads are skipped when:

@@ -53,7 +53,10 @@ This downloads:
 - Latest MSVC compiler (cl.exe, link.exe, etc.)
 - Latest Windows SDK (headers, libraries, tools)
 
-Default location: `%LOCALAPPDATA%\loonghao\msvc-kit\`
+Default location: `%LOCALAPPDATA%\loonghao\msvc-kit\data`
+
+On Linux the default is `$XDG_DATA_HOME/msvc-kit` (`~/.local/share/msvc-kit`),
+on macOS `~/Library/Application Support/com.loonghao.msvc-kit`.
 
 ### 2. Setup Environment
 
@@ -91,7 +94,7 @@ cl
 After running `msvc-kit download`, your directory structure looks like:
 
 ```
-%LOCALAPPDATA%\loonghao\msvc-kit\
+%LOCALAPPDATA%\loonghao\msvc-kit\data\
 ├── VC/
 │   └── Tools/
 │       └── MSVC/
@@ -112,10 +115,15 @@ After running `msvc-kit download`, your directory structure looks like:
 │       │   └── 10.0.xxxxx.0/
 │       └── Lib/
 │           └── 10.0.xxxxx.0/
-└── downloads/
-    ├── msvc/
-    └── sdk/
+├── downloads/
+│   ├── msvc/
+│   └── sdk/
+└── .msvc-kit-extracted/
 ```
+
+The manifest cache lives outside the installation root, under the platform cache
+directory (`%LOCALAPPDATA%\loonghao\msvc-kit\cache\manifests` on Windows), and
+follows the installation root when it is relocated.
 
 ## Environment Variables Set
 

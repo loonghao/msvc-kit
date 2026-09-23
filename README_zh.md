@@ -38,6 +38,7 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 - **清单缓存** - 支持 ETag/Last-Modified 条件请求
 - **TLS 后端** - 使用 `native-tls`（Windows schannel），避免 `rustls`/`awslc-sys` 构建问题
 - **多格式解压** - 支持 VSIX、MSI、CAB
+- **Visual Studio channel 选择** - 自动选择最新已发布的 channel（VS 2026 / VS 2022），也可用 `--vs-channel` 固定
 - **哈希校验** - SHA256 验证
 - **自动更新** - 基于 [axoupdater](https://github.com/axodotdev/axoupdater)，兼容 cargo-dist 发布流程
 
@@ -105,8 +106,7 @@ msvc-kit download \
   --msvc-version 14.44 \
   --sdk-version 10.0.26100.0 \
   --target C:\msvc-kit \
-  --arch x64 \
-  --host-arch x64
+  --arch x64
 
 # 仅下载 MSVC（跳过 SDK）
 msvc-kit download --no-sdk
@@ -122,7 +122,18 @@ msvc-kit download --no-verify
 
 # 固定 Visual Studio channel（默认：最新已发布的 channel）
 msvc-kit download --vs-channel 2022
+
+# 追加可选 MSVC 组件（可重复）
+msvc-kit download --include-component spectre --include-component mfc
+
+# 按包名排除（大小写不敏感子串匹配，可重复）
+msvc-kit download --exclude-pattern arm64
 ```
+
+主机架构会自动检测。只有 `msvc-kit bundle` 提供显式 `--host-arch`，
+`msvc-kit download` 直接使用当前机器的架构。`--include-component` 接受
+`spectre`、`mfc`、`atl`、`asan`、`uwp`、`cli`、`modules`、`redist`
+和 `custom:<pattern>`。
 
 > **注意：** MSVC 版本可以使用短格式（如 `14.44`），会自动解析到最新构建版本；也可以使用完整格式（如 `14.44.34823`）指定特定构建。
 
@@ -164,7 +175,7 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 # 或者 CMD
 msvc-kit setup --script --shell cmd > setup.bat && setup.bat
 
-# 生成可移植脚本（将安装根替换为 %~dp0runtime）
+# 生成可移植脚本（路径相对脚本自身所在目录）
 msvc-kit setup --script --shell cmd --portable-root "%~dp0runtime" > setup.bat
 
 # 或者 Bash/WSL
@@ -236,15 +247,19 @@ msvc-kit clean --all --cache          # 同时清理下载缓存
 
 ### 配置
 
-配置文件位置：`%LOCALAPPDATA%\loonghao\msvc-kit\config\config.toml`
+配置文件位置（Windows）：`%APPDATA%\loonghao\msvc-kit\config\config.toml`
 
 ```bash
 msvc-kit config                        # 显示当前配置
 msvc-kit config --set-dir C:\msvc-kit  # 设置安装目录
 msvc-kit config --set-msvc 14.44       # 设置默认 MSVC 版本
 msvc-kit config --set-sdk 10.0.26100.0 # 设置默认 SDK 版本
+msvc-kit config --set-vs-channel 2022  # 设置默认 Visual Studio channel
 msvc-kit config --reset                # 重置为默认值
 ```
+
+`msvc-kit config` 会打印解析到的配置文件路径和正在使用的缓存目录。
+平台默认路径见[默认路径](#默认路径)。
 
 便携模式把 `config.toml` 放在可执行文件旁，`--config` 可让单次运行使用任意文件或目录：
 
@@ -261,6 +276,32 @@ msvc-kit env                  # 输出为 shell 脚本
 msvc-kit env --format json    # 输出为 JSON
 ```
 
+### 默认路径
+
+| 路径 | Windows | Linux | macOS |
+|------|---------|-------|-------|
+| 安装根目录 | `%LOCALAPPDATA%\loonghao\msvc-kit\data` | `$XDG_DATA_HOME/msvc-kit`（默认 `~/.local/share/msvc-kit`） | `~/Library/Application Support/com.loonghao.msvc-kit` |
+| 配置文件 | `%APPDATA%\loonghao\msvc-kit\config\config.toml` | `$XDG_CONFIG_HOME/msvc-kit/config.toml`（默认 `~/.config/msvc-kit/config.toml`） | `~/Library/Application Support/com.loonghao.msvc-kit/config.toml` |
+| 缓存根目录 | `%LOCALAPPDATA%\loonghao\msvc-kit\cache` | `$XDG_CACHE_HOME/msvc-kit`（默认 `~/.cache/msvc-kit`） | `~/Library/Caches/com.loonghao.msvc-kit` |
+
+缓存根目录下保存清单缓存（`<cache root>/manifests/`，即 `<缓存根目录>/manifests/`）。
+它会跟随安装根目录：`MSVC_KIT_DIR`、`config --set-dir` 以及 TOML 中显式的
+`cache_dir` 都会让它一起移动。
+
+### 环境变量
+
+| 变量 | 作用范围 | 说明 |
+|------|----------|------|
+| `MSVC_KIT_DIR` | CLI + 库 | 覆盖安装目录 |
+| `MSVC_KIT_CONFIG` | CLI + 库 | 指定配置文件或目录 |
+| `MSVC_KIT_PORTABLE` | CLI + 库 | `1`、`true`、`yes` 或 `on` 时只对单次运行启用便携模式 |
+| `MSVC_KIT_VS_CHANNEL` | CLI + 库 | 固定 Visual Studio channel（`17`、`2022`、`auto` 等） |
+| `MSVC_KIT_INNER_PROGRESS` | CLI + 库 | 显示详细解压进度 |
+| `MSVC_KIT_INSTALL_DIR`、`MSVC_KIT_MSVC_VERSION`、`MSVC_KIT_SDK_VERSION`、`MSVC_KIT_PARALLEL_DOWNLOADS`、`MSVC_KIT_VERIFY_HASHES`、`MSVC_KIT_DRY_RUN`、`MSVC_KIT_INCLUDE_COMPONENTS`、`MSVC_KIT_EXCLUDE_PATTERNS` | 仅库 | 由 `DownloadOptions::default()` 读取；CLI 的选项来自命令行参数和配置文件 |
+
+两个全局 flag 对所有子命令生效：`--config <PATH>` 让单次运行使用其他配置文件或目录，
+`--verbose` 把日志级别提升到 `debug`。
+
 ### 自动更新
 
 ```bash
@@ -276,13 +317,58 @@ msvc-kit update --version 0.2.5
 
 自动更新功能由 [axoupdater](https://github.com/axodotdev/axoupdater) 驱动，直接查询 GitHub Releases。兼容 cargo-dist 和自定义发布流程。安装更新时，msvc-kit 会锁定当前安装根目录，并在报告成功前验证更新后的可执行文件是否返回预期版本。`self-update` 特性默认启用，构建时可通过 `--no-default-features` 禁用。
 
+### 把 MSVC 安装到 Visual Studio（供 UBT 发现）
+
+Unreal Build Tool（UBT）通过扫描 Visual Studio 的安装目录来发现 MSVC 工具链。
+如果 msvc-kit 把工具链下载到自定义位置（例如 `C:\msvc-kit\14.36`），UBT 找不到它。
+`install-into-vs` 子命令会把工具链文件复制进 VS 的工具链目录，使其对 UBT 可见。
+
+```bash
+# 查看 VS 实例及其已注册的 MSVC 版本
+msvc-kit install-into-vs --check
+
+# 把指定的已下载工具链安装进 VS
+msvc-kit install-into-vs --dir C:\msvc-kit\14.36
+
+# 自动检测并安装最新下载的工具链
+msvc-kit install-into-vs --auto
+```
+
+> ⚠️  该命令通常**需要管理员权限**，因为它要写入
+> `C:\Program Files (x86)\Microsoft Visual Studio\...`。
+
+**UE 5.2 + MSVC 14.36 CI 集成示例：**
+
+在 GitHub Actions 自托管 runner 上构建 Unreal Engine 插件时，msvc-kit 可以准备引擎要求的确切 MSVC 版本：
+
+```yaml
+- name: Ensure MSVC 14.36 toolchain
+  shell: pwsh
+  run: |
+    $msvcKitExe = "C:\msvc-kit\bin\msvc-kit.exe"
+    $msvcTargetDir = "C:\msvc-kit\14.36"
+
+    # 若未缓存则下载
+    if (-not (Test-Path "$msvcTargetDir\VC\Tools\MSVC")) {
+      & $msvcKitExe download --msvc-version 14.36 --no-sdk --dir $msvcTargetDir --arch x64
+    }
+
+    # 为本次 job 激活工具链
+    $envScript = & $msvcKitExe setup --script --shell powershell --dir $msvcTargetDir
+    if ($LASTEXITCODE -ne 0) { throw "msvc-kit setup failed" }
+    Invoke-Expression ($envScript -join "`n")
+
+    # 安装进 VS 供 UBT 发现（需要管理员权限）
+    & $msvcKitExe install-into-vs --dir $msvcTargetDir
+```
+
 ## 缓存机制
 
 | 缓存类型 | 位置 | 说明 |
 |----------|------|------|
-| 下载索引 | `downloads/{msvc\|sdk}/.../index.db` | redb 数据库，跟踪下载状态 |
-| 清单缓存 | `<cache dir>/manifests/` | VS 清单缓存，支持 ETag/Last-Modified；随 `MSVC_KIT_DIR` 与 `config --set-dir` 移动 |
-| 解压标记 | `.msvc-kit-extracted/` | 跳过已解压的包 |
+| 下载索引 | `<安装目录>/downloads/{msvc\|sdk}/.../index.db` | redb 数据库，跟踪下载状态 |
+| 清单缓存 | `<缓存根目录>/manifests/` | VS 清单缓存，支持 ETag/Last-Modified；随 `MSVC_KIT_DIR` 与 `config --set-dir` 移动 |
+| 解压标记 | `<安装目录>/.msvc-kit-extracted/` | 跳过已解压的包 |
 
 - **进度显示**：默认单行转圈。设置 `MSVC_KIT_INNER_PROGRESS=1` 显示详细文件进度。
 - **跳过逻辑**：以下情况会跳过下载：
