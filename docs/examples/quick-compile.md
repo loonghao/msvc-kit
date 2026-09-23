@@ -241,7 +241,7 @@ name = "qc"
 path = "src/main.rs"
 
 [dependencies]
-msvc-kit = "0.1"
+msvc-kit = "0.2"
 tokio = { version = "1", features = ["full"] }
 ```
 

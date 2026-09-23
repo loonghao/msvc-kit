@@ -101,13 +101,16 @@ The action automatically sets `CC` and `CXX` environment variables for seamless 
 |-------|-------------|---------|
 | `msvc-version` | MSVC version (empty = latest) | `""` |
 | `sdk-version` | Windows SDK version (empty = latest) | `""` |
-| `arch` | Target architecture | `x64` |
-| `host-arch` | Host architecture (empty = auto-detect) | `""` |
-| `install-dir` | Installation directory | `$RUNNER_TEMP/msvc-kit` |
+| `arch` | Target architecture (`x64`, `x86`, `arm64`) | `x64` |
+| `host-arch` | Host architecture used to build tool paths (empty = `x64`) | `""` |
+| `install-dir` | Installation directory (empty = `$RUNNER_TEMP/msvc-kit`) | `""` |
 | `msvc-kit-version` | msvc-kit binary version | `latest` |
 | `components` | Components: `all`, `msvc`, or `sdk` | `all` |
 | `verify-hashes` | Verify file hashes | `true` |
 | `export-env` | Export env vars to GITHUB_ENV | `true` |
+
+The action has no `vs-channel` input: it always uses the newest published Visual
+Studio channel. Pin a channel by running the CLI directly instead of the action.
 
 ## Outputs
 

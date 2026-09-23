@@ -36,28 +36,76 @@ pub struct DownloadOptions {
     /// 自定义缓存管理器（None = 使用默认文件系统缓存）
     pub cache_manager: Option<BoxedCacheManager>,
     
+    /// 用于发现包的 Visual Studio channel（None = auto）
+    ///
+    /// 接受大版本号（`17`、`v17`）、发布年份（`2022`）或关键字 `auto` / `latest`。
+    /// `None` 表示选择最新且可用的 channel。
+    pub vs_channel: Option<String>,
+    
+    /// 存放 Visual Studio 清单缓存的目录。
+    ///
+    /// `None` 表示回退到平台默认位置（注入 cache manager 时则使用其目录）。
+    /// 传入 `MsvcKitConfig::manifest_cache_dir()` 可让下载器使用配置中的缓存目录。
+    pub manifest_cache_dir: Option<PathBuf>,
+    
     /// 预览模式：不实际下载
     pub dry_run: bool,
+
+    /// 额外包含的 MSVC 组件（默认空 = 标准安装）
+    ///
+    /// 默认只下载标准工具链（Tools、CRT、MFC、ATL）。
+    /// 通过该字段可以追加 Spectre 缓解库等可选组件。
+    pub include_components: HashSet<MsvcComponent>,
+
+    /// 需要排除的包 ID 模式（大小写不敏感子串匹配）
+    pub exclude_patterns: Vec<String>,
 }
 ```
 
 ## 默认值
 
+`Default::default()` 会读取环境变量，因此它不是一张固定表：
+
 ```rust
 impl Default for DownloadOptions {
     fn default() -> Self {
         Self {
-            target_dir: default_install_dir(),
-            msvc_version: None,      // 最新版本
-            sdk_version: None,       // 最新版本
-            arch: Architecture::X64,
-            host_arch: None,         // 自动检测
-            verify_hashes: true,
-            parallel_downloads: 4,
+            // `MSVC_KIT_INSTALL_DIR`，否则是相对路径 "msvc-kit"
+            target_dir: ...,
+            msvc_version: std::env::var("MSVC_KIT_MSVC_VERSION").ok(),
+            sdk_version: std::env::var("MSVC_KIT_SDK_VERSION").ok(),
+            arch: Architecture::host(),
+            host_arch: None,                 // 自动检测
+            verify_hashes: true,             // MSVC_KIT_VERIFY_HASHES
+            parallel_downloads: 4,           // MSVC_KIT_PARALLEL_DOWNLOADS
+            http_client: None,
+            progress_handler: None,
+            cache_manager: None,
+            vs_channel: std::env::var("MSVC_KIT_VS_CHANNEL").ok(),
+            manifest_cache_dir: None,        // 平台默认缓存根目录
+            dry_run: false,                  // MSVC_KIT_DRY_RUN
+            include_components: ...,         // MSVC_KIT_INCLUDE_COMPONENTS
+            exclude_patterns: ...,           // MSVC_KIT_EXCLUDE_PATTERNS
         }
     }
 }
 ```
+
+识别的环境变量：
+
+| 变量 | 作用 | 未设置时的默认值 |
+|------|------|------------------|
+| `MSVC_KIT_INSTALL_DIR` | 目标目录 | `msvc-kit`（相对当前工作目录） |
+| `MSVC_KIT_MSVC_VERSION` | MSVC 版本 | `None`（最新） |
+| `MSVC_KIT_SDK_VERSION` | SDK 版本 | `None`（最新） |
+| `MSVC_KIT_PARALLEL_DOWNLOADS` | 并发下载数 | `4` |
+| `MSVC_KIT_VERIFY_HASHES` | 哈希校验 | `true`（`0`/`false`/`no` 才关闭） |
+| `MSVC_KIT_DRY_RUN` | 预览模式 | `false`（`1`/`true`/`yes` 开启） |
+| `MSVC_KIT_VS_CHANNEL` | Visual Studio channel | `None`（auto） |
+| `MSVC_KIT_INCLUDE_COMPONENTS` | 逗号分隔的组件列表 | 空 |
+| `MSVC_KIT_EXCLUDE_PATTERNS` | 逗号分隔的模式列表 | 空 |
+
+这些变量只对库生效。CLI 的 `DownloadOptions` 来自命令行参数和配置文件，不读取它们。
 
 ## 使用示例
 
@@ -126,8 +174,15 @@ let options = DownloadOptions {
 
 ### target_dir
 
-安装目录。默认为：
-- Windows: `%LOCALAPPDATA%\loonghao\msvc-kit`
+安装目录。`DownloadOptions::default()` 优先使用 `MSVC_KIT_INSTALL_DIR`，
+未设置时是相对路径 `msvc-kit`；它**不会**读取 CLI 配置。
+想装到 CLI 默认位置，请显式传入 `load_config()?.install_dir`：
+
+```rust
+let options = DownloadOptions::builder()
+    .target_dir(msvc_kit::load_config()?.install_dir)
+    .build();
+```
 
 ### msvc_version
 
@@ -192,6 +247,26 @@ let options = DownloadOptions::builder()
 ### dry_run
 
 设为 `true` 时，显示将要下载的内容但不实际下载。
+
+### include_components / exclude_patterns
+
+`include_components` 在标准工具链之上追加可选组件：`MsvcComponent::Spectre`、`Mfc`、`Atl`、`Asan`、`Uwp`、`Cli`、`Modules`、`Redist` 和 `Custom(String)`。
+`exclude_patterns` 会丢弃包 ID 中包含任一模式的包（大小写不敏感）。
+
+```rust
+use msvc_kit::{DownloadOptions, MsvcComponent};
+
+let options = DownloadOptions::builder()
+    .include_components([MsvcComponent::Spectre, MsvcComponent::Mfc])
+    .exclude_pattern("arm64")
+    .build();
+```
+
+### vs_channel / manifest_cache_dir
+
+`vs_channel` 固定用于发现包的 Visual Studio channel（`"17"`、`"2022"`、`"auto"` 等）。
+`manifest_cache_dir` 决定 channel 清单的缓存位置；传 `None` 使用平台默认位置，
+传入 `config.manifest_cache_dir()` 则跟随配置中的缓存目录。
 
 ## Builder 模式
 

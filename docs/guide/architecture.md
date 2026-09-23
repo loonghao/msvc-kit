@@ -16,13 +16,17 @@ msvc-kit supports multiple CPU architectures for both host (build machine) and t
 - **Host Architecture**: The CPU architecture of your build machine
 - **Target Architecture**: The CPU architecture of the compiled binaries
 
+`msvc-kit download` detects the host architecture from the running machine and
+has no host flag: it always pulls the cross-compiler that matches the host.
+`--host-arch` exists on `msvc-kit bundle` only.
+
 ### Native Compilation
 
 Build machine and output have the same architecture:
 
 ```bash
 # On x64 machine, build x64 binaries
-msvc-kit download --host-arch x64 --arch x64
+msvc-kit download --arch x64
 ```
 
 ### Cross Compilation
@@ -31,10 +35,10 @@ Build on one architecture for another:
 
 ```bash
 # On x64 machine, build ARM64 binaries
-msvc-kit download --host-arch x64 --arch arm64
+msvc-kit download --arch arm64
 
 # On x64 machine, build x86 (32-bit) binaries
-msvc-kit download --host-arch x64 --arch x86
+msvc-kit download --arch x86
 ```
 
 ## Architecture Filtering
@@ -162,7 +166,7 @@ msvc-kit download --arch x64
 ### Build 32-bit on 64-bit Windows
 
 ```bash
-msvc-kit download --host-arch x64 --arch x86
+msvc-kit download --arch x86
 msvc-kit setup --script --shell powershell | Invoke-Expression
 
 # cl.exe now targets x86
@@ -173,7 +177,7 @@ cl /c myfile.cpp  # Produces x86 object file
 
 ```bash
 # On x64 machine
-msvc-kit download --host-arch x64 --arch arm64
+msvc-kit download --arch arm64
 msvc-kit setup --script --shell powershell | Invoke-Expression
 
 # cl.exe now targets ARM64

@@ -101,13 +101,16 @@ Action 会自动设置 `CC` 和 `CXX` 环境变量，实现与 Rust/cc-rs 的无
 |------|------|--------|
 | `msvc-version` | MSVC 版本（空 = 最新） | `""` |
 | `sdk-version` | Windows SDK 版本（空 = 最新） | `""` |
-| `arch` | 目标架构 | `x64` |
-| `host-arch` | 主机架构（空 = 自动检测） | `""` |
-| `install-dir` | 安装目录 | `$RUNNER_TEMP/msvc-kit` |
+| `arch` | 目标架构（`x64`、`x86`、`arm64`） | `x64` |
+| `host-arch` | 用于构建工具路径的主机架构（空 = `x64`） | `""` |
+| `install-dir` | 安装目录（空 = `$RUNNER_TEMP/msvc-kit`） | `""` |
 | `msvc-kit-version` | msvc-kit 二进制版本 | `latest` |
 | `components` | 组件：`all`、`msvc` 或 `sdk` | `all` |
 | `verify-hashes` | 验证文件哈希 | `true` |
 | `export-env` | 导出环境变量到 GITHUB_ENV | `true` |
+
+该 Action 没有 `vs-channel` 输入：它始终使用最新已发布的 Visual Studio
+channel。需要固定 channel 时，请直接调用 CLI 而不是使用该 Action。
 
 ## 输出参数
 

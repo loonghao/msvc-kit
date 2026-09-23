@@ -46,12 +46,6 @@ msvc-kit download --target C:\msvc-kit
 ```bash
 # 目标架构（默认：x64）
 msvc-kit download --arch x64
-
-# 主机架构（默认：自动检测）
-msvc-kit download --host-arch x64
-
-# 交叉编译：在 x64 主机上构建 ARM64
-msvc-kit download --host-arch x64 --arch arm64
 ```
 
 支持的架构：
@@ -59,6 +53,9 @@ msvc-kit download --host-arch x64 --arch arm64
 - `x86` - 32 位 x86
 - `arm64` - ARM64
 - `arm` - ARM 32 位（仅目标）
+
+**主机**架构由当前运行的机器自动检测，`download` 无法覆盖：它始终下载与主机匹配的交叉编译器。
+只有 `msvc-kit bundle --host-arch <arch>` 支持显式指定主机架构。
 
 ### Visual Studio Channel
 
@@ -76,6 +73,19 @@ msvc-kit config --set-vs-channel 2022
 ```
 
 详见 [Visual Studio 版本与 Channel](./vs-versions.md)。
+
+### 可选组件选择
+
+```bash
+# 追加可选 MSVC 组件（可重复）
+msvc-kit download --include-component spectre --include-component mfc
+
+# 排除包名包含指定内容的包（大小写不敏感，可重复）
+msvc-kit download --exclude-pattern spectre
+```
+
+`--include-component` 接受 `spectre`、`mfc`、`atl`、`asan`、`uwp`、`cli`、`modules`、`redist`
+和 `custom:<pattern>`。标准工具链（Tools、CRT、MFC、ATL）始终会下载，这两个 flag 只在其之上增删包。
 
 ### 下载选项
 
@@ -95,7 +105,6 @@ msvc-kit download \
   --sdk-version 10.0.26100.0 \
   --target C:\msvc-kit \
   --arch x64 \
-  --host-arch x64 \
   --parallel-downloads 8
 ```
 

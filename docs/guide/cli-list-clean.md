@@ -12,11 +12,13 @@ msvc-kit list
 
 Output:
 ```
-Installed MSVC versions:
-  14.44.34823 (C:\msvc-kit\VC\Tools\MSVC\14.44.34823)
+Installed versions in C:\msvc-kit
 
-Installed SDK versions:
-  10.0.26100.0 (C:\msvc-kit\Windows Kits\10)
+MSVC Compiler:
+  - 14.44.34823
+
+Windows SDK:
+  - 10.0.26100.0
 ```
 
 ### List Available Versions
@@ -31,23 +33,20 @@ msvc-kit list --available --vs-channel 2026
 The command prints which Visual Studio channel served the versions. See
 [Visual Studio Versions & Channels](./vs-versions.md) for channel selection.
 
-Output:
-```
-Available MSVC versions:
-  14.44.34823 (latest)
-  14.43.34808
-  14.42.34433
-  14.41.34120
-  14.40.33807
-  ...
+Output (`--available` prints only the newest version of each component, not a
+full list):
 
-Available SDK versions:
-  10.0.26100.0 (latest)
-  10.0.22621.0
-  10.0.22000.0
-  10.0.19041.0
-  ...
 ```
+Fetching available versions from Microsoft...
+
+Visual Studio channel: Visual Studio 2026 (v18)
+
+Latest MSVC version: 14.44.34823
+Latest Windows SDK version: 10.0.26100.0
+```
+
+Use the [library API](../api/library.md) (`list_available_versions`) to get the
+full `msvc_versions` / `sdk_versions` vectors.
 
 ## Clean Command
 
@@ -90,11 +89,10 @@ msvc-kit clean --all --cache
 
 ### Dry Run
 
-To see what would be deleted without actually deleting:
+There is no dry-run flag - check files manually:
 
-```bash
-# Not yet implemented - check files manually
-ls "$env:LOCALAPPDATA\loonghao\msvc-kit"
+```powershell
+ls "$env:LOCALAPPDATA\loonghao\msvc-kit\data"
 ```
 
 ## Disk Space
@@ -103,7 +101,7 @@ Check disk usage:
 
 ```powershell
 # PowerShell
-Get-ChildItem -Path "$env:LOCALAPPDATA\loonghao\msvc-kit" -Recurse |
+Get-ChildItem -Path "$env:LOCALAPPDATA\loonghao\msvc-kit\data" -Recurse |
   Measure-Object -Property Length -Sum |
   Select-Object @{N='Size (GB)';E={[math]::Round($_.Sum/1GB, 2)}}
 ```

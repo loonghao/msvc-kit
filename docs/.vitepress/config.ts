@@ -15,17 +15,19 @@ export default defineConfig({
       lang: 'zh-CN',
       link: '/zh/',
       themeConfig: {
+        // Pages that only exist in English are linked with an "（英文）"
+        // marker so the zh navigation never points at a missing file.
         nav: [
           { text: '指南', link: '/zh/guide/getting-started' },
           { text: 'API', link: '/zh/api/library' },
-          { text: '示例', link: '/zh/examples/basic' },
+          { text: '示例（英文）', link: '/examples/basic' },
           {
-            text: 'DCC 集成',
+            text: 'DCC 集成（英文）',
             items: [
-              { text: 'Unreal Engine 5', link: '/zh/dcc/unreal-engine' },
-              { text: 'Maya', link: '/zh/dcc/maya' },
-              { text: 'Houdini', link: '/zh/dcc/houdini' },
-              { text: '3ds Max', link: '/zh/dcc/3dsmax' },
+              { text: 'Unreal Engine 5', link: '/dcc/unreal-engine' },
+              { text: 'Maya', link: '/dcc/maya' },
+              { text: 'Houdini', link: '/dcc/houdini' },
+              { text: '3ds Max', link: '/dcc/3dsmax' },
             ],
           },
         ],
@@ -34,7 +36,7 @@ export default defineConfig({
             {
               text: '介绍',
               items: [
-                { text: '什么是 msvc-kit?', link: '/zh/guide/what-is-msvc-kit' },
+                { text: '什么是 msvc-kit?（英文）', link: '/guide/what-is-msvc-kit' },
                 { text: '快速开始', link: '/zh/guide/getting-started' },
                 { text: '安装', link: '/zh/guide/installation' },
               ],
@@ -43,20 +45,21 @@ export default defineConfig({
               text: 'CLI 使用',
               items: [
                 { text: '下载', link: '/zh/guide/cli-download' },
-                { text: '设置环境', link: '/zh/guide/cli-setup' },
+                { text: '设置环境（英文）', link: '/guide/cli-setup' },
                 { text: '配置', link: '/zh/guide/cli-config' },
-                { text: '列表和清理', link: '/zh/guide/cli-list-clean' },
+                { text: '列表和清理（英文）', link: '/guide/cli-list-clean' },
                 { text: '查询', link: '/zh/guide/cli-query' },
               ],
             },
             {
               text: '高级',
               items: [
-                { text: '缓存机制', link: '/zh/guide/caching' },
+                { text: '缓存机制（英文）', link: '/guide/caching' },
                 { text: '架构支持', link: '/zh/guide/architecture' },
                 { text: 'Visual Studio 版本', link: '/zh/guide/vs-versions' },
                 { text: 'GitHub Action', link: '/zh/guide/github-action' },
-                { text: 'CI/CD 集成', link: '/zh/guide/ci-cd' },
+                { text: 'CI/CD 集成（英文）', link: '/guide/ci-cd' },
+                { text: '退出码行为（英文）', link: '/exit-code-behavior' },
               ],
             },
           ],
@@ -70,30 +73,6 @@ export default defineConfig({
                 { text: 'MsvcEnvironment', link: '/zh/api/msvc-environment' },
                 { text: 'ToolPaths', link: '/zh/api/tool-paths' },
                 { text: 'QueryResult', link: '/zh/api/query-result' },
-              ],
-            },
-          ],
-          '/zh/examples/': [
-            {
-              text: '示例',
-              items: [
-                { text: '基本用法', link: '/zh/examples/basic' },
-                { text: '自定义路径', link: '/zh/examples/custom-paths' },
-                { text: '构建脚本', link: '/zh/examples/build-script' },
-                { text: '快速编译', link: '/zh/examples/quick-compile' },
-              ],
-            },
-          ],
-          '/zh/dcc/': [
-            {
-              text: 'DCC 集成',
-              items: [
-                { text: '概述', link: '/zh/dcc/overview' },
-                { text: 'Unreal Engine 5', link: '/zh/dcc/unreal-engine' },
-                { text: 'Maya', link: '/zh/dcc/maya' },
-                { text: 'Houdini', link: '/zh/dcc/houdini' },
-                { text: '3ds Max', link: '/zh/dcc/3dsmax' },
-                { text: 'Blender', link: '/zh/dcc/blender' },
               ],
             },
           ],
@@ -147,6 +126,7 @@ export default defineConfig({
             { text: 'Visual Studio Versions', link: '/guide/vs-versions' },
             { text: 'GitHub Action', link: '/guide/github-action' },
             { text: 'CI/CD Integration', link: '/guide/ci-cd' },
+            { text: 'Exit Code Behavior', link: '/exit-code-behavior' },
           ],
         },
       ],

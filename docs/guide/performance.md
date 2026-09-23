@@ -94,6 +94,16 @@ Download concurrency automatically adjusts based on throughput:
 | `MSVC_KIT_PARALLEL_DOWNLOADS` | 4 | Number of parallel downloads |
 | `MSVC_KIT_VERIFY_HASHES` | true | Enable/disable hash verification |
 
+These two are read by the library's `DownloadOptions::default()`, which is also
+what `DownloadOptions::builder()` starts from. The CLI does **not** read them: it
+builds its options from command line flags and the configuration file, so use
+`--parallel-downloads` and `--no-verify` (or `msvc-kit config`) there.
+
+The library also honours `MSVC_KIT_INSTALL_DIR` (default target directory,
+otherwise the relative path `msvc-kit`), `MSVC_KIT_MSVC_VERSION`,
+`MSVC_KIT_SDK_VERSION`, `MSVC_KIT_DRY_RUN`, `MSVC_KIT_INCLUDE_COMPONENTS` and
+`MSVC_KIT_EXCLUDE_PATTERNS` through the same default.
+
 ### Library API
 
 ```rust
@@ -123,5 +133,5 @@ Typical performance on a 100 Mbps connection:
 msvc-kit uses multiple caching layers:
 
 1. **Manifest Cache**: VS manifests cached with ETag/Last-Modified
-2. **Download Index**: SQLite database tracking downloaded files
+2. **Download Index**: [redb](https://github.com/cberner/redb) database tracking downloaded files
 3. **Extraction Markers**: `.done` files marking extracted packages

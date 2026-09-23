@@ -118,12 +118,6 @@ msvc-kit download --target C:\msvc-kit
 ```bash
 # Target architecture (default: x64)
 msvc-kit download --arch x64
-
-# Host architecture (default: auto-detect)
-msvc-kit download --host-arch x64
-
-# Cross-compilation: build ARM64 on x64 host
-msvc-kit download --host-arch x64 --arch arm64
 ```
 
 Supported architectures:
@@ -131,6 +125,11 @@ Supported architectures:
 - `x86` - 32-bit x86
 - `arm64` - ARM64
 - `arm` - ARM 32-bit (target only)
+
+The **host** architecture is detected from the running machine and cannot be
+overridden on `download`; `msvc-kit download` always fetches the cross-compiler
+that matches the host. `msvc-kit bundle --host-arch <arch>` is the only command
+that takes an explicit host architecture.
 
 ### Visual Studio Channel
 
@@ -151,6 +150,21 @@ msvc-kit config --set-vs-channel 2022
 See [Visual Studio Versions & Channels](./vs-versions.md) for the full list and
 for how to add a new release.
 
+### Component Selection (Optional Extras)
+
+```bash
+# Add optional MSVC components (repeatable)
+msvc-kit download --include-component spectre --include-component mfc
+
+# Exclude packages whose id contains a pattern (case-insensitive, repeatable)
+msvc-kit download --exclude-pattern spectre
+```
+
+`--include-component` accepts `spectre`, `mfc`, `atl`, `asan`, `uwp`, `cli`,
+`modules`, `redist` and `custom:<pattern>`. The standard toolchain (Tools, CRT,
+MFC, ATL) is always downloaded; these flags only add or remove packages on top
+of it.
+
 ### Download Options
 
 ```bash
@@ -169,7 +183,6 @@ msvc-kit download \
   --sdk-version 10.0.26100.0 \
   --target C:\msvc-kit \
   --arch x64 \
-  --host-arch x64 \
   --parallel-downloads 8
 ```
 

@@ -53,7 +53,10 @@ msvc-kit download
 - 最新的 MSVC 编译器（cl.exe、link.exe 等）
 - 最新的 Windows SDK（头文件、库、工具）
 
-默认位置：`%LOCALAPPDATA%\loonghao\msvc-kit\`
+默认位置：`%LOCALAPPDATA%\loonghao\msvc-kit\data`
+
+Linux 上默认是 `$XDG_DATA_HOME/msvc-kit`（`~/.local/share/msvc-kit`），
+macOS 上是 `~/Library/Application Support/com.loonghao.msvc-kit`。
 
 ### 2. 配置环境
 
@@ -91,7 +94,7 @@ cl
 运行 `msvc-kit download` 后，目录结构如下：
 
 ```
-%LOCALAPPDATA%\loonghao\msvc-kit\
+%LOCALAPPDATA%\loonghao\msvc-kit\data\
 ├── VC/
 │   └── Tools/
 │       └── MSVC/
@@ -112,10 +115,14 @@ cl
 │       │   └── 10.0.xxxxx.0/
 │       └── Lib/
 │           └── 10.0.xxxxx.0/
-└── downloads/
-    ├── msvc/
-    └── sdk/
+├── downloads/
+│   ├── msvc/
+│   └── sdk/
+└── .msvc-kit-extracted/
 ```
+
+清单缓存在安装根目录之外，位于平台缓存目录（Windows 上为
+`%LOCALAPPDATA%\loonghao\msvc-kit\cache\manifests`）；安装根目录移动时它会一起移动。
 
 ## 设置的环境变量
 

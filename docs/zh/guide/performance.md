@@ -94,6 +94,14 @@ Client::builder()
 | `MSVC_KIT_PARALLEL_DOWNLOADS` | 4 | 并行下载数 |
 | `MSVC_KIT_VERIFY_HASHES` | true | 启用/禁用哈希验证 |
 
+这两个变量由库的 `DownloadOptions::default()` 读取（`DownloadOptions::builder()`
+也以它为起点）。CLI **不会**读取它们：CLI 的选项来自命令行参数和配置文件，
+因此请使用 `--parallel-downloads`、`--no-verify` 或 `msvc-kit config`。
+
+库还会通过同一个 default 读取 `MSVC_KIT_INSTALL_DIR`（默认目标目录，未设置时为相对路径
+`msvc-kit`）、`MSVC_KIT_MSVC_VERSION`、`MSVC_KIT_SDK_VERSION`、`MSVC_KIT_DRY_RUN`、
+`MSVC_KIT_INCLUDE_COMPONENTS` 和 `MSVC_KIT_EXCLUDE_PATTERNS`。
+
 ### 库 API
 
 ```rust
@@ -123,5 +131,5 @@ let options = DownloadOptions::builder()
 msvc-kit 使用多层缓存：
 
 1. **清单缓存**：VS 清单使用 ETag/Last-Modified 缓存
-2. **下载索引**：SQLite 数据库跟踪已下载文件
+2. **下载索引**：[redb](https://github.com/cberner/redb) 数据库跟踪已下载文件
 3. **解压标记**：`.done` 文件标记已解压的包

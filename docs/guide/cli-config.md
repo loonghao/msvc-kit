@@ -83,21 +83,24 @@ cannot be combined with `--portable` or `--no-portable`.
 install_dir = 'D:\msvc-kit'
 default_msvc_version = "14.44"
 default_sdk_version = "10.0.26100.0"
+default_vs_channel = "2022"
 default_arch = "x64"
 verify_hashes = true
 parallel_downloads = 4
 cache_dir = 'D:\msvc-kit\cache'
 ```
 
-Optional version and cache fields may be omitted. There is no `default_host_arch` configuration field. To share settings, copy the actual TOML file and adjust machine-specific paths.
+Optional version, channel and cache fields may be omitted. There is no `default_host_arch` configuration field. To share settings, copy the actual TOML file and adjust machine-specific paths.
 
 Setting `cache_dir` moves the VS manifest cache: manifests are stored in `<cache_dir>/manifests/`.
+
+`default_vs_channel` accepts a major version (`17`), a release year (`2022`) or `auto`. `msvc-kit config --set-vs-channel 2022` validates the value before writing it. See [Visual Studio Versions & Channels](./vs-versions.md).
 
 ## Environment and precedence
 
 Directory precedence: explicit command `--target` / `--dir` > nonempty `MSVC_KIT_DIR` > saved `install_dir` > platform default. `MSVC_KIT_DIR` does not relocate the configuration file and is not persisted by configuration update commands. Empty values are ignored.
 
-Cache directory precedence: explicit `cache_dir` from the TOML file > `<install_dir>/cache` when the installation directory is not the platform default (so both `MSVC_KIT_DIR` and `config --set-dir` relocate the cache) > platform default cache directory. `msvc-kit config` prints the cache directory in use.
+Cache directory precedence: explicit `cache_dir` from the TOML file > `<install_dir>/cache` when the installation directory is not the platform default (so both `MSVC_KIT_DIR` and `config --set-dir` relocate the cache) > platform default cache root. Default cache roots: `%LOCALAPPDATA%\loonghao\msvc-kit\cache` (Windows), `$XDG_CACHE_HOME/msvc-kit` (Linux, default `~/.cache/msvc-kit`), `~/Library/Caches/com.loonghao.msvc-kit` (macOS). `msvc-kit config` prints the cache directory in use.
 
 Configuration file precedence: `--config` > nonempty `MSVC_KIT_CONFIG` > portable mode > per-user configuration directory. Empty values are ignored.
 
@@ -109,4 +112,8 @@ msvc-kit download
 Remove-Item Env:MSVC_KIT_DIR
 ```
 
-`MSVC_KIT_INNER_PROGRESS`: show detailed extraction progress.
+`MSVC_KIT_INNER_PROGRESS`: show detailed extraction progress (`1`, `true`, `yes` or `on`).
+
+`MSVC_KIT_VS_CHANNEL`: pins the Visual Studio channel with the same precedence as
+`--vs-channel` (flag > variable > `default_vs_channel` > auto). See
+[Visual Studio Versions & Channels](./vs-versions.md).

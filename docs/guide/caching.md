@@ -6,9 +6,16 @@ msvc-kit uses multiple caching strategies to minimize downloads and speed up ope
 
 | Cache | Location | Purpose |
 |-------|----------|---------|
-| Download Index | `downloads/{msvc\|sdk}/.../index.db` | Track downloaded files |
-| Manifest Cache | `<cache dir>/manifests/` | VS manifest with ETag |
-| Extraction Markers | `.msvc-kit-extracted/` | Skip re-extraction |
+| Download Index | `<install dir>/downloads/{msvc\|sdk}/.../index.db` | Track downloaded files |
+| Manifest Cache | `<cache root>/manifests/` | VS manifest with ETag |
+| Extraction Markers | `<install dir>/.msvc-kit-extracted/` | Skip re-extraction |
+
+Default locations: the installation root is `%LOCALAPPDATA%\loonghao\msvc-kit\data`
+on Windows, `$XDG_DATA_HOME/msvc-kit` on Linux and
+`~/Library/Application Support/com.loonghao.msvc-kit` on macOS; the cache root is
+`%LOCALAPPDATA%\loonghao\msvc-kit\cache` on Windows,
+`$XDG_CACHE_HOME/msvc-kit` on Linux and `~/Library/Caches/com.loonghao.msvc-kit`
+on macOS.
 
 ## Download Index
 
@@ -31,7 +38,7 @@ Size match is a best-effort optimization. Same size doesn't guarantee same conte
 
 ## Manifest Cache
 
-VS manifests are cached under the configured cache directory: `<install_dir>/cache/manifests/` when the installation directory is not the platform default (`MSVC_KIT_DIR` or `config --set-dir`), an explicit `cache_dir` from the TOML file, or the platform default cache directory otherwise. Run `msvc-kit config` to print the cache directory in use.
+VS manifests are cached under the configured cache directory: an explicit `cache_dir` from the TOML file, otherwise `<install_dir>/cache/manifests/` when the installation directory is not the platform default (`MSVC_KIT_DIR` or `config --set-dir`), otherwise the platform default cache root listed above. Run `msvc-kit config` to print the cache directory in use.
 
 Manifests are cached with HTTP conditional requests:
 
@@ -62,7 +69,7 @@ Re-running extraction skips packages with existing markers.
 
 ```powershell
 # Download cache
-Get-ChildItem "$env:LOCALAPPDATA\loonghao\msvc-kit\downloads" -Recurse |
+Get-ChildItem "$env:LOCALAPPDATA\loonghao\msvc-kit\data\downloads" -Recurse |
   Measure-Object Length -Sum |
   Select-Object @{N='Size (MB)';E={[math]::Round($_.Sum/1MB, 2)}}
 ```
@@ -91,7 +98,14 @@ msvc-kit download
 
 | Variable | Effect |
 |----------|--------|
-| `MSVC_KIT_INNER_PROGRESS` | Set to `1` to show detailed extraction progress |
+| `MSVC_KIT_INNER_PROGRESS` | Set to `1`, `true`, `yes` or `on` to show detailed extraction progress |
+
+`MSVC_KIT_INNER_PROGRESS` is the only cache-related variable the CLI reads.
+`MSVC_KIT_PARALLEL_DOWNLOADS`, `MSVC_KIT_VERIFY_HASHES`, `MSVC_KIT_DRY_RUN`,
+`MSVC_KIT_MSVC_VERSION`, `MSVC_KIT_SDK_VERSION`, `MSVC_KIT_INSTALL_DIR`,
+`MSVC_KIT_INCLUDE_COMPONENTS` and `MSVC_KIT_EXCLUDE_PATTERNS` are read by the
+library's `DownloadOptions::default()`; the CLI takes these settings from flags
+and the configuration file instead.
 
 ## Debugging Cache Issues
 

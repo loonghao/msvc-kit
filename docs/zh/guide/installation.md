@@ -61,7 +61,7 @@ cargo install --path .
 
 ```bash
 msvc-kit --version
-# msvc-kit 0.1.x
+# msvc-kit 0.2.x
 
 msvc-kit --help
 ```
@@ -85,7 +85,7 @@ cargo uninstall msvc-kit
 msvc-kit clean --all --cache
 
 # 或手动删除数据目录
-rm -rf "$env:LOCALAPPDATA\loonghao\msvc-kit"
+rm -rf "$env:LOCALAPPDATA\loonghao\msvc-kit\data"
 ```
 
 ### 移除配置
