@@ -175,8 +175,11 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 # 或者 CMD
 msvc-kit setup --script --shell cmd > setup.bat && setup.bat
 
-# 生成可移植脚本（路径相对脚本自身所在目录）
+# 生成可移植脚本（安装根锚定在相对脚本自身所在目录的位置）
 msvc-kit setup --script --shell cmd --portable-root "%~dp0runtime" > setup.bat
+
+# 或锚定到固定目录
+msvc-kit setup --script --shell cmd --portable-root "D:\build\runtime" > setup.bat
 
 # 或者 Bash/WSL
 eval "$(msvc-kit setup --script --shell bash)"

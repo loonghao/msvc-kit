@@ -36,6 +36,34 @@ eval "$(msvc-kit setup --script --shell bash)"
 --script         # Output as shell script (for eval)
 ```
 
+### Anchoring the Script Install Root
+
+By default a generated script carries the resolved install directory. `--portable-root <PATH>`
+replaces that anchor with `PATH`, which is used verbatim — a concrete directory or a shell
+placeholder both work:
+
+```bash
+# Fixed directory
+msvc-kit setup --script --shell cmd --portable-root "D:\build\runtime" > setup.bat
+
+# Relative to the script's own directory (CMD)
+msvc-kit setup --script --shell cmd --portable-root "%~dp0runtime" > setup.bat
+
+# Relative to the script's own directory (PowerShell)
+msvc-kit setup --script --shell powershell --portable-root "$PSScriptRoot\runtime" > setup.ps1
+
+# Relative to the script's own directory (Bash)
+msvc-kit setup --script --shell bash --portable-root "$SCRIPT_DIR/runtime" > setup.sh
+```
+
+The generated script keeps its root indirection (`%BUNDLE_ROOT%`, `$BundleRoot`, `$BUNDLE_ROOT`),
+so every toolchain path follows the anchor. A Windows anchor given for `--shell bash` is converted
+to Unix style (`D:\build\runtime` becomes `/d/build/runtime`).
+
+::: tip
+`--portable-root` requires `--script`, and the value must not be empty.
+:::
+
 ### Persistent Setup (Windows Registry)
 
 ```bash

@@ -96,9 +96,12 @@ pub struct ScriptContext {
     pub arch: Architecture,
     /// Host architecture
     pub host_arch: Architecture,
-    /// Whether to use portable (relative) paths
+    /// Whether the generated scripts keep their root indirection
+    /// (`%BUNDLE_ROOT%`, `$BundleRoot`, `$BUNDLE_ROOT`) instead of inlining the
+    /// root into every path
     pub portable: bool,
-    /// Root path (only used for absolute scripts)
+    /// Root used when the script is not anchored at its own directory: either a
+    /// concrete install directory or a caller-supplied anchor
     pub root: Option<PathBuf>,
 }
 
@@ -117,6 +120,29 @@ impl ScriptContext {
             host_arch,
             portable: true,
             root: None,
+        }
+    }
+
+    /// Create a script context anchored at a caller-supplied root
+    ///
+    /// The generated scripts keep their root indirection, but the root is set to
+    /// `root` instead of being derived from the script's own location. `root` is
+    /// used verbatim, so it can be a concrete directory as well as a shell
+    /// placeholder such as `%~dp0runtime`.
+    pub fn portable_root(
+        root: PathBuf,
+        msvc_version: impl Into<String>,
+        sdk_version: impl Into<String>,
+        arch: Architecture,
+        host_arch: Architecture,
+    ) -> Self {
+        Self {
+            msvc_version: msvc_version.into(),
+            sdk_version: sdk_version.into(),
+            arch,
+            host_arch,
+            portable: true,
+            root: Some(root),
         }
     }
 
@@ -148,12 +174,18 @@ impl ScriptContext {
         self.arch.msvc_target_dir()
     }
 
+    /// Whether the scripts derive their root from the script's own location
+    fn is_script_relative(&self) -> bool {
+        self.portable && self.root.is_none()
+    }
+
     /// Get the root path expression for the given shell
     ///
-    /// For portable scripts, returns shell-specific relative path expressions.
-    /// For absolute scripts, returns the actual root path.
+    /// For script-relative scripts, returns shell-specific relative path
+    /// expressions. Otherwise returns the configured root: the actual install
+    /// directory, or the caller-supplied anchor.
     fn root_expr(&self, shell: ShellType) -> String {
-        if self.portable {
+        if self.is_script_relative() {
             match shell {
                 ShellType::Cmd => "%BUNDLE_ROOT%".to_string(),
                 ShellType::PowerShell => "$BundleRoot".to_string(),
@@ -163,7 +195,7 @@ impl ScriptContext {
             let root = self
                 .root
                 .as_ref()
-                .expect("root path required for absolute scripts");
+                .expect("root path required unless the script derives it from its own location");
             match shell {
                 ShellType::Cmd | ShellType::PowerShell => root.to_string_lossy().to_string(),
                 ShellType::Bash => {
@@ -346,24 +378,34 @@ fn render_cmd(ctx: &ScriptContext) -> Result<String> {
         .render()
         .map_err(|e| MsvcKitError::Other(format!("Failed to render CMD template: {}", e)))?;
 
-    // For absolute scripts, replace BUNDLE_ROOT with actual path
-    if !ctx.portable {
-        let root = ctx.root_expr(ShellType::Cmd);
-        Ok(rendered
-            .replace("%BUNDLE_ROOT%", &root)
-            .lines()
-            .filter(|line| {
-                // Remove the BUNDLE_ROOT setup lines for absolute scripts
-                !line.contains("set \"BUNDLE_ROOT=%~dp0\"")
-                    && !line.contains("if \"%BUNDLE_ROOT:~-1%\"")
-                    && !line.contains("Get the directory where this script is located")
-                    && !line.contains("Remove trailing backslash")
-            })
-            .collect::<Vec<_>>()
-            .join("\n"))
-    } else {
-        Ok(rendered)
+    if ctx.is_script_relative() {
+        // Keep the BUNDLE_ROOT derivation that the template already provides.
+        return Ok(rendered);
     }
+
+    let root = ctx.root_expr(ShellType::Cmd);
+    if ctx.portable {
+        // Anchored at a caller-supplied root: keep the indirection, but set the
+        // root to the supplied value instead of the script's own directory.
+        return Ok(rendered.replace(
+            "set \"BUNDLE_ROOT=%~dp0\"",
+            &format!("set \"BUNDLE_ROOT={}\"", root),
+        ));
+    }
+
+    // For absolute scripts, replace BUNDLE_ROOT with actual path
+    Ok(rendered
+        .replace("%BUNDLE_ROOT%", &root)
+        .lines()
+        .filter(|line| {
+            // Remove the BUNDLE_ROOT setup lines for absolute scripts
+            !line.contains("set \"BUNDLE_ROOT=%~dp0\"")
+                && !line.contains("if \"%BUNDLE_ROOT:~-1%\"")
+                && !line.contains("Get the directory where this script is located")
+                && !line.contains("Remove trailing backslash")
+        })
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
 
 fn render_powershell(ctx: &ScriptContext) -> Result<String> {
@@ -379,22 +421,32 @@ fn render_powershell(ctx: &ScriptContext) -> Result<String> {
         .render()
         .map_err(|e| MsvcKitError::Other(format!("Failed to render PowerShell template: {}", e)))?;
 
-    // For absolute scripts, replace $BundleRoot with actual path
-    if !ctx.portable {
-        let root = ctx.root_expr(ShellType::PowerShell);
-        Ok(rendered
-            .replace("$BundleRoot", &root)
-            .lines()
-            .filter(|line| {
-                // Remove the BundleRoot setup lines for absolute scripts
-                !line.contains("$PSScriptRoot")
-                    && !line.contains("Get the directory where this script is located")
-            })
-            .collect::<Vec<_>>()
-            .join("\n"))
-    } else {
-        Ok(rendered)
+    if ctx.is_script_relative() {
+        // Keep the $BundleRoot derivation that the template already provides.
+        return Ok(rendered);
     }
+
+    let root = ctx.root_expr(ShellType::PowerShell);
+    if ctx.portable {
+        // Anchored at a caller-supplied root: keep the indirection, but set the
+        // root to the supplied value instead of the script's own directory.
+        return Ok(rendered.replace(
+            "$BundleRoot = $PSScriptRoot",
+            &format!("$BundleRoot = \"{}\"", root),
+        ));
+    }
+
+    // For absolute scripts, replace $BundleRoot with actual path
+    Ok(rendered
+        .replace("$BundleRoot", &root)
+        .lines()
+        .filter(|line| {
+            // Remove the BundleRoot setup lines for absolute scripts
+            !line.contains("$PSScriptRoot")
+                && !line.contains("Get the directory where this script is located")
+        })
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
 
 fn render_bash(ctx: &ScriptContext) -> Result<String> {
@@ -410,25 +462,70 @@ fn render_bash(ctx: &ScriptContext) -> Result<String> {
         .render()
         .map_err(|e| MsvcKitError::Other(format!("Failed to render Bash template: {}", e)))?;
 
-    // For absolute scripts, replace $BUNDLE_ROOT with actual path
-    if !ctx.portable {
-        let root = ctx.root_expr(ShellType::Bash);
-        Ok(rendered
-            .replace("$BUNDLE_ROOT", &root)
-            .lines()
-            .filter(|line| {
-                // Remove the BUNDLE_ROOT/SCRIPT_DIR setup lines for absolute scripts
-                !line.contains("SCRIPT_DIR=")
-                    && !line.contains("BUNDLE_ROOT=")
-                    && !line.contains("wslpath")
-                    && !line.contains("Get the directory where this script is located")
-                    && !line.contains("Convert to Windows path")
-            })
-            .collect::<Vec<_>>()
-            .join("\n"))
-    } else {
-        Ok(rendered)
+    if ctx.is_script_relative() {
+        // Keep the BUNDLE_ROOT derivation that the template already provides.
+        return Ok(rendered);
     }
+
+    let root = ctx.root_expr(ShellType::Bash);
+    if ctx.portable {
+        // Anchored at a caller-supplied root: keep the indirection, but set the
+        // root to the supplied value instead of the script's own directory.
+        return Ok(anchor_bash_root(&rendered, &root));
+    }
+
+    // For absolute scripts, replace $BUNDLE_ROOT with actual path
+    Ok(rendered
+        .replace("$BUNDLE_ROOT", &root)
+        .lines()
+        .filter(|line| {
+            // Remove the BUNDLE_ROOT/SCRIPT_DIR setup lines for absolute scripts
+            !line.contains("SCRIPT_DIR=")
+                && !line.contains("BUNDLE_ROOT=")
+                && !line.contains("wslpath")
+                && !line.contains("Get the directory where this script is located")
+                && !line.contains("Convert to Windows path")
+        })
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+/// Points a portable bash script's `BUNDLE_ROOT` at a fixed anchor
+///
+/// The `SCRIPT_DIR` assignment stays in place so an anchor may still reference it
+/// (for example `$SCRIPT_DIR/runtime`); only the `wslpath` conversion block that
+/// derived `BUNDLE_ROOT` from it is dropped.
+fn anchor_bash_root(rendered: &str, root: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    for line in rendered.lines() {
+        if is_bash_script_dir_conversion(line) {
+            continue;
+        }
+        // Collapse the blank lines left behind by the removed block.
+        if line.trim().is_empty() && lines.last().is_some_and(|prev| prev.trim().is_empty()) {
+            continue;
+        }
+
+        lines.push(line.to_string());
+
+        if line.contains("SCRIPT_DIR=") {
+            lines.push(format!("BUNDLE_ROOT=\"{}\"", root));
+        }
+    }
+
+    lines.join("\n")
+}
+
+/// Whether a bash line belongs to the `SCRIPT_DIR` to `BUNDLE_ROOT` conversion
+fn is_bash_script_dir_conversion(line: &str) -> bool {
+    let trimmed = line.trim();
+
+    trimmed.contains("Convert to Windows path")
+        || trimmed.contains("wslpath")
+        || trimmed.contains("BUNDLE_ROOT=\"$SCRIPT_DIR\"")
+        || trimmed == "else"
+        || trimmed == "fi"
 }
 
 fn render_readme(ctx: &ScriptContext) -> Result<String> {
@@ -514,6 +611,104 @@ mod tests {
         assert!(scripts.powershell.contains("$PSScriptRoot"));
         assert!(scripts.bash.contains("BASH_SOURCE"));
         assert!(scripts.readme.is_some());
+    }
+
+    #[test]
+    fn test_portable_root_script_context() {
+        let ctx = ScriptContext::portable_root(
+            PathBuf::from("C:\\runtime"),
+            "14.44.34823",
+            "10.0.26100.0",
+            Architecture::X64,
+            Architecture::X64,
+        );
+
+        // Keeps the root indirection, but anchors it at the supplied path.
+        assert!(ctx.portable);
+        assert_eq!(
+            ctx.root.as_deref(),
+            Some(PathBuf::from("C:\\runtime").as_path())
+        );
+        assert_eq!(ctx.root_expr(ShellType::Cmd), "C:\\runtime");
+        assert_eq!(ctx.root_expr(ShellType::PowerShell), "C:\\runtime");
+        assert_eq!(ctx.root_expr(ShellType::Bash), "/c/runtime");
+    }
+
+    #[test]
+    fn test_generate_portable_root_scripts_honours_the_value() {
+        let ctx = ScriptContext::portable_root(
+            PathBuf::from("D:\\build\\runtime"),
+            "14.44.34823",
+            "10.0.26100.0",
+            Architecture::X64,
+            Architecture::X64,
+        );
+
+        let scripts = generate_portable_scripts(&ctx).unwrap();
+
+        // CMD: the root is anchored at the supplied directory.
+        assert!(scripts
+            .cmd
+            .contains("set \"BUNDLE_ROOT=D:\\build\\runtime\""));
+        assert!(!scripts.cmd.contains("BUNDLE_ROOT=%~dp0"));
+        assert!(scripts.cmd.contains("%BUNDLE_ROOT%\\VC"));
+
+        // PowerShell: same anchor, quoted.
+        assert!(scripts
+            .powershell
+            .contains("$BundleRoot = \"D:\\build\\runtime\""));
+        assert!(scripts.powershell.contains("$BundleRoot\\VC"));
+
+        // Bash: Unix-style anchor, no wslpath derivation left behind.
+        assert!(scripts.bash.contains("BUNDLE_ROOT=\"/d/build/runtime\""));
+        assert!(!scripts.bash.contains("wslpath"));
+        assert!(scripts.bash.contains("$BUNDLE_ROOT/VC"));
+    }
+
+    #[test]
+    fn test_generate_portable_root_scripts_accepts_a_placeholder() {
+        // A shell placeholder must survive verbatim, including the `SCRIPT_DIR`
+        // variable a bash anchor may reference.
+        let ctx = ScriptContext::portable_root(
+            PathBuf::from("%~dp0runtime"),
+            "14.44.34823",
+            "10.0.26100.0",
+            Architecture::X64,
+            Architecture::X64,
+        );
+        let cmd = generate_script(&ctx, ShellType::Cmd).unwrap();
+        assert!(cmd.contains("set \"BUNDLE_ROOT=%~dp0runtime\""));
+
+        let bash = generate_script(
+            &ScriptContext::portable_root(
+                PathBuf::from("$SCRIPT_DIR/runtime"),
+                "14.44.34823",
+                "10.0.26100.0",
+                Architecture::X64,
+                Architecture::X64,
+            ),
+            ShellType::Bash,
+        )
+        .unwrap();
+        assert!(bash.contains("BUNDLE_ROOT=\"$SCRIPT_DIR/runtime\""));
+        assert!(bash.contains("SCRIPT_DIR="));
+    }
+
+    #[test]
+    fn test_script_relative_scripts_unchanged() {
+        // Without a root the scripts keep deriving it from their own location.
+        let ctx = ScriptContext::portable(
+            "14.44.34823",
+            "10.0.26100.0",
+            Architecture::X64,
+            Architecture::X64,
+        );
+
+        let scripts = generate_portable_scripts(&ctx).unwrap();
+
+        assert!(scripts.cmd.contains("set \"BUNDLE_ROOT=%~dp0\""));
+        assert!(scripts.powershell.contains("$BundleRoot = $PSScriptRoot"));
+        assert!(scripts.bash.contains("wslpath"));
     }
 
     #[test]

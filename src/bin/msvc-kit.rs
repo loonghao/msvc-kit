@@ -244,8 +244,12 @@ enum Commands {
         #[arg(long, default_value = "powershell")]
         shell: String,
 
-        /// Replace install root with a portable placeholder when generating scripts (requires --script)
-        #[arg(long, requires = "script", value_name = "PORTABLE_ROOT")]
+        /// Anchor the generated script's install root at PATH instead of the install directory (requires --script)
+        ///
+        /// PATH is used verbatim, so it can be a directory (`D:\build\runtime`) or a
+        /// shell placeholder such as `%~dp0runtime` (CMD), `$PSScriptRoot\runtime`
+        /// (PowerShell) or `$SCRIPT_DIR/runtime` (Bash).
+        #[arg(long, requires = "script", value_name = "PATH")]
         portable_root: Option<String>,
 
         /// Write to Windows registry (persistent)
@@ -605,24 +609,27 @@ async fn main() -> anyhow::Result<()> {
                     _ => ShellType::detect(),
                 };
 
-                // Create script context based on whether portable root is specified
-                let ctx = if let Some(ref _portable_root) = portable_root {
-                    // Use portable mode with relative paths
-                    ScriptContext::portable(
+                // A --portable-root value becomes the install root anchor of the
+                // generated script; without it the script carries the resolved
+                // install directory.
+                let ctx = match portable_root.as_deref().map(str::trim) {
+                    Some(root) if !root.is_empty() => ScriptContext::portable_root(
+                        PathBuf::from(root),
                         &env.vc_tools_version,
                         &env.windows_sdk_version,
                         arch,
                         arch,
-                    )
-                } else {
-                    // Use absolute mode with actual paths
-                    ScriptContext::absolute(
+                    ),
+                    Some(_) => {
+                        anyhow::bail!("--portable-root requires a non-empty path");
+                    }
+                    None => ScriptContext::absolute(
                         install_dir.clone(),
                         &env.vc_tools_version,
                         &env.windows_sdk_version,
                         arch,
                         arch,
-                    )
+                    ),
                 };
 
                 let script_content = generate_script(&ctx, shell_type)?;

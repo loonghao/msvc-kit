@@ -24,10 +24,12 @@ export default defineConfig({
           {
             text: 'DCC 集成（英文）',
             items: [
+              { text: 'Overview', link: '/dcc/overview' },
               { text: 'Unreal Engine 5', link: '/dcc/unreal-engine' },
               { text: 'Maya', link: '/dcc/maya' },
               { text: 'Houdini', link: '/dcc/houdini' },
               { text: '3ds Max', link: '/dcc/3dsmax' },
+              { text: 'Blender', link: '/dcc/blender' },
             ],
           },
         ],
@@ -90,10 +92,12 @@ export default defineConfig({
       {
         text: 'DCC Integration',
         items: [
+          { text: 'Overview', link: '/dcc/overview' },
           { text: 'Unreal Engine 5', link: '/dcc/unreal-engine' },
           { text: 'Maya', link: '/dcc/maya' },
           { text: 'Houdini', link: '/dcc/houdini' },
           { text: '3ds Max', link: '/dcc/3dsmax' },
+          { text: 'Blender', link: '/dcc/blender' },
         ],
       },
     ],

@@ -33,7 +33,7 @@ on Windows and reading `directories-6.0.0/src/{win,lin,mac}.rs`.
 | # | Documentation said | Implementation does | Status |
 |---|--------------------|---------------------|--------|
 | 2.1 | `msvc-kit download --host-arch <arch>` (README, both `guide/cli-download.md`, both `guide/architecture.md`, ~10 occurrences) | `Commands::Download` has no `host_arch` field. The CLI hardcodes `host_arch: Some(Architecture::host())`. Only `Commands::Bundle` has `--host-arch` | **Fixed** — replaced with `--arch`, plus a note that the host is detected and that `--host-arch` is a `bundle` flag |
-| 2.2 | `setup --portable-root "%~dp0runtime"` "rewrites install root to `%~dp0runtime`" | The value is bound as `_portable_root` and **never read**: any value switches the script to `ScriptContext::portable(...)`, which anchors paths at `%~dp0` / `$PSScriptRoot` / `$SCRIPT_DIR`, not at the supplied path | **Fixed** (both READMEs reworded). **Open** as an implementation gap: either honour the value or drop the argument |
+| 2.2 | `setup --portable-root "%~dp0runtime"` "rewrites install root to `%~dp0runtime`" | The value is bound as `_portable_root` and **never read**: any value switches the script to `ScriptContext::portable(...)`, which anchors paths at `%~dp0` / `$PSScriptRoot` / `$SCRIPT_DIR`, not at the supplied path | **Fixed** — `ScriptContext::portable_root()` anchors the generated script's root at the supplied value; an empty value is rejected. Documented in both READMEs and `guide/cli-setup.md` |
 
 ## 3. Flags and fields that were undocumented
 
