@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use super::cache::{
     create_spinner, default_manifest_cache_dir, fetch_bytes_with_cache, meta_path_for, url_basename,
 };
+use super::channel_availability;
 use super::MsvcComponent;
 use crate::constants::USER_AGENT;
 use crate::error::{MsvcKitError, Result};
@@ -184,7 +185,10 @@ impl VsManifest {
     /// Try the given channels in order until one serves a usable manifest
     ///
     /// Channels that upstream has not published yet (HTML instead of JSON) are
-    /// skipped with a warning instead of failing the whole request.
+    /// skipped and remembered for [`channel_availability::UNAVAILABLE_TTL`],
+    /// so an unpublished release is not re-probed on every call. Explicitly
+    /// pinned channels bypass that cache, and a channel that serves a manifest
+    /// drops its entry again.
     async fn fetch_auto_from(
         candidates: &[VsChannelSpec],
         cache_dir: &Path,
@@ -192,19 +196,33 @@ impl VsManifest {
         let mut skipped: Vec<String> = Vec::new();
 
         for candidate in candidates {
+            if let Some(reason) = channel_availability::lookup(cache_dir, candidate).await {
+                tracing::debug!(
+                    "Channel {} skipped without probing (known unavailable): {}",
+                    candidate,
+                    reason
+                );
+                skipped.push(format!("{} ({})", candidate, reason));
+                continue;
+            }
+
             match Self::fetch_channel(candidate, cache_dir).await {
                 Ok(manifest) => {
+                    channel_availability::forget(cache_dir, candidate).await;
                     if !skipped.is_empty() {
-                        tracing::warn!(
+                        // Auto selection is *expected* to walk past unpublished
+                        // channels, so this is diagnostics, not a warning.
+                        tracing::debug!(
                             "Visual Studio channel(s) skipped as unavailable: {}",
                             skipped.join("; ")
                         );
                     }
                     return Ok((manifest, candidate.clone()));
                 }
-                Err(err @ MsvcKitError::ChannelUnavailable { .. }) => {
-                    tracing::debug!("Channel {} skipped: {}", candidate, err);
-                    skipped.push(format!("{} ({})", candidate, err));
+                Err(MsvcKitError::ChannelUnavailable { reason, .. }) => {
+                    channel_availability::record(cache_dir, candidate, &reason).await;
+                    tracing::debug!("Channel {} skipped: {}", candidate, reason);
+                    skipped.push(format!("{} ({})", candidate, reason));
                 }
                 Err(err) => return Err(err),
             }
@@ -333,7 +351,8 @@ impl VsManifest {
             &download_label,
             &manifest_file_name,
         )
-        .await?;
+        .await
+        .map_err(classify_transport_error)?;
 
         if vsman_cached {
             tracing::info!("Using cached VS package manifest: {:?}", vsman_cache);
@@ -761,14 +780,55 @@ fn channel_unavailable(channel: &VsChannelSpec, reason: impl Into<String>) -> Ms
     }
 }
 
+/// HTTP statuses that describe a broken transport rather than a missing channel
+///
+/// Server errors, throttling, timeouts and proxy failures are retryable. They
+/// must not be reported as "this channel is not published": auto selection
+/// would silently fall back to an older Visual Studio and send the user chasing
+/// the wrong cause. A 404 (and friends) still means upstream has not published
+/// the channel.
+pub fn is_transient_http_status(status: u16) -> bool {
+    if (500..=599).contains(&status) {
+        return true;
+    }
+
+    matches!(
+        status,
+        407 // Proxy Authentication Required: a proxy intercepts the request
+            | 408 // Request Timeout
+            | 429 // Too Many Requests
+    )
+}
+
+/// Promote transient HTTP failures to [`MsvcKitError::TransientHttp`]
+///
+/// Used for payload fetches that are not channel specific, where a missing
+/// resource has no "try an older channel" fallback.
+fn classify_transport_error(err: MsvcKitError) -> MsvcKitError {
+    match err {
+        MsvcKitError::HttpStatus { url, status } if is_transient_http_status(status) => {
+            MsvcKitError::TransientHttp { url, status }
+        }
+        other => other,
+    }
+}
+
 /// Decide whether a channel fetch error means "this channel is unusable"
 ///
 /// Transport and IO failures say nothing about the channel itself, so they stay
-/// fatal. HTTP level problems (404, non-success status, ...) are reported as an
-/// unavailable channel so auto-selection can fall back to an older release.
+/// fatal — and so do transient HTTP statuses such as 503 or 429: the request
+/// never got a usable answer, so "upstream has not published this channel"
+/// would be a guess that hides a network problem.
+///
+/// Genuine HTTP level answers (404, empty manifest, HTML instead of JSON, ...)
+/// are reported as an unavailable channel so auto-selection can fall back to an
+/// older release.
 fn classify_channel_error(channel: &VsChannelSpec, err: MsvcKitError) -> MsvcKitError {
     match err {
-        MsvcKitError::Network(_) | MsvcKitError::Io(_) => err,
+        MsvcKitError::Network(_) | MsvcKitError::Io(_) | MsvcKitError::TransientHttp { .. } => err,
+        MsvcKitError::HttpStatus { url, status } if is_transient_http_status(status) => {
+            MsvcKitError::TransientHttp { url, status }
+        }
         other => channel_unavailable(channel, other.to_string()),
     }
 }
@@ -1555,13 +1615,14 @@ mod tests {
     }
 
     #[test]
-    fn http_level_failures_are_reported_as_unavailable_channel() {
+    fn http_not_found_is_reported_as_unavailable_channel() {
         let channel = VsChannelSpec::from_major(18);
         let err = classify_channel_error(
             &channel,
-            MsvcKitError::Other(
-                "Failed to fetch https://aka.ms/vs/18/release/channel: HTTP 404".to_string(),
-            ),
+            MsvcKitError::HttpStatus {
+                url: channel.channel_url.clone(),
+                status: 404,
+            },
         );
 
         match err {
@@ -1576,6 +1637,121 @@ mod tests {
             }
             other => panic!("expected ChannelUnavailable, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn transient_http_statuses_stay_fatal() {
+        // Server errors, throttling and proxy interception: the request never
+        // reached a usable answer, so this is not "the channel is unpublished".
+        for status in [407, 408, 429, 500, 502, 503, 504] {
+            let channel = VsChannelSpec::from_major(18);
+            let err = classify_channel_error(
+                &channel,
+                MsvcKitError::HttpStatus {
+                    url: channel.channel_url.clone(),
+                    status,
+                },
+            );
+
+            match err {
+                MsvcKitError::TransientHttp {
+                    url,
+                    status: reported,
+                } => {
+                    assert_eq!(reported, status);
+                    assert!(url.contains("/vs/18/"), "{}", url);
+                    let message = MsvcKitError::TransientHttp {
+                        url: url.clone(),
+                        status: reported,
+                    }
+                    .to_string();
+                    assert!(
+                        message.contains("transport failure"),
+                        "the error must point at the network, got: {message}"
+                    );
+                }
+                other => panic!("HTTP {status} must stay fatal, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn not_found_statuses_are_not_treated_as_transient() {
+        for status in [400, 401, 403, 404, 410] {
+            assert!(
+                !is_transient_http_status(status),
+                "HTTP {status} must still mean 'this channel is not usable'"
+            );
+        }
+    }
+
+    #[test]
+    fn io_failures_stay_fatal() {
+        let channel = VsChannelSpec::from_major(18);
+        let err = classify_channel_error(
+            &channel,
+            MsvcKitError::Io(std::io::Error::other("disk on fire")),
+        );
+
+        assert!(
+            matches!(err, MsvcKitError::Io(_)),
+            "IO errors say nothing about the channel, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_selection_does_not_fall_back_on_a_transient_failure() {
+        let mut server = mockito::Server::new_async().await;
+        let vsman_url = format!("{}/vsman/VisualStudio.vsman", server.url());
+
+        // Newest channel: the request never gets a usable answer.
+        let broken = server
+            .mock("GET", "/vs/19/release/channel")
+            .with_status(503)
+            .with_body("service unavailable")
+            .expect(1)
+            .create_async()
+            .await;
+        // Older channel: would serve a real manifest, but must not be used as a
+        // fallback for a network problem.
+        let published = server
+            .mock("GET", "/vs/18/release/channel")
+            .with_status(200)
+            .with_body(channel_manifest_body(&vsman_url))
+            .expect(0)
+            .create_async()
+            .await;
+
+        let cache_dir = tempfile::tempdir().unwrap();
+        let newest =
+            VsChannelSpec::new(19, None, format!("{}/vs/19/release/channel", server.url()));
+        let candidates = vec![
+            newest.clone(),
+            VsChannelSpec::new(
+                18,
+                Some(2026),
+                format!("{}/vs/18/release/channel", server.url()),
+            ),
+        ];
+
+        let err = VsManifest::fetch_auto_from(&candidates, cache_dir.path())
+            .await
+            .expect_err("a transport failure must not be swallowed");
+
+        match err {
+            MsvcKitError::TransientHttp { url, status } => {
+                assert_eq!(status, 503);
+                assert!(url.contains("/vs/19/"), "{}", url);
+            }
+            other => panic!("expected TransientHttp, got {other:?}"),
+        }
+
+        broken.assert_async().await;
+        published.assert_async().await;
+        assert!(
+            !entry_file(cache_dir.path(), &newest).exists(),
+            "a transient failure must not be cached as 'channel unavailable'"
+        );
     }
 
     #[tokio::test]
@@ -1733,5 +1909,155 @@ mod tests {
             other => panic!("expected ChannelUnavailable, got {other:?}"),
         }
         unavailable.assert_async().await;
+    }
+
+    /// Cache file that records a channel as unavailable
+    fn entry_file(cache_dir: &Path, channel: &VsChannelSpec) -> std::path::PathBuf {
+        channel_availability::entry_path(cache_dir, channel)
+    }
+
+    #[tokio::test]
+    async fn auto_selection_probes_an_unpublished_channel_only_once() {
+        let mut server = mockito::Server::new_async().await;
+        let vsman_url = format!("{}/vsman/VisualStudio.vsman", server.url());
+
+        // Newest channel: upstream has not published a JSON manifest yet.
+        let unpublished = server
+            .mock("GET", "/vs/19/release/channel")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<!doctype html><html>search results</html>")
+            .expect(1)
+            .create_async()
+            .await;
+        // Older channel: serves a real manifest.
+        let published = server
+            .mock("GET", "/vs/18/release/channel")
+            .with_status(200)
+            .with_body(channel_manifest_body(&vsman_url))
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let vsman = server
+            .mock("GET", "/vsman/VisualStudio.vsman")
+            .with_status(200)
+            .with_body(vs_manifest_body())
+            .expect_at_least(1)
+            .create_async()
+            .await;
+
+        let cache_dir = tempfile::tempdir().unwrap();
+        let newest =
+            VsChannelSpec::new(19, None, format!("{}/vs/19/release/channel", server.url()));
+        let candidates = vec![
+            newest.clone(),
+            VsChannelSpec::new(
+                18,
+                Some(2026),
+                format!("{}/vs/18/release/channel", server.url()),
+            ),
+        ];
+
+        for _ in 0..2 {
+            let (_, used) = VsManifest::fetch_auto_from(&candidates, cache_dir.path())
+                .await
+                .expect("should fall back to the published channel");
+            assert_eq!(used.major, 18);
+        }
+
+        // The unpublished channel is remembered instead of being re-probed.
+        unpublished.assert_async().await;
+        published.assert_async().await;
+        vsman.assert_async().await;
+        assert!(
+            entry_file(cache_dir.path(), &newest).exists(),
+            "the unavailability should be recorded for the next call"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_selection_picks_up_a_channel_again_after_the_entry_expires() {
+        let mut server = mockito::Server::new_async().await;
+        let vsman_url = format!("{}/vsman/VisualStudio.vsman", server.url());
+
+        // The channel is published now, but a previous run recorded it as
+        // unavailable long enough ago that the entry has expired.
+        let channel_mock = server
+            .mock("GET", "/vs/19/release/channel")
+            .with_status(200)
+            .with_body(channel_manifest_body(&vsman_url))
+            .expect(1)
+            .create_async()
+            .await;
+        let vsman = server
+            .mock("GET", "/vsman/VisualStudio.vsman")
+            .with_status(200)
+            .with_body(vs_manifest_body())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let cache_dir = tempfile::tempdir().unwrap();
+        let channel =
+            VsChannelSpec::new(19, None, format!("{}/vs/19/release/channel", server.url()));
+        channel_availability::record_at(cache_dir.path(), &channel, "not published yet", 0).await;
+
+        let (manifest, used) =
+            VsManifest::fetch_auto_from(std::slice::from_ref(&channel), cache_dir.path())
+                .await
+                .expect("the channel is published now");
+
+        assert_eq!(used.major, 19);
+        assert_eq!(manifest.list_msvc_versions(), vec!["14.50".to_string()]);
+        channel_mock.assert_async().await;
+        vsman.assert_async().await;
+        assert!(
+            !entry_file(cache_dir.path(), &channel).exists(),
+            "a usable channel must drop its unavailability entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_channels_bypass_the_negative_cache() {
+        let mut server = mockito::Server::new_async().await;
+
+        // The channel is not published yet and must be probed every time the
+        // user asks for it explicitly: the answer "the release you asked for is
+        // not out yet" may never be hidden behind a cache entry.
+        let channel_mock = server
+            .mock("GET", "/vs/18/release/channel")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<!doctype html><html>not published yet</html>")
+            .expect(2)
+            .create_async()
+            .await;
+
+        let cache_dir = tempfile::tempdir().unwrap();
+        let channel = VsChannelSpec::new(
+            18,
+            Some(2026),
+            format!("{}/vs/18/release/channel", server.url()),
+        );
+
+        // Auto selection records the channel as unavailable...
+        VsManifest::fetch_auto_from(std::slice::from_ref(&channel), cache_dir.path())
+            .await
+            .expect_err("no channel is usable");
+        assert!(entry_file(cache_dir.path(), &channel).exists());
+
+        // ...and an explicit request still goes to the network and reports why.
+        let err = VsManifest::fetch_with_channel(&channel, cache_dir.path())
+            .await
+            .expect_err("the pinned channel is not published");
+
+        match err {
+            MsvcKitError::ChannelUnavailable { reason, .. } => {
+                assert!(reason.contains("HTML"), "{}", reason)
+            }
+            other => panic!("expected ChannelUnavailable, got {other:?}"),
+        }
+
+        channel_mock.assert_async().await;
     }
 }

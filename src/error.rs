@@ -115,6 +115,32 @@ pub enum MsvcKitError {
         reason: String,
     },
 
+    /// An HTTP endpoint answered with a status msvc-kit cannot use
+    #[error("HTTP {status} while fetching {url}")]
+    HttpStatus {
+        /// URL that was requested
+        url: String,
+        /// HTTP status code of the response
+        status: u16,
+    },
+
+    /// A transient transport failure while reaching an HTTP endpoint
+    ///
+    /// Server errors, throttling and proxy failures say nothing about whether
+    /// the requested resource exists: retrying (or fixing the network) is the
+    /// answer, so this must never be reported as "the resource is not
+    /// published".
+    #[error(
+        "{url} answered HTTP {status}: this is a transport failure, not a missing \
+         release - check network and proxy settings, then retry"
+    )]
+    TransientHttp {
+        /// URL that was requested
+        url: String,
+        /// HTTP status code of the response
+        status: u16,
+    },
+
     /// Download cancelled
     #[error("Download cancelled by user")]
     Cancelled,

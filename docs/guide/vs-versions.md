@@ -50,22 +50,30 @@ Microsoft publishes a channel manifest only once the release is available. Until
 then `https://aka.ms/vs/18/release/channel` serves an HTML page instead of JSON.
 msvc-kit detects this and degrades cleanly instead of failing with a parse error:
 
-- **Auto selection** skips the channel and falls back to the next one:
+- **Auto selection** skips the channel and falls back to the next one. The skip
+  is recorded next to the manifest cache and remembered for 10 minutes, so an
+  unpublished release is not re-probed on every command; the reason is logged at
+  `debug` level, not `warn`, because walking past an unpublished channel is the
+  normal case:
 
   ```text
-  WARN Visual Studio channel(s) skipped as unavailable: Visual Studio 2026 (v18)
-       (Visual Studio channel Visual Studio 2026 (v18) is not available
-       (https://aka.ms/vs/18/release/channel): the server returned an HTML page
-       instead of a JSON manifest (the channel is probably not published yet))
   Visual Studio channel: Visual Studio 2022 (v17)
   ```
 
 - **Pinned selection** reports a typed error, `ChannelUnavailable`, with the URL
-  and the reason. It never silently falls back to another Visual Studio version.
+  and the reason. It never silently falls back to another Visual Studio version,
+  and it always talks to the network, so the “not published yet” answer is never
+  hidden behind the 10 minute skip above.
+
+- **Transport failures** (5xx, `429`, `408`, `407`) are *not* treated as an
+  unpublished channel: they surface as `TransientHttp` instead of falling back to
+  an older Visual Studio, so a proxy or outage is not mistaken for “Microsoft has
+  not released it yet”.
 
 An unusable response (HTML, empty body, invalid JSON, or a manifest without
-packages) is never kept in the manifest cache, so the channel is picked up as
-soon as upstream publishes it.
+packages) is never kept in the manifest cache, and the skip entry is dropped as
+soon as a channel serves a usable manifest, so the channel is picked up as soon
+as upstream publishes it.
 
 ## Adding support for a new Visual Studio version
 
