@@ -174,8 +174,11 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 # Or for CMD
 msvc-kit setup --script --shell cmd > setup.bat && setup.bat
 
-# Portable script (paths relative to the script's own directory)
+# Portable script (install root anchored at a path relative to the script's own directory)
 msvc-kit setup --script --shell cmd --portable-root "%~dp0runtime" > setup.bat
+
+# Or anchor it at a fixed directory
+msvc-kit setup --script --shell cmd --portable-root "D:\build\runtime" > setup.bat
 
 # Or for Bash/WSL
 eval "$(msvc-kit setup --script --shell bash)"
