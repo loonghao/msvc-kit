@@ -1,6 +1,7 @@
 //! Download functionality for MSVC and Windows SDK components
 
 pub mod cache;
+mod channel_availability;
 mod common;
 pub mod hash;
 pub mod http;

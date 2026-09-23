@@ -223,22 +223,14 @@ pub async fn fetch_bytes_with_cache(
                 return Ok((bytes, false));
             }
 
-            return Err(MsvcKitError::Other(format!(
-                "Failed to fetch {}: HTTP {}",
-                url,
-                resp.status()
-            )));
+            return Err(http_status_error(url, resp.status()));
         }
     }
 
     // No usable cache: fetch fully
     let resp = client.get(url).send().await?;
     if !resp.status().is_success() {
-        return Err(MsvcKitError::Other(format!(
-            "Failed to fetch {}: HTTP {}",
-            url,
-            resp.status()
-        )));
+        return Err(http_status_error(url, resp.status()));
     }
 
     let headers = resp.headers().clone();
@@ -263,6 +255,17 @@ pub async fn fetch_bytes_with_cache(
     let _ = write_meta(&meta_path, &meta).await;
 
     Ok((bytes, false))
+}
+
+/// Build the error for a response msvc-kit cannot use
+///
+/// The status travels with the error so callers can classify it (a 404 means
+/// something completely different from a 503) instead of parsing a message.
+fn http_status_error(url: &str, status: reqwest::StatusCode) -> MsvcKitError {
+    MsvcKitError::HttpStatus {
+        url: url.to_string(),
+        status: status.as_u16(),
+    }
 }
 
 /// Download response bytes with progress updates
