@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.2.18](https://github.com/loonghao/msvc-kit/compare/v0.2.17...v0.2.18) (2026-09-23)
+
+
+### Bug Fixes
+
+* **setup:** honour the --portable-root value and align the English DCC nav ([#166](https://github.com/loonghao/msvc-kit/issues/166)) ([d2ced83](https://github.com/loonghao/msvc-kit/commit/d2ced83d04da7409dc7ca759eabd6c93f9bbe3d7))
+* **vs-channel:** cache unpublished channels and stop masking transport errors ([#163](https://github.com/loonghao/msvc-kit/issues/163)) ([0d5aaef](https://github.com/loonghao/msvc-kit/commit/0d5aaefceed4e7b2216815cda0bea94a7c7f2833))
+
+
+### Dependencies
+
+* update Rust crate redb to v4.3.0 ([650f15a](https://github.com/loonghao/msvc-kit/commit/650f15ab44e1e8c9564bd2ce785cb66a379e0301))
+* update Rust crate reqwest to v0.13.5 ([9321a03](https://github.com/loonghao/msvc-kit/commit/9321a037c43e977f745b0c1a7778db72a717359d))
+* update Rust crate rstest to 0.27 ([a7dca38](https://github.com/loonghao/msvc-kit/commit/a7dca3862d05a3695597d3547172464031a55165))
+* update Rust crate serde to v1.0.229 ([3c25ba4](https://github.com/loonghao/msvc-kit/commit/3c25ba4baadfe07cf5d253f1a929185891c1dfb4))
+* update Rust crate serde_json to v1.0.151 ([397e618](https://github.com/loonghao/msvc-kit/commit/397e6184414767b75cda1890c67394c940dcec67))
+* update Rust crate simd-json to 0.18 ([3f138a7](https://github.com/loonghao/msvc-kit/commit/3f138a788180d706b4ebdffe789759f0c69ccfb5))
+* update Rust crate thiserror to v2.0.20 ([30f8ffe](https://github.com/loonghao/msvc-kit/commit/30f8ffec06bab84df4ce999f55bb487bf4ff8ca6))
+
+
+### Documentation
+
+* align documentation with the implemented contract ([467fee4](https://github.com/loonghao/msvc-kit/commit/467fee428b225c51060eed2fa27f5ec761e9f3d0))
+
 ## [0.2.17](https://github.com/loonghao/msvc-kit/compare/v0.2.16...v0.2.17) (2026-09-21)
 
 
