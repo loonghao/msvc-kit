@@ -3,10 +3,6 @@ just = "latest"
 node = "22"
 rust = "1.93.1"
 
-[settings]
-cache_duration = "7d"
-auto_install = true
-
 # No [scripts] here on purpose: every entry was a verbatim `just xxx` mirror of
 # a justfile recipe, so the two copies drifted silently whenever a recipe was
 # renamed. Run `just <recipe>` instead. The single exception,
