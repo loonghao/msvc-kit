@@ -342,3 +342,21 @@ jobs:
           release-tag: ${{ steps.version.outputs.TAG_NAME }}
           token: ${{ secrets.WINGET_TOKEN }}
         continue-on-error: true
+
+      # winget-releaser runs komac, which pairs the previously published installer
+      # entries with the new release assets. The last published manifest (0.2.2)
+      # declared one installer per architecture, so a single-asset release gets
+      # paired three times and winget rejects the result with
+      # "Manifest Error: Duplicate installer entry found.". installers-regex only
+      # filters release assets, so it cannot prevent this - the fix has to
+      # normalize the generated manifest on the PR branch.
+      - name: Collapse duplicate WinGet installer entries
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 scripts/normalize-winget-manifest.py \
+            --fork loonghao/winget-pkgs \
+            --identifier loonghao.msvc-kit \
+            --version "${{ steps.version.outputs.VERSION }}" \
+            --apply
