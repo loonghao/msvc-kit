@@ -22,9 +22,14 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Setup vx
-        uses: loonghao/vx@main
+        uses: loonghao/vx@v0.9.33
         with:
-          version: '0.8.0'
+          version: '0.9.33'
+          # Must stay >= `vx_version` in vx.lock: an older vx cannot parse the
+          # lock, warns, and silently falls back to vx.toml. The action's cache
+          # is restored from a shared prefix, so it would put a stale vx binary
+          # back in place of the pinned one (install.sh skips an existing file).
+          cache: false
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup tools (vx)
