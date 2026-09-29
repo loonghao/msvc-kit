@@ -48,8 +48,13 @@ jobs:
       - name: Add llvm-tools-preview
         run: vx rustup component add llvm-tools-preview
 
+      # `vx cargo install <pkg>` is rerouted into vx's own global-package flow,
+      # which leaves a .cmd shim that cargo cannot resolve as a subcommand on
+      # Windows. Install with cargo directly so the real executable lands in
+      # ~/.cargo/bin, where the `cargo llvm-cov` call below can find it.
       - name: Install cargo-llvm-cov
-        run: vx cargo install cargo-llvm-cov --locked
+        shell: bash
+        run: cargo install cargo-llvm-cov --locked
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
