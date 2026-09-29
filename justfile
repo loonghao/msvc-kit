@@ -68,6 +68,10 @@ test-all-features:
 test-doc:
     vx cargo test --doc
 
+# Run the Python script tests (release helpers under scripts/)
+test-scripts:
+    python3 -m unittest discover -s scripts -p "test_*.py" -v
+
 # Run tests with output
 test-nocapture:
     vx cargo test -- --nocapture

@@ -23,12 +23,15 @@ It locates the open winget-pkgs pull request for ``<identifier>`` at
 ``<version>``, reads the installer manifest on the PR branch, collapses
 duplicated installer entries down to one per
 ``(Architecture, InstallerUrl, InstallerSha256)`` keeping the entry whose
-package dependency matches the installer architecture, and pushes the result
-back to the PR branch when it changed.
+package dependency
+matches the installer architecture, and pushes the result back to the PR branch
+when it changed.
 
 It never creates a pull request and never touches any branch other than the one
-the pull request already points at. If no pull request is found the script
-exits successfully so it cannot break a release.
+the pull request already points at: the pull request head must live in
+``--fork``, otherwise the script fails instead of writing somewhere else. If no
+pull request is found the script exits successfully so it cannot break a
+release.
 """
 
 from __future__ import annotations
@@ -110,6 +113,28 @@ def installers_key(installer: dict) -> tuple:
     )
 
 
+def head_repo(pr: dict) -> str:
+    """Return the full name of the repository hosting the pull request branch."""
+    head = pr.get("head") or {}
+    repo = head.get("repo") or {}
+    return repo.get("full_name") or ""
+
+
+def fork_error(head: str, fork: str) -> str | None:
+    """Return why ``head`` is not a safe place to push, or ``None`` if it is.
+
+    ``--fork`` is the only repository this script is allowed to write to. The
+    pull request is located by searching titles in the upstream repository, so
+    without this check a pull request opened from anywhere else would be
+    normalized (and pushed to) silently.
+    """
+    if not head:
+        return "the pull request has no head repository"
+    if head.lower() != fork.lower():
+        return f"the pull request head is {head}, not the fork {fork}"
+    return None
+
+
 def dependency_architectures(installer: dict) -> set[str]:
     dependencies = installer.get("Dependencies") or {}
     architectures = set()
@@ -150,10 +175,47 @@ def collapse(installers: list[dict]) -> tuple[list[dict], bool]:
     return collapsed, changed
 
 
+def normalization_error(original: list[dict], normalized: list[dict]) -> str | None:
+    """Return why ``normalized`` is not a safe collapse of ``original``.
+
+    Collapsing may drop entries, but it may never invent one, keep the same
+    entry twice or reorder the survivors - the pushed manifest must be an
+    order-preserving subsequence of the manifest that was read.
+
+    The check compares entries by identity instead of re-deriving the grouping
+    key, so it does not repeat the bookkeeping :func:`collapse` used: a bug in
+    the grouping itself is reported here instead of being pushed to
+    winget-pkgs.
+    """
+    positions = {}
+    for index, installer in enumerate(original):
+        positions.setdefault(id(installer), index)
+
+    kept: set[int] = set()
+    previous = -1
+    for installer in normalized:
+        identifier = id(installer)
+        if identifier in kept:
+            return "an installer entry is kept more than once"
+        if identifier not in positions:
+            return "an installer entry was not part of the manifest"
+        kept.add(identifier)
+        position = positions[identifier]
+        if position < previous:
+            return "the installer entries were reordered"
+        previous = position
+
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--upstream", default="microsoft/winget-pkgs")
-    parser.add_argument("--fork", required=True, help="Fork that hosts the PR branch")
+    parser.add_argument(
+        "--fork",
+        required=True,
+        help="Fork the PR branch must live in; the script refuses to write anywhere else",
+    )
     parser.add_argument("--identifier", required=True, help="PackageIdentifier")
     parser.add_argument("--version", required=True, help="PackageVersion")
     parser.add_argument(
@@ -183,7 +245,12 @@ def main() -> int:
         return 0
 
     branch = pr["head"]["ref"]
-    head_repo = pr["head"]["repo"]["full_name"]
+    target_repo = head_repo(pr)
+    error = fork_error(target_repo, args.fork)
+    if error is not None:
+        print(f"::error::Refusing to normalize PR #{pr['number']}: {error}")
+        return 1
+
     partition = args.identifier[0].lower()
     folder = "/".join(args.identifier.split("."))
     path = (
@@ -192,15 +259,20 @@ def main() -> int:
     )
 
     try:
-        blob_sha, content = gh.file(head_repo, path, branch)
+        blob_sha, content = gh.file(target_repo, path, branch)
     except urllib.error.HTTPError as error:
-        print(f"::error::Could not read {path} on {head_repo}@{branch}: {error}")
+        print(f"::error::Could not read {path} on {target_repo}@{branch}: {error}")
         return 1
 
     header, body = split_header(content)
     manifest = yaml.safe_load(body)
     installers = manifest.get("Installers") or []
     normalized, changed = collapse(installers)
+
+    error = normalization_error(installers, normalized)
+    if error is not None:
+        print(f"::error::{error}; leaving {path} untouched")
+        return 1
 
     if not changed:
         print(f"{path} has no duplicate installer entries")
@@ -220,17 +292,12 @@ def main() -> int:
         manifest, sort_keys=False, default_flow_style=False, allow_unicode=True
     )
 
-    duplicate_keys = [installers_key(i) for i in normalized]
-    if len(duplicate_keys) != len(set(duplicate_keys)):
-        print("::error::Installer entries are still duplicated after normalization")
-        return 1
-
     if not args.apply:
         print("--apply not set; leaving the branch untouched")
         return 0
 
     gh.put(
-        f"{API_ROOT}/repos/{head_repo}/contents/{path}",
+        f"{API_ROOT}/repos/{target_repo}/contents/{path}",
         {
             "message": f"New version: {args.identifier} version {args.version}\n\n"
             "Collapse duplicate installer entries so the release ships a single "
@@ -240,7 +307,7 @@ def main() -> int:
             "branch": branch,
         },
     )
-    print(f"Pushed normalized manifest to {head_repo}@{branch} (PR #{pr['number']})")
+    print(f"Pushed normalized manifest to {target_repo}@{branch} (PR #{pr['number']})")
     return 0
 
 
