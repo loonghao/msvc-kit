@@ -205,6 +205,18 @@ jobs:
         run: vx just test-doc
 
 
+  # Python script tests (release helpers such as the WinGet manifest normalizer)
+  python-tests:
+    name: Python Script Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run script tests
+        run: python3 -m unittest discover -s scripts -p "test_*.py" -v
+
+
   # Documentation build test
   docs-build:
     name: Docs Build Test
@@ -238,7 +250,7 @@ jobs:
   pr-ready:
     name: PR Ready
     runs-on: ubuntu-latest
-    needs: [pre-build, quick-checks, clippy, rust-tests, docs-build]
+    needs: [pre-build, quick-checks, clippy, rust-tests, python-tests, docs-build]
     if: always()
     steps:
       - name: Check results
@@ -247,6 +259,7 @@ jobs:
           QUICK_CHECKS_RESULT: ${{ needs.quick-checks.result }}
           CLIPPY_RESULT: ${{ needs.clippy.result }}
           RUST_TESTS_RESULT: ${{ needs.rust-tests.result }}
+          PYTHON_TESTS_RESULT: ${{ needs.python-tests.result }}
           DOCS_BUILD_RESULT: ${{ needs.docs-build.result }}
         run: |
           echo "## PR Check Results" >> "$GITHUB_STEP_SUMMARY"
@@ -270,6 +283,7 @@ jobs:
           check_result "quick-checks" "$QUICK_CHECKS_RESULT"
           check_result "clippy" "$CLIPPY_RESULT"
           check_result "rust-tests" "$RUST_TESTS_RESULT"
+          check_result "python-tests" "$PYTHON_TESTS_RESULT"
           check_result "docs-build" "$DOCS_BUILD_RESULT"
 
           echo "" >> "$GITHUB_STEP_SUMMARY"
