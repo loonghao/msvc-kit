@@ -32,7 +32,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup vx
-        uses: loonghao/vx@v0.9.33
+        uses: loonghao/vx@v0.9.34
         with:
           version: '0.9.33'
           # Must stay >= `vx_version` in vx.lock: an older vx cannot parse the
