@@ -140,6 +140,23 @@ fn explicit_selection_failure_is_a_json_report() {
 }
 
 #[test]
+fn opt_in_compile_failure_cannot_be_reported_as_success() {
+    let root = TempDir::new().unwrap();
+    complete_fixture(root.path(), "x64");
+    let mut requested = options(root.path());
+    requested.compile_probe = true;
+    // The file evidence is complete, but the fixture compiler is not executable.
+    // Only the explicit probe discovers this and must stop before linking.
+    let report = doctor(&requested);
+    assert_eq!(report.status, DoctorStatus::Failed);
+    assert!(report
+        .checks
+        .iter()
+        .any(|check| check.id == "probe.compile" && check.status == DoctorStatus::Failed));
+    assert!(!report.checks.iter().any(|check| check.id == "probe.link"));
+}
+
+#[test]
 fn cross_diagnostics_require_target_libraries_and_host_sdk_executables() {
     let root = TempDir::new().unwrap();
     complete_fixture(root.path(), "arm64");

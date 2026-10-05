@@ -84,6 +84,18 @@ CLI fixture using an empty, schema-invalid explicit configuration. That fixture
 now serializes valid isolated settings before testing doctor JSON and child exit
 codes. Production configuration validation remains unchanged and strict.
 
+The corrected fixture's GitHub Rust Tests, Coverage, Clippy and three target
+pre-build jobs passed on `b6d38e423e2eda25d47851ba03db4c062272f69e`.
+The separate Codecov patch check remained below its existing target (71.84%
+versus 78.25%). Additional contract tests now cover child environment isolation
+and exit/spawn failures, CMake path quoting and preservation after a failed
+write, receipt capture and portable roundtrips, missing provenance, invalid
+receipt/payload identities, and an opt-in compiler launch failure. The focused
+suite passed 15 tests (7 doctor, 3 execution, 5 lock) with Rust 1.93.1 and one
+compiler worker. These are test changes; production Rust source remains identical
+to the immutable CLI revision pinned by py-dem-bones. Fresh CI must validate the
+resulting PR head and its Codecov patch result; no threshold is lowered.
+
 At review time #176 remained at
 `2736536755659e5f18c064c5d2d5bcc46c3c3e19` and #97 at
 `7c80520b6325aeaeb53dc5ffc5232dcb2d1859f8`.
