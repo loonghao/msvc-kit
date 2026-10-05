@@ -16,7 +16,7 @@ use tracing::debug;
 use super::hash::compute_file_hash;
 use super::progress::{BoxedProgressHandler, IndicatifProgressHandler};
 use super::traits::BoxedCacheManager;
-use super::{DownloadIndex, DownloadOptions, DownloadStatus, Package, PackagePayload};
+use super::{DownloadIndex, DownloadOptions, DownloadStatus, IndexEntry, Package, PackagePayload};
 use crate::constants::download as dl_const;
 use crate::error::{MsvcKitError, Result};
 
@@ -102,8 +102,26 @@ impl CommonDownloader {
         download_dir: &Path,
         component_name: &str,
     ) -> Result<Vec<PathBuf>> {
-        let all_payloads: Vec<PackagePayload> =
-            packages.iter().flat_map(|p| p.payloads.clone()).collect();
+        let mut all_payloads: Vec<PackagePayload> = Vec::new();
+        for payload in packages.iter().flat_map(|package| &package.payloads) {
+            payload_path(download_dir, &payload.file_name)?;
+            if let Some(existing) = all_payloads
+                .iter()
+                .find(|existing| existing.file_name == payload.file_name)
+            {
+                if existing.url != payload.url
+                    || existing.size != payload.size
+                    || existing.sha256 != payload.sha256
+                {
+                    return Err(MsvcKitError::Config(format!(
+                        "Conflicting payload identities for {}",
+                        payload.file_name
+                    )));
+                }
+            } else {
+                all_payloads.push(payload.clone());
+            }
+        }
 
         let total_files = all_payloads.len();
         let total_size: u64 = all_payloads.iter().map(|p| p.size).sum();
@@ -114,28 +132,18 @@ impl CommonDownloader {
             .clone()
             .unwrap_or_else(|| Arc::new(IndicatifProgressHandler::new(total_size)));
 
+        // Lock before opening redb and retain ownership through all downloads/index writes.
+        let lock_path = download_dir.join(".download.lock");
+        let _cache_lock =
+            tokio::task::spawn_blocking(move || crate::storage::lock_file(&lock_path))
+                .await
+                .map_err(|error| MsvcKitError::Other(error.to_string()))??;
         let index_path = download_dir.join("index.db");
         let index = DownloadIndex::load(&index_path).await?;
         let index = Arc::new(RwLock::new(index));
 
-        // Calculate completed files from index
-        let (completed_bytes, completed_count) = self
-            .calculate_initial_progress(&all_payloads, download_dir, &index)
-            .await?;
-
-        tracing::info!(
-            "Index pre-scan: completed={} ({}), remaining={}, total_files={}, total_size={}",
-            completed_count,
-            humansize::format_size(completed_bytes, humansize::BINARY),
-            total_files.saturating_sub(completed_count),
-            total_files,
-            humansize::format_size(total_size, humansize::BINARY)
-        );
-
-        // Initialize progress
         progress_handler.on_start(component_name, total_files, total_size);
-        progress_handler.on_progress(completed_bytes);
-
+        progress_handler.on_progress(0);
         let processed = Arc::new(AtomicUsize::new(0));
         let skipped = Arc::new(AtomicUsize::new(0));
         let downloaded = Arc::new(AtomicUsize::new(0));
@@ -247,108 +255,75 @@ impl CommonDownloader {
 
         Ok(downloaded_files)
     }
-
-    /// Calculate initial progress from already downloaded files
-    async fn calculate_initial_progress(
-        &self,
-        payloads: &[PackagePayload],
-        download_dir: &Path,
-        index: &Arc<RwLock<DownloadIndex>>,
-    ) -> Result<(u64, usize)> {
-        let mut completed_bytes = 0u64;
-        let mut completed_count = 0usize;
-        let mut debug_logged = 0usize;
-
-        for payload in payloads {
-            let cached = {
-                let idx = index.read().await;
-                idx.get_entry(&payload.file_name).await?
-            };
-            let path = download_dir.join(&payload.file_name);
-
-            // Check index for completed files (fast path - trust index with computed_hash)
-            if let Some(ref entry) = cached {
-                if entry.status == DownloadStatus::Completed {
-                    if let Some(ref computed) = entry.computed_hash {
-                        let expected = payload.sha256.as_deref();
-                        if self.options.verify_hashes {
-                            if let Some(exp) = expected {
-                                if !computed.eq_ignore_ascii_case(exp) && debug_logged < 10 {
-                                    tracing::debug!(
-                                        "Indexed hash != manifest, will re-download: file={} computed={} expected={}",
-                                        payload.file_name,
-                                        computed,
-                                        exp
-                                    );
-                                    debug_logged += 1;
-                                }
-                            }
-                        }
-
-                        let check_path = if tokio::fs::metadata(&path).await.is_ok() {
-                            &path
-                        } else {
-                            &entry.local_path
-                        };
-                        if tokio::fs::metadata(check_path).await.is_ok() {
-                            completed_bytes += payload.size;
-                            completed_count += 1;
-                            continue;
-                        } else if debug_logged < 10 {
-                            tracing::debug!(
-                                "Indexed file missing on disk, will redownload: file={} path={:?} alt_path={:?}",
-                                payload.file_name,
-                                path,
-                                entry.local_path
-                            );
-                            debug_logged += 1;
-                        }
-                    } else if entry.hash_verified || !self.options.verify_hashes {
-                        // hash_verified: trust index entry with verified hash
-                        // !verify_hashes: skip hash check, trust size match
-                        let check_path = if tokio::fs::metadata(&path).await.is_ok() {
-                            &path
-                        } else {
-                            &entry.local_path
-                        };
-                        if let Ok(meta) = tokio::fs::metadata(check_path).await {
-                            if meta.len() == payload.size {
-                                completed_bytes += payload.size;
-                                completed_count += 1;
-                                continue;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Check file on disk (may exist without index)
-            if let Ok(meta) = tokio::fs::metadata(&path).await {
-                if meta.len() == payload.size {
-                    completed_bytes += payload.size;
-                    completed_count += 1;
-                } else if debug_logged < 10 {
-                    tracing::debug!(
-                        "File exists without matching index size, will redownload: file={} path={:?} actual={} expect={}",
-                        payload.file_name,
-                        path,
-                        meta.len(),
-                        payload.size
-                    );
-                    debug_logged += 1;
-                }
-            }
-        }
-
-        if debug_logged >= 10 {
-            tracing::debug!("Logged first 10 mismatch/missing cases; more may exist");
-        }
-
-        Ok((completed_bytes, completed_count))
-    }
 }
 
-/// Download a single payload file with progress handler
+/// Resolve safe payload paths under the cache root.
+fn payload_path(download_dir: &Path, name: &str) -> Result<PathBuf> {
+    let relative = Path::new(name);
+    if name.is_empty()
+        || relative
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err(MsvcKitError::InstallPath(format!(
+            "Invalid payload file name: {name}"
+        )));
+    }
+    Ok(download_dir.join(relative))
+}
+
+fn same_source(entry: &IndexEntry, payload: &PackagePayload) -> bool {
+    entry.url == payload.url
+        && entry.size == payload.size
+        && match (&entry.sha256, &payload.sha256) {
+            (Some(left), Some(right)) => left.eq_ignore_ascii_case(right),
+            (None, None) => true,
+            _ => false,
+        }
+}
+
+/// Cached bytes are evidence only after checking current source identity and disk contents.
+async fn validated_cache_hash(
+    payload: &PackagePayload,
+    path: &Path,
+    entry: Option<&IndexEntry>,
+    verify_hashes: bool,
+) -> Result<Option<String>> {
+    if let Some(entry) = entry {
+        if entry.status != DownloadStatus::Completed || !same_source(entry, payload) {
+            return Ok(None);
+        }
+    } else if !verify_hashes || payload.sha256.is_none() {
+        // With no index identity and no expected digest, size alone cannot identify a payload.
+        return Ok(None);
+    }
+    let metadata = match tokio::fs::metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.is_file() || metadata.len() != payload.size {
+        return Ok(None);
+    }
+    if verify_hashes {
+        let actual = compute_file_hash(path).await?;
+        let expected = payload
+            .sha256
+            .as_ref()
+            .or_else(|| entry.and_then(|entry| entry.computed_hash.as_ref()));
+        return Ok(expected
+            .filter(|expected| actual.eq_ignore_ascii_case(expected))
+            .map(|_| actual));
+    }
+    // Verification disabled still requires an indexed source identity and disk size.
+    Ok(Some(
+        entry
+            .and_then(|entry| entry.computed_hash.clone())
+            .unwrap_or_default(),
+    ))
+}
+
+/// Download or reuse a payload while retaining old final bytes until replacement is validated.
 async fn download_single_payload_with_handler(
     client: &Client,
     payload: &PackagePayload,
@@ -357,176 +332,36 @@ async fn download_single_payload_with_handler(
     progress: &BoxedProgressHandler,
     verify_hashes: bool,
 ) -> Result<PayloadResult> {
-    let file_path = download_dir.join(&payload.file_name);
-
-    // Fast path: check index for completed file with computed hash
-    let cached = {
-        let idx = index.read().await;
-        idx.get_entry(&payload.file_name).await?
-    };
-
-    if let Some(ref entry) = cached {
-        if entry.status == DownloadStatus::Completed {
-            let check_path = if tokio::fs::metadata(&file_path).await.is_ok() {
-                file_path.clone()
-            } else {
-                entry.local_path.clone()
-            };
-
-            if tokio::fs::metadata(&check_path).await.is_ok() {
-                if let Some(ref computed) = entry.computed_hash {
-                    if verify_hashes {
-                        if let Some(expected) = payload.sha256.as_deref() {
-                            if !computed.eq_ignore_ascii_case(expected) {
-                                tracing::warn!(
-                                    "Cached hash mismatch for {}, re-downloading",
-                                    payload.file_name
-                                );
-                                {
-                                    let mut idx = index.write().await;
-                                    let _ = idx.remove(&payload.file_name).await;
-                                }
-                                let _ = tokio::fs::remove_file(&check_path).await;
-                            } else {
-                                tracing::debug!(
-                                    "Skipping {} (indexed hash, verified)",
-                                    payload.file_name
-                                );
-                                progress.on_file_complete(&payload.file_name, "cached");
-                                return Ok(PayloadResult {
-                                    path: check_path,
-                                    transferred: 0,
-                                    outcome: PayloadOutcome::Skipped,
-                                });
-                            }
-                        } else {
-                            tracing::debug!(
-                                "Skipping {} (indexed hash, no expected)",
-                                payload.file_name
-                            );
-                            progress.on_file_complete(&payload.file_name, "cached");
-                            return Ok(PayloadResult {
-                                path: check_path,
-                                transferred: 0,
-                                outcome: PayloadOutcome::Skipped,
-                            });
-                        }
-                    } else {
-                        tracing::debug!(
-                            "Skipping {} (indexed hash, verify off)",
-                            payload.file_name
-                        );
-                        progress.on_file_complete(&payload.file_name, "cached");
-                        return Ok(PayloadResult {
-                            path: check_path,
-                            transferred: 0,
-                            outcome: PayloadOutcome::Skipped,
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    // Check file on disk (without valid index entry)
-    if let Ok(meta) = tokio::fs::metadata(&file_path).await {
-        let existing_size = meta.len();
-
-        // File is complete (size matches)
-        // Note: size match alone is best-effort, not cryptographically strong
-        if existing_size == payload.size {
-            let computed_hash = compute_file_hash(&file_path).await?;
-
-            if verify_hashes {
-                if let Some(expected_hash) = &payload.sha256 {
-                    if !computed_hash.eq_ignore_ascii_case(expected_hash) {
-                        tracing::warn!("Hash mismatch for {}, re-downloading", payload.file_name);
-                        let _ = tokio::fs::remove_file(&file_path).await;
-                    } else {
-                        {
-                            let mut idx = index.write().await;
-                            idx.mark_completed(payload, file_path.clone(), Some(computed_hash))
-                                .await?;
-                        }
-                        tracing::debug!("Skipping {} (hash computed & matched)", payload.file_name);
-                        progress.on_file_complete(&payload.file_name, "size match");
-                        return Ok(PayloadResult {
-                            path: file_path,
-                            transferred: 0,
-                            outcome: PayloadOutcome::Skipped,
-                        });
-                    }
-                } else {
-                    {
-                        let mut idx = index.write().await;
-                        idx.mark_completed(payload, file_path.clone(), Some(computed_hash))
-                            .await?;
-                    }
-                    tracing::debug!(
-                        "Skipping {} (hash computed, no expected)",
-                        payload.file_name
-                    );
-                    progress.on_file_complete(&payload.file_name, "size match");
-                    return Ok(PayloadResult {
-                        path: file_path,
-                        transferred: 0,
-                        outcome: PayloadOutcome::Skipped,
-                    });
-                }
-            } else {
-                {
-                    let mut idx = index.write().await;
-                    idx.mark_completed(payload, file_path.clone(), Some(computed_hash))
-                        .await?;
-                }
-                tracing::debug!("Skipping {} (size matched, hash stored)", payload.file_name);
-                progress.on_file_complete(&payload.file_name, "size match");
-                return Ok(PayloadResult {
-                    path: file_path,
-                    transferred: 0,
-                    outcome: PayloadOutcome::Skipped,
-                });
-            }
-        }
-
-        // File exists but incomplete - delete and restart
-        if existing_size > 0 {
-            let _ = tokio::fs::remove_file(&file_path).await;
-            let mut idx = index.write().await;
-            let _ = idx.remove(&payload.file_name).await;
-        }
-    }
-
-    // Download the file with streaming hash computation
-    debug!("Downloading: {}", payload.file_name);
-    progress.on_file_start(&payload.file_name, payload.size);
-    let download_result =
-        download_file_with_streaming_hash(client, payload, &file_path, progress).await?;
-
-    // Use the hash computed during download (no need to re-read the file)
-    let computed_hash = download_result.computed_hash;
-
-    if verify_hashes {
-        if let Some(expected_hash) = &payload.sha256 {
-            if !computed_hash.eq_ignore_ascii_case(expected_hash) {
-                return Err(MsvcKitError::HashMismatch {
-                    file: payload.file_name.clone(),
-                    expected: expected_hash.clone(),
-                    actual: computed_hash,
-                });
-            }
-        }
-    }
-
-    // Store completed with computed hash
+    let file_path = payload_path(download_dir, &payload.file_name)?;
+    let cached = { index.read().await.get_entry(&payload.file_name).await? };
+    if let Some(hash) =
+        validated_cache_hash(payload, &file_path, cached.as_ref(), verify_hashes).await?
     {
-        let mut idx = index.write().await;
-        idx.mark_completed(payload, file_path.clone(), Some(computed_hash))
-            .await?;
+        if cached.is_none() {
+            index
+                .write()
+                .await
+                .mark_completed(payload, file_path.clone(), Some(hash))
+                .await?;
+        }
+        progress.on_progress(payload.size);
+        progress.on_file_complete(&payload.file_name, "cached");
+        return Ok(PayloadResult {
+            path: file_path,
+            transferred: 0,
+            outcome: PayloadOutcome::Skipped,
+        });
     }
-
+    progress.on_file_start(&payload.file_name, payload.size);
+    let hash =
+        download_file_with_streaming_hash(client, payload, &file_path, progress, verify_hashes)
+            .await?;
+    index
+        .write()
+        .await
+        .mark_completed(payload, file_path.clone(), Some(hash))
+        .await?;
     progress.on_file_complete(&payload.file_name, "downloaded");
-
     Ok(PayloadResult {
         path: file_path,
         transferred: payload.size,
@@ -534,120 +369,103 @@ async fn download_single_payload_with_handler(
     })
 }
 
-/// Result of streaming download with computed hash
-struct StreamingDownloadResult {
-    /// SHA256 hash computed during download
-    computed_hash: String,
-}
-
-/// Download a single file with progress handler and streaming hash computation
-/// This computes the SHA256 hash while downloading, avoiding a second file read.
+/// Stream into a private sibling file, verify, then publish atomically.
 async fn download_file_with_streaming_hash(
     client: &Client,
     payload: &PackagePayload,
     path: &Path,
     progress: &BoxedProgressHandler,
-) -> Result<StreamingDownloadResult> {
-    for attempt in 0..=dl_const::MAX_RETRIES {
+    verify_hashes: bool,
+) -> Result<String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| MsvcKitError::InstallPath("Payload has no cache directory".into()))?;
+    tokio::fs::create_dir_all(parent).await?;
+    'attempts: for attempt in 0..=dl_const::MAX_RETRIES {
         let response = match client.get(&payload.url).send().await {
-            Ok(resp) => resp,
-            Err(e) => {
+            Ok(response) => response,
+            Err(error) => {
                 if attempt < dl_const::MAX_RETRIES
-                    && (e.is_connect() || e.is_timeout() || e.is_body())
+                    && (error.is_connect() || error.is_timeout() || error.is_body())
                 {
-                    let backoff = Duration::from_secs(1 << attempt);
-                    tracing::warn!(
-                        "Retrying {} (request error: {}, attempt {}, backoff {:?})",
-                        payload.file_name,
-                        e,
-                        attempt + 1,
-                        backoff
-                    );
-                    sleep(backoff).await;
+                    sleep(Duration::from_secs(1 << attempt)).await;
                     continue;
                 }
                 return Err(MsvcKitError::DownloadNetwork {
                     file: payload.file_name.clone(),
                     url: payload.url.clone(),
-                    source: e,
+                    source: error,
                 });
             }
         };
-
         if (response.status().is_server_error()
             || response.status() == StatusCode::TOO_MANY_REQUESTS)
             && attempt < dl_const::MAX_RETRIES
         {
-            let status = response.status();
-            let backoff = Duration::from_secs(1 << attempt);
-            tracing::warn!(
-                "Retrying {} (status {}, attempt {}, backoff {:?})",
-                payload.file_name,
-                status,
-                attempt + 1,
-                backoff
-            );
-            sleep(backoff).await;
+            sleep(Duration::from_secs(1 << attempt)).await;
             continue;
         }
-
-        if !response.status().is_success() {
-            return Err(MsvcKitError::DownloadNetwork {
-                file: payload.file_name.clone(),
-                url: payload.url.clone(),
-                source: response.error_for_status().unwrap_err(),
-            });
-        }
-
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-
-        let mut file = tokio::fs::File::create(path).await?;
+        let response =
+            response
+                .error_for_status()
+                .map_err(|source| MsvcKitError::DownloadNetwork {
+                    file: payload.file_name.clone(),
+                    url: payload.url.clone(),
+                    source,
+                })?;
+        let temporary = tempfile::NamedTempFile::new_in(parent)?;
+        let mut file = tokio::fs::File::from_std(temporary.reopen()?);
         let mut hasher = Sha256::new();
+        let mut downloaded = 0u64;
         let mut stream = response.bytes_stream();
-
         while let Some(item) = stream.next().await {
-            match item {
-                Ok(chunk) => {
-                    // Write to file and update hash simultaneously
-                    file.write_all(&chunk).await?;
-                    hasher.update(&chunk);
-                    progress.on_progress(chunk.len() as u64);
-                }
-                Err(e) => {
-                    // Body streaming error - retry
-                    let _ = tokio::fs::remove_file(path).await;
-
+            let chunk = match item {
+                Ok(chunk) => chunk,
+                Err(error) => {
+                    drop(file);
+                    drop(temporary);
                     if attempt < dl_const::MAX_RETRIES {
-                        let backoff = Duration::from_secs(1 << attempt);
-                        tracing::warn!(
-                            "Retrying {} (body read error: {}, attempt {}, backoff {:?})",
-                            payload.file_name,
-                            e,
-                            attempt + 1,
-                            backoff
-                        );
-                        sleep(backoff).await;
-                        continue;
+                        sleep(Duration::from_secs(1 << attempt)).await;
+                        continue 'attempts;
                     }
-
                     return Err(MsvcKitError::DownloadNetwork {
                         file: payload.file_name.clone(),
                         url: payload.url.clone(),
-                        source: e,
+                        source: error,
+                    });
+                }
+            };
+            file.write_all(&chunk).await?;
+            hasher.update(&chunk);
+            downloaded += chunk.len() as u64;
+            progress.on_progress(chunk.len() as u64);
+        }
+        file.flush().await?;
+        file.sync_all().await?;
+        drop(file);
+        if downloaded != payload.size {
+            return Err(MsvcKitError::Other(format!(
+                "Size mismatch for {}: expected {}, received {}",
+                payload.file_name, payload.size, downloaded
+            )));
+        }
+        let computed_hash = hex::encode(hasher.finalize());
+        if verify_hashes {
+            if let Some(expected) = &payload.sha256 {
+                if !computed_hash.eq_ignore_ascii_case(expected) {
+                    return Err(MsvcKitError::HashMismatch {
+                        file: payload.file_name.clone(),
+                        expected: expected.clone(),
+                        actual: computed_hash,
                     });
                 }
             }
         }
-
-        file.flush().await?;
-
-        // Compute final hash
-        let computed_hash = hex::encode(hasher.finalize());
-        return Ok(StreamingDownloadResult { computed_hash });
+        temporary
+            .persist(path)
+            .map_err(|error| MsvcKitError::Io(error.error))?;
+        return Ok(computed_hash);
     }
-
     Err(MsvcKitError::Other(format!(
         "Download failed for {} after {} retries",
         payload.file_name,

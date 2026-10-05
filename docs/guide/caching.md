@@ -28,13 +28,9 @@ The download index is a [redb](https://github.com/cberner/redb) database that tr
 
 When downloading, files are skipped based on:
 
-1. **`cached`** - File exists in index with matching hash
-2. **`304`** - Server returns Not Modified (ETag/Last-Modified match)
-3. **`size match`** - File size matches expected (best-effort fallback)
+Payload reuse requires the expected source identity and file size. With verification enabled, msvc-kit rehashes the actual cached file; the index's previous hash is not sufficient. Downloads use private temporary files and publish only after size and hash validation. Interrupted downloads restart on retry.
 
-::: tip
-Size match is a best-effort optimization. Same size doesn't guarantee same content, but it's a reasonable heuristic for large binary packages.
-:::
+Manifest reuse validates its cached SHA256 and uses server ETag/Last-Modified conditional requests. Equal content length alone does not establish freshness. Download caches and manifests use process locks; a busy index is never renamed as corrupt.
 
 ## Manifest Cache
 

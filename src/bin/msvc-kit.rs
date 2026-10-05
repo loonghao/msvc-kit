@@ -3,18 +3,20 @@
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use msvc_kit::bundle::{generate_bundle_scripts, save_bundle_scripts, BundleLayout};
+use msvc_kit::doctor::{doctor, DoctorOptions};
 use msvc_kit::env::generate_activation_script;
 use msvc_kit::query::{QueryComponent, QueryOptions, QueryProperty};
+use msvc_kit::toolchain::{resolve_toolchain, ToolchainRequest};
+use msvc_kit::toolchain_lock::{record_installation, ToolchainLock};
 use msvc_kit::version::{list_installed_msvc, list_installed_sdk, Architecture};
 use msvc_kit::vs_channel::{parse_channel_selector, VsChannelSelection};
 use msvc_kit::{
     download_msvc, download_sdk, generate_script, get_env_vars, load_config, query_installation,
-    save_config, setup_environment, DownloadOptions, MsvcComponent, MsvcKitConfig, ScriptContext,
-    ShellType,
+    save_config, DownloadOptions, MsvcComponent, MsvcKitConfig, ScriptContext, ShellType,
 };
 
 /// Resolve the Visual Studio channel for a command.
@@ -175,6 +177,91 @@ struct Cli {
     command: Option<Commands>,
 }
 
+/// Shared selection rules for activation, inspection, diagnostics and child processes.
+#[derive(Args, Debug)]
+struct ToolchainArgs {
+    #[arg(short, long)]
+    dir: Option<PathBuf>,
+    #[arg(short, long)]
+    arch: Option<String>,
+    #[arg(long)]
+    host_arch: Option<String>,
+    #[arg(long)]
+    msvc_version: Option<String>,
+    #[arg(long)]
+    sdk_version: Option<String>,
+    /// Use exact versions and architectures recorded in a portable toolchain lock.
+    #[arg(long)]
+    lockfile: Option<PathBuf>,
+}
+
+impl ToolchainArgs {
+    fn request(&self, config: &MsvcKitConfig) -> anyhow::Result<ToolchainRequest> {
+        let install_dir = self
+            .dir
+            .clone()
+            .unwrap_or_else(|| config.install_dir.clone());
+        if let Some(path) = &self.lockfile {
+            let lock = ToolchainLock::load(path)?;
+            for (requested, selected) in [
+                (&self.msvc_version, &lock.msvc_version),
+                (&self.sdk_version, &lock.sdk_version),
+            ] {
+                if let Some(requested) = requested {
+                    if !msvc_kit::version::version_matches(selected, requested) {
+                        anyhow::bail!(
+                            "Version {requested} conflicts with locked version {selected}"
+                        );
+                    }
+                }
+            }
+            if self
+                .arch
+                .as_ref()
+                .map(|arch| arch.parse::<Architecture>())
+                .transpose()
+                .map_err(anyhow::Error::msg)?
+                .is_some_and(|arch| arch != lock.arch)
+                || self
+                    .host_arch
+                    .as_ref()
+                    .map(|arch| arch.parse::<Architecture>())
+                    .transpose()
+                    .map_err(anyhow::Error::msg)?
+                    .is_some_and(|arch| arch != lock.host_arch)
+            {
+                anyhow::bail!("Architecture conflicts with toolchain lock");
+            }
+            return Ok(lock.request(install_dir));
+        }
+        Ok(ToolchainRequest {
+            install_dir,
+            arch: self
+                .arch
+                .as_ref()
+                .map(|arch| arch.parse())
+                .transpose()
+                .map_err(anyhow::Error::msg)?
+                .unwrap_or(config.default_arch),
+            host_arch: self
+                .host_arch
+                .as_ref()
+                .map(|arch| arch.parse())
+                .transpose()
+                .map_err(anyhow::Error::msg)?
+                .unwrap_or_else(Architecture::host),
+            msvc_version: self
+                .msvc_version
+                .clone()
+                .or_else(|| config.default_msvc_version.clone()),
+            sdk_version: self
+                .sdk_version
+                .clone()
+                .or_else(|| config.default_sdk_version.clone()),
+        })
+    }
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Download MSVC and/or Windows SDK components
@@ -192,8 +279,16 @@ enum Commands {
         target: Option<PathBuf>,
 
         /// Target architecture (x64, x86, arm64)
-        #[arg(short, long, default_value = "x64")]
-        arch: String,
+        #[arg(short, long)]
+        arch: Option<String>,
+
+        /// Compiler host architecture (default: current machine)
+        #[arg(long)]
+        host_arch: Option<String>,
+
+        /// Enforce an exact toolchain lock and recorded source payload hashes.
+        #[arg(long)]
+        lockfile: Option<PathBuf>,
 
         /// Skip MSVC download
         #[arg(long)]
@@ -228,13 +323,8 @@ enum Commands {
 
     /// Setup environment variables for MSVC toolchain
     Setup {
-        /// Installation directory (default: from config)
-        #[arg(short, long)]
-        dir: Option<PathBuf>,
-
-        /// Target architecture
-        #[arg(short, long, default_value = "x64")]
-        arch: String,
+        #[command(flatten)]
+        selection: ToolchainArgs,
 
         /// Generate activation script instead of modifying environment
         #[arg(long)]
@@ -328,9 +418,8 @@ enum Commands {
 
     /// Print environment variables for shell integration
     Env {
-        /// Installation directory
-        #[arg(short, long)]
-        dir: Option<PathBuf>,
+        #[command(flatten)]
+        selection: ToolchainArgs,
 
         /// Output format (shell, json)
         #[arg(short, long, default_value = "shell")]
@@ -339,13 +428,8 @@ enum Commands {
 
     /// Query installed components for paths, environment variables, and tool locations
     Query {
-        /// Installation directory
-        #[arg(short, long)]
-        dir: Option<PathBuf>,
-
-        /// Target architecture (x64, x86, arm64)
-        #[arg(short, long, default_value = "x64")]
-        arch: String,
+        #[command(flatten)]
+        selection: ToolchainArgs,
 
         /// Component to query (all, msvc, sdk)
         #[arg(long, default_value = "all")]
@@ -355,17 +439,44 @@ enum Commands {
         #[arg(short, long, default_value = "all")]
         property: String,
 
-        /// Specific MSVC version to query (default: latest installed)
-        #[arg(long)]
-        msvc_version: Option<String>,
-
-        /// Specific SDK version to query (default: latest installed)
-        #[arg(long)]
-        sdk_version: Option<String>,
-
         /// Output format (text, json)
         #[arg(short, long, default_value = "text")]
         format: String,
+    },
+
+    /// Check required tools, headers and libraries without installing anything
+    Doctor {
+        #[command(flatten)]
+        selection: ToolchainArgs,
+        /// Compile and link a temporary Windows C++/resource probe
+        #[arg(long)]
+        compile: bool,
+        #[arg(short, long, default_value = "text", value_parser = ["text", "json"])]
+        format: String,
+    },
+
+    /// Run a command with the selected toolchain in an isolated child environment
+    Run {
+        #[command(flatten)]
+        selection: ToolchainArgs,
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<std::ffi::OsString>,
+    },
+
+    /// Record exact installed versions and available verified source provenance
+    Lock {
+        #[command(flatten)]
+        selection: ToolchainArgs,
+        #[arg(short, long, default_value = "msvc-kit.lock.json")]
+        output: PathBuf,
+    },
+
+    /// Write a CMake toolchain file for Ninja builds (use inside msvc-kit run)
+    Cmake {
+        #[command(flatten)]
+        selection: ToolchainArgs,
+        #[arg(short, long)]
+        output: PathBuf,
     },
 
     /// Install a downloaded MSVC toolchain into Visual Studio (UBT discovery)
@@ -480,6 +591,8 @@ async fn main() -> anyhow::Result<()> {
             sdk_version,
             target,
             arch,
+            host_arch,
+            lockfile,
             no_msvc,
             no_sdk,
             no_verify,
@@ -489,8 +602,47 @@ async fn main() -> anyhow::Result<()> {
             vs_channel,
         } => {
             let target_dir = target.unwrap_or_else(|| config.install_dir.clone());
-            let arch: Architecture = arch.parse().map_err(|e: String| anyhow::anyhow!(e))?;
+            let locked = lockfile.as_deref().map(ToolchainLock::load).transpose()?;
+            let selection = ToolchainArgs {
+                dir: Some(target_dir.clone()),
+                arch,
+                host_arch,
+                msvc_version,
+                sdk_version,
+                lockfile,
+            };
+            let request = selection.request(&config)?;
+            let arch = request.arch;
 
+            let _installation_lock = if no_msvc && no_sdk {
+                None
+            } else {
+                Some(msvc_kit::toolchain_lock::lock_installation(&target_dir)?)
+            };
+
+            let include_components = if include_components.is_empty() {
+                locked
+                    .as_ref()
+                    .and_then(|lock| {
+                        lock.receipts
+                            .iter()
+                            .find(|receipt| receipt.component == "msvc")
+                    })
+                    .map(|receipt| receipt.components.clone())
+                    .unwrap_or_default()
+            } else {
+                include_components
+            };
+            let receipt_channel = locked.as_ref().and_then(|lock| {
+                lock.receipts
+                    .iter()
+                    .find_map(|receipt| receipt.vs_channel.clone())
+            });
+            if let (Some(requested), Some(recorded)) = (&vs_channel, &receipt_channel) {
+                if validate_vs_channel(requested)? != validate_vs_channel(recorded)? {
+                    anyhow::bail!("Visual Studio channel conflicts with toolchain lock");
+                }
+            }
             // Parse component strings into MsvcComponent enum values
             let components = include_components
                 .iter()
@@ -502,17 +654,25 @@ async fn main() -> anyhow::Result<()> {
                 .collect();
 
             let options = DownloadOptions {
-                msvc_version,
-                sdk_version,
+                // VS package identifiers use the toolset family; the lock is checked
+                // against the full extracted version and source hashes below.
+                msvc_version: request.msvc_version.clone().map(|version| {
+                    if version.split('.').count() >= 3 {
+                        version.split('.').take(2).collect::<Vec<_>>().join(".")
+                    } else {
+                        version
+                    }
+                }),
+                sdk_version: request.sdk_version.clone(),
                 target_dir: target_dir.clone(),
                 arch,
-                host_arch: Some(Architecture::host()),
+                host_arch: Some(request.host_arch),
                 verify_hashes: !no_verify,
                 parallel_downloads: parallel_downloads.unwrap_or(config.parallel_downloads),
                 http_client: None,
                 progress_handler: None,
                 cache_manager: None,
-                vs_channel: resolve_vs_channel(vs_channel, &config)?,
+                vs_channel: resolve_vs_channel(vs_channel.or(receipt_channel), &config)?,
                 manifest_cache_dir: Some(config.manifest_cache_dir()),
                 dry_run: false,
                 include_components: components,
@@ -531,8 +691,36 @@ async fn main() -> anyhow::Result<()> {
             if !no_msvc {
                 println!("Downloading MSVC compiler...");
                 let mut msvc_info = download_msvc(&options).await?;
+                if let Some(lock) = &locked {
+                    lock.verify_download(&msvc_info).await?;
+                }
                 println!("Extracting MSVC packages...");
                 msvc_kit::extract_and_finalize_msvc(&mut msvc_info).await?;
+                if request.msvc_version.as_ref().is_some_and(|version| {
+                    version.split('.').count() >= 3 && *version != msvc_info.version
+                }) {
+                    anyhow::bail!(
+                        "Extracted MSVC {} does not match requested exact version",
+                        msvc_info.version
+                    );
+                }
+                if locked
+                    .as_ref()
+                    .is_some_and(|lock| lock.msvc_version != msvc_info.version)
+                {
+                    anyhow::bail!(
+                        "Extracted MSVC {} does not match locked version",
+                        msvc_info.version
+                    );
+                }
+                record_installation(
+                    &msvc_info,
+                    &target_dir,
+                    request.host_arch,
+                    options.vs_channel.clone(),
+                    include_components.clone(),
+                )
+                .await?;
                 println!(
                     "MSVC {} installed to {}",
                     msvc_info.version,
@@ -543,8 +731,19 @@ async fn main() -> anyhow::Result<()> {
             if !no_sdk {
                 println!("\nDownloading Windows SDK...");
                 let sdk_info = download_sdk(&options).await?;
+                if let Some(lock) = &locked {
+                    lock.verify_download(&sdk_info).await?;
+                }
                 println!("Extracting SDK packages...");
                 msvc_kit::extract_and_finalize_sdk(&sdk_info).await?;
+                record_installation(
+                    &sdk_info,
+                    &target_dir,
+                    request.host_arch,
+                    options.vs_channel.clone(),
+                    vec![],
+                )
+                .await?;
                 println!(
                     "Windows SDK {} installed to {}",
                     sdk_info.version,
@@ -561,45 +760,16 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Setup {
-            dir,
-            arch,
+            selection,
             script,
             shell,
             portable_root,
             persistent,
         } => {
-            let install_dir = dir.unwrap_or_else(|| config.install_dir.clone());
-            let arch: Architecture = arch.parse().map_err(|e: String| anyhow::anyhow!(e))?;
-
-            // Find installed versions
-            let msvc_versions = list_installed_msvc(&install_dir);
-            let sdk_versions = list_installed_sdk(&install_dir);
-
-            if msvc_versions.is_empty() {
-                anyhow::bail!("No MSVC installation found. Run 'msvc-kit download' first.");
-            }
-
-            let msvc_version = &msvc_versions[0];
-            let sdk_version = sdk_versions.first();
-
-            // Create mock install info for environment setup
-            let msvc_info = msvc_kit::installer::InstallInfo {
-                component_type: "msvc".to_string(),
-                version: msvc_version.version.clone(),
-                install_path: msvc_version.install_path.clone().unwrap(),
-                downloaded_files: vec![],
-                arch,
-            };
-
-            let sdk_info = sdk_version.map(|v| msvc_kit::installer::InstallInfo {
-                component_type: "sdk".to_string(),
-                version: v.version.clone(),
-                install_path: v.install_path.clone().unwrap(),
-                downloaded_files: vec![],
-                arch,
-            });
-
-            let env = setup_environment(&msvc_info, sdk_info.as_ref())?;
+            let request = selection.request(&config)?;
+            let install_dir = request.install_dir.clone();
+            let arch = request.arch;
+            let env = resolve_toolchain(&request)?;
 
             if script {
                 let shell_type = match shell.to_lowercase().as_str() {
@@ -618,7 +788,7 @@ async fn main() -> anyhow::Result<()> {
                         &env.vc_tools_version,
                         &env.windows_sdk_version,
                         arch,
-                        arch,
+                        request.host_arch,
                     ),
                     Some(_) => {
                         anyhow::bail!("--portable-root requires a non-empty path");
@@ -628,7 +798,7 @@ async fn main() -> anyhow::Result<()> {
                         &env.vc_tools_version,
                         &env.windows_sdk_version,
                         arch,
-                        arch,
+                        request.host_arch,
                     ),
                 };
 
@@ -1194,34 +1364,31 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Query {
-            dir,
-            arch,
+            selection,
             component,
             property,
-            msvc_version,
-            sdk_version,
             format,
         } => {
-            let install_dir = dir.unwrap_or_else(|| config.install_dir.clone());
-            let arch: Architecture = arch.parse().map_err(|e: String| anyhow::anyhow!(e))?;
+            let request = selection.request(&config)?;
             let component: QueryComponent =
                 component.parse().map_err(|e: String| anyhow::anyhow!(e))?;
             let property: QueryProperty =
                 property.parse().map_err(|e: String| anyhow::anyhow!(e))?;
 
             let options = QueryOptions::builder()
-                .install_dir(&install_dir)
-                .arch(arch)
+                .install_dir(&request.install_dir)
+                .arch(request.arch)
+                .host_arch(request.host_arch)
                 .component(component)
                 .property(property);
 
-            let options = if let Some(ref ver) = msvc_version {
+            let options = if let Some(ref ver) = request.msvc_version {
                 options.msvc_version(ver)
             } else {
                 options
             };
 
-            let options = if let Some(ref ver) = sdk_version {
+            let options = if let Some(ref ver) = request.sdk_version {
                 options.sdk_version(ver)
             } else {
                 options
@@ -1344,35 +1511,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Env { dir, format } => {
-            let install_dir = dir.unwrap_or_else(|| config.install_dir.clone());
-
-            let msvc_versions = list_installed_msvc(&install_dir);
-            if msvc_versions.is_empty() {
-                anyhow::bail!("No MSVC installation found. Run 'msvc-kit download' first.");
-            }
-
-            let msvc_version = &msvc_versions[0];
-            let sdk_versions = list_installed_sdk(&install_dir);
-            let sdk_version = sdk_versions.first();
-
-            let msvc_info = msvc_kit::installer::InstallInfo {
-                component_type: "msvc".to_string(),
-                version: msvc_version.version.clone(),
-                install_path: msvc_version.install_path.clone().unwrap(),
-                downloaded_files: vec![],
-                arch: config.default_arch,
-            };
-
-            let sdk_info = sdk_version.map(|v| msvc_kit::installer::InstallInfo {
-                component_type: "sdk".to_string(),
-                version: v.version.clone(),
-                install_path: v.install_path.clone().unwrap(),
-                downloaded_files: vec![],
-                arch: config.default_arch,
-            });
-
-            let env = setup_environment(&msvc_info, sdk_info.as_ref())?;
+        Commands::Env { selection, format } => {
+            let env = resolve_toolchain(&selection.request(&config)?)?;
             let vars = get_env_vars(&env);
 
             match format.as_str() {
@@ -1385,6 +1525,60 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             }
+        }
+
+        Commands::Doctor {
+            selection,
+            compile,
+            format,
+        } => {
+            let report = doctor(&DoctorOptions {
+                toolchain: selection.request(&config)?,
+                compile_probe: compile,
+            });
+            if format == "json" {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", report.format_summary());
+            }
+            if !report.is_success() {
+                std::process::exit(10);
+            }
+        }
+
+        Commands::Run { selection, command } => {
+            let env = resolve_toolchain(&selection.request(&config)?)?;
+            let status = msvc_kit::execution::run_in_toolchain(&env, &command[0], &command[1..])?;
+            std::process::exit(status.code().unwrap_or(1));
+        }
+
+        Commands::Lock { selection, output } => {
+            let request = selection.request(&config)?;
+            let report = doctor(&DoctorOptions {
+                toolchain: request.clone(),
+                compile_probe: false,
+            });
+            if !report.is_success() {
+                anyhow::bail!(
+                    "Cannot lock an incomplete toolchain:\n{}",
+                    report.format_summary()
+                );
+            }
+            let lock = ToolchainLock::capture(&request)?;
+            lock.save(&output)?;
+            println!(
+                "Locked MSVC {} + SDK {} ({}) to {}",
+                lock.msvc_version,
+                lock.sdk_version,
+                lock.fingerprint,
+                output.display()
+            );
+        }
+
+        Commands::Cmake { selection, output } => {
+            let env = resolve_toolchain(&selection.request(&config)?)?;
+            msvc_kit::execution::write_cmake_toolchain(&env, &output)?;
+            println!("CMake toolchain written to {}", output.display());
         }
 
         #[cfg(feature = "self-update")]

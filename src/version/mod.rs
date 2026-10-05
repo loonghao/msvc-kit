@@ -5,6 +5,8 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
+use crate::error::{MsvcKitError, Result};
+
 /// Target architecture for MSVC tools
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -34,7 +36,7 @@ impl fmt::Display for Architecture {
 impl std::str::FromStr for Architecture {
     type Err = String;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "x64" | "amd64" | "x86_64" => Ok(Architecture::X64),
             "x86" | "i686" | "i386" => Ok(Architecture::X86),
@@ -84,6 +86,72 @@ impl Architecture {
             Architecture::Arm => "arm",
         }
     }
+
+    /// Rust target used by Cargo and cc-rs environment overrides.
+    pub fn rust_target_triple(&self) -> &'static str {
+        match self {
+            Architecture::X64 => "x86_64-pc-windows-msvc",
+            Architecture::X86 => "i686-pc-windows-msvc",
+            Architecture::Arm64 => "aarch64-pc-windows-msvc",
+            Architecture::Arm => "thumbv7a-pc-windows-msvc",
+        }
+    }
+}
+
+/// Match a full version or dotted prefix, without matching neighboring versions.
+/// SDK build-number shorthand is retained for compatibility (e.g. `26100`).
+pub fn version_matches(version: &str, requested: &str) -> bool {
+    if requested.is_empty() {
+        return false;
+    }
+    version == requested
+        || version
+            .strip_prefix(requested)
+            .is_some_and(|suffix| suffix.starts_with('.'))
+        || (version.starts_with("10.0.")
+            && !requested.contains('.')
+            && version.split('.').nth(2) == Some(requested))
+}
+
+/// Compare dotted versions numerically, then deterministically by spelling.
+pub fn compare_versions(left: &str, right: &str) -> std::cmp::Ordering {
+    let numbers = |version: &str| {
+        version
+            .split('.')
+            .map(|part| part.parse::<u64>().unwrap_or_default())
+            .collect::<Vec<_>>()
+    };
+    numbers(left)
+        .cmp(&numbers(right))
+        .then_with(|| left.cmp(right))
+}
+
+/// Select an installed version. An explicit selector never falls back to latest.
+pub fn select_installed_version<'a, T: VersionType>(
+    versions: &'a [Version<T>],
+    requested: Option<&str>,
+) -> Result<Option<&'a Version<T>>> {
+    if let Some(request) = requested {
+        if let Some(exact) = versions.iter().find(|version| version.version == request) {
+            return Ok(Some(exact));
+        }
+    }
+    let selected = versions
+        .iter()
+        .filter(|version| {
+            requested.is_none_or(|request| version_matches(&version.version, request))
+        })
+        .max_by(|left, right| compare_versions(&left.version, &right.version));
+    if selected.is_none() {
+        if let Some(request) = requested {
+            return Err(MsvcKitError::VersionNotFound(format!(
+                "{} version '{}' is not installed",
+                T::component_name(),
+                request
+            )));
+        }
+    }
+    Ok(selected)
 }
 
 /// Marker trait for version types
@@ -225,7 +293,7 @@ pub fn is_msvc_installed(install_dir: &Path, version: &str) -> bool {
         for entry in entries.flatten() {
             if entry.path().is_dir() {
                 if let Some(name) = entry.file_name().to_str() {
-                    if name.starts_with(version) {
+                    if version_matches(name, version) {
                         return true;
                     }
                 }
@@ -254,7 +322,7 @@ pub fn is_sdk_installed(install_dir: &Path, version: &str) -> bool {
         for entry in entries.flatten() {
             if entry.path().is_dir() {
                 if let Some(name) = entry.file_name().to_str() {
-                    if name.contains(version) {
+                    if version_matches(name, version) {
                         return true;
                     }
                 }
@@ -288,7 +356,7 @@ pub fn list_installed_msvc(install_dir: &Path) -> Vec<MsvcVersion> {
     }
 
     // Sort by version descending
-    versions.sort_by(|a, b| b.version.cmp(&a.version));
+    versions.sort_by(|a, b| compare_versions(&b.version, &a.version));
 
     // Mark the first one as latest
     if let Some(first) = versions.first_mut() {
@@ -323,7 +391,7 @@ pub fn list_installed_sdk(install_dir: &Path) -> Vec<SdkVersion> {
     }
 
     // Sort by version descending
-    versions.sort_by(|a, b| b.version.cmp(&a.version));
+    versions.sort_by(|a, b| compare_versions(&b.version, &a.version));
 
     // Mark the first one as latest
     if let Some(first) = versions.first_mut() {

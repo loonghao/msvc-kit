@@ -220,6 +220,7 @@ struct CmdScriptTemplate<'a> {
     sdk_version: &'a str,
     arch: String,
     host_arch: String,
+    host_name: String,
     target_arch: String,
 }
 
@@ -231,6 +232,7 @@ struct PowerShellScriptTemplate<'a> {
     sdk_version: &'a str,
     arch: String,
     host_arch: String,
+    host_name: String,
     target_arch: String,
 }
 
@@ -242,6 +244,7 @@ struct BashScriptTemplate<'a> {
     sdk_version: &'a str,
     arch: String,
     host_arch: String,
+    host_name: String,
     target_arch: String,
 }
 
@@ -371,6 +374,7 @@ fn render_cmd(ctx: &ScriptContext) -> Result<String> {
         sdk_version: &ctx.sdk_version,
         arch: ctx.arch.to_string(),
         host_arch: ctx.host_arch_dir().to_string(),
+        host_name: ctx.host_arch.to_string(),
         target_arch: ctx.target_arch_dir().to_string(),
     };
 
@@ -414,6 +418,7 @@ fn render_powershell(ctx: &ScriptContext) -> Result<String> {
         sdk_version: &ctx.sdk_version,
         arch: ctx.arch.to_string(),
         host_arch: ctx.host_arch_dir().to_string(),
+        host_name: ctx.host_arch.to_string(),
         target_arch: ctx.target_arch_dir().to_string(),
     };
 
@@ -455,6 +460,7 @@ fn render_bash(ctx: &ScriptContext) -> Result<String> {
         sdk_version: &ctx.sdk_version,
         arch: ctx.arch.to_string(),
         host_arch: ctx.host_arch_dir().to_string(),
+        host_name: ctx.host_arch.to_string(),
         target_arch: ctx.target_arch_dir().to_string(),
     };
 

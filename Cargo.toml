@@ -70,16 +70,13 @@ anyhow = "1.0.101"
 directories = "6.0"
 async-trait = "0.1.89"
 
-# Windows registry (Windows only)
-[target.'cfg(windows)'.dependencies]
-winreg = "0.56"
-
 # Async utilities
 futures = "0.3"
 
 # SHA256 verification
 sha2 = "0.11"
 hex = "0.4"
+tempfile = "3.25"
 
 # Self-update via axoupdater (optional, compatible with cargo-dist releases)
 axoupdater = { version = "0.10", default-features = false, features = ["github_releases"], optional = true }
@@ -91,9 +88,12 @@ bincode = { version = "2.0.1", features = ["serde"] }
 # Template engine
 askama = "0.16.0"
 
+# Windows registry (Windows only)
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+
 [dev-dependencies]
 rstest = "0.27"
-tempfile = "3.25"
 mockito = "1.7"
 
 [profile.release]

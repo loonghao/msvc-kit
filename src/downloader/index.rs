@@ -76,7 +76,7 @@ impl DownloadIndex {
                         tracing::info!("Index DB opened: {:?}", db_path_clone);
                         Ok(db)
                     }
-                    Err(e) => {
+                    Err(e @ redb::DatabaseError::Storage(redb::StorageError::Corrupted(_))) => {
                         tracing::warn!(
                             "Index DB open failed, backing up and recreating: {:?}, err={}",
                             db_path_clone,
@@ -86,12 +86,18 @@ impl DownloadIndex {
                         // If corrupted, back it up and recreate
                         let mut backup = db_path_clone.clone();
                         backup.set_extension("db.bak");
+                        let mut suffix = 1usize;
+                        while backup.exists() {
+                            backup.set_extension(format!("db.bak{}", suffix));
+                            suffix += 1;
+                        }
                         std::fs::rename(&db_path_clone, &backup)
                             .map_err(|ioe| MsvcKitError::Database(ioe.to_string()))?;
                         builder
                             .create(db_path_str.as_str())
                             .map_err(|db_err| MsvcKitError::Database(db_err.to_string()))
                     }
+                    Err(error) => Err(MsvcKitError::Database(error.to_string())),
                 }
             } else {
                 tracing::info!("Index DB creating: {:?}", db_path_clone);
@@ -106,7 +112,7 @@ impl DownloadIndex {
         // Ensure table exists
         let db_arc = Arc::new(db);
         let db_clone = db_arc.clone();
-        let _ = task::spawn_blocking(move || -> Result<()> {
+        task::spawn_blocking(move || -> Result<()> {
             let tx = db_clone
                 .begin_write()
                 .map_err(|e| MsvcKitError::Database(e.to_string()))?;
@@ -120,11 +126,11 @@ impl DownloadIndex {
             Ok(())
         })
         .await
-        .map_err(|je| MsvcKitError::Database(je.to_string()))?;
+        .map_err(|je| MsvcKitError::Database(je.to_string()))??;
 
         // Debug: count existing entries
         let db_clone = db_arc.clone();
-        let _ = task::spawn_blocking(move || -> Result<()> {
+        task::spawn_blocking(move || -> Result<()> {
             let tx = db_clone
                 .begin_read()
                 .map_err(|e| MsvcKitError::Database(e.to_string()))?;
@@ -162,7 +168,7 @@ impl DownloadIndex {
             Ok(())
         })
         .await
-        .map_err(|je| MsvcKitError::Database(je.to_string()))?;
+        .map_err(|je| MsvcKitError::Database(je.to_string()))??;
 
         Ok(Self {
             db: db_arc,
@@ -274,22 +280,27 @@ impl DownloadIndex {
         local_path: PathBuf,
         computed_hash: Option<String>,
     ) -> Result<()> {
-        if self
-            .is_entry_unchanged(
-                &payload.file_name,
-                DownloadStatus::Completed,
-                payload.size,
-                &computed_hash,
-                &local_path,
-            )
+        let identity_matches = self
+            .get_entry(&payload.file_name)
             .await?
+            .is_some_and(|entry| entry.url == payload.url && entry.sha256 == payload.sha256);
+        if identity_matches
+            && self
+                .is_entry_unchanged(
+                    &payload.file_name,
+                    DownloadStatus::Completed,
+                    payload.size,
+                    &computed_hash,
+                    &local_path,
+                )
+                .await?
         {
             return Ok(());
         }
 
         let hash_verified = match (&computed_hash, &payload.sha256) {
             (Some(computed), Some(expected)) => computed.eq_ignore_ascii_case(expected),
-            (Some(_), None) => true,
+            (Some(_), None) => false,
             _ => false,
         };
 

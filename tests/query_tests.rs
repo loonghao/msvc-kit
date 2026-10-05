@@ -259,6 +259,8 @@ fn create_test_result() -> QueryResult {
     QueryResult {
         install_dir: PathBuf::from("C:/msvc-kit"),
         arch: "x64".to_string(),
+        host_arch: "x64".to_string(),
+        fingerprint: String::new(),
         msvc: Some(ComponentInfo {
             component_type: "msvc".to_string(),
             version: "14.44.34823".to_string(),
@@ -398,6 +400,8 @@ fn test_query_result_no_msvc() {
     let result = QueryResult {
         install_dir: PathBuf::from("C:/test"),
         arch: "x64".to_string(),
+        host_arch: "x64".to_string(),
+        fingerprint: String::new(),
         msvc: None,
         sdk: Some(ComponentInfo {
             component_type: "sdk".to_string(),
@@ -422,6 +426,8 @@ fn test_query_result_no_sdk() {
     let result = QueryResult {
         install_dir: PathBuf::from("C:/test"),
         arch: "x64".to_string(),
+        host_arch: "x64".to_string(),
+        fingerprint: String::new(),
         msvc: Some(ComponentInfo {
             component_type: "msvc".to_string(),
             version: "14.44.34823".to_string(),
@@ -728,6 +734,8 @@ fn test_query_result_json_skip_serializing_none() {
     let result = QueryResult {
         install_dir: PathBuf::from("C:/test"),
         arch: "x64".to_string(),
+        host_arch: "x64".to_string(),
+        fingerprint: String::new(),
         msvc: None,
         sdk: None,
         env_vars: HashMap::new(),

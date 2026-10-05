@@ -7,6 +7,7 @@
 mod setup;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -59,6 +60,21 @@ pub struct MsvcEnvironment {
     pub host_arch: Architecture,
 }
 
+/// Translate Windows verbatim paths to the ordinary absolute spelling accepted
+/// by MSVC's INCLUDE/LIB parser and downstream build tools.
+pub(crate) fn compiler_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    if let Some(text) = path.to_str() {
+        if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{}", unc));
+        }
+        if let Some(drive) = text.strip_prefix(r"\\?\") {
+            return PathBuf::from(drive);
+        }
+    }
+    path.to_path_buf()
+}
+
 impl MsvcEnvironment {
     /// Create a new MSVC environment from install info
     pub fn from_install_info(
@@ -66,27 +82,23 @@ impl MsvcEnvironment {
         sdk_info: Option<&InstallInfo>,
         host_arch: Architecture,
     ) -> Result<Self> {
-        let base_dir = msvc_info
-            .install_path
+        let msvc_path = compiler_path(&msvc_info.install_path);
+        let base_dir = msvc_path
             .parent()
             .and_then(|p| p.parent())
             .and_then(|p| p.parent())
             .and_then(|p| p.parent())
             .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| msvc_info.install_path.clone());
+            .unwrap_or_else(|| msvc_path.clone());
 
         let vc_install_dir = base_dir.join("VC");
-        let vc_tools_install_dir = msvc_info.install_path.clone();
+        let vc_tools_install_dir = msvc_path;
         let vc_tools_version = msvc_info.version.clone();
 
         let (windows_sdk_dir, windows_sdk_version) = if let Some(sdk) = sdk_info {
-            (sdk.install_path.clone(), sdk.version.clone())
+            (compiler_path(&sdk.install_path), sdk.version.clone())
         } else {
-            // Default SDK paths
-            (
-                base_dir.join("Windows Kits").join("10"),
-                "10.0.22621.0".to_string(),
-            )
+            (base_dir.join("Windows Kits").join("10"), String::new())
         };
 
         let arch = msvc_info.arch;
@@ -131,6 +143,9 @@ impl MsvcEnvironment {
 
     /// Build include paths
     fn build_include_paths(vc_tools_dir: &Path, sdk_dir: &Path, sdk_version: &str) -> Vec<PathBuf> {
+        if sdk_version.is_empty() {
+            return vec![vc_tools_dir.join("include")];
+        }
         vec![
             // MSVC includes
             vc_tools_dir.join("include"),
@@ -151,6 +166,9 @@ impl MsvcEnvironment {
         arch: Architecture,
     ) -> Vec<PathBuf> {
         let arch_str = arch.to_string();
+        if sdk_version.is_empty() {
+            return vec![vc_tools_dir.join("lib").join(&arch_str)];
+        }
         vec![
             // MSVC libs
             vc_tools_dir.join("lib").join(&arch_str),
@@ -179,20 +197,25 @@ impl MsvcEnvironment {
         let host_dir = host_arch.msvc_host_dir();
         let target_dir = target_arch.msvc_target_dir();
 
-        vec![
+        let mut paths = vec![
             // MSVC binaries
             vc_tools_dir.join("bin").join(host_dir).join(target_dir),
-            // Windows SDK binaries
-            sdk_dir
-                .join("bin")
-                .join(sdk_version)
-                .join(target_arch.to_string()),
-        ]
+        ];
+        if !sdk_version.is_empty() {
+            // SDK executables run on the host; their libraries target the output architecture.
+            paths.push(
+                sdk_dir
+                    .join("bin")
+                    .join(sdk_version)
+                    .join(host_arch.to_string()),
+            );
+        }
+        paths
     }
 
     /// Check if cl.exe is available in the configured paths
     pub fn has_cl_exe(&self) -> bool {
-        self.bin_paths.iter().any(|p| p.join("cl.exe").exists())
+        self.cl_exe_path().is_some()
     }
 
     /// Get the path to cl.exe
@@ -200,7 +223,7 @@ impl MsvcEnvironment {
         self.bin_paths
             .iter()
             .map(|p| p.join("cl.exe"))
-            .find(|p| p.exists())
+            .find(|p| p.is_file())
     }
 
     /// Get the path to link.exe
@@ -208,7 +231,7 @@ impl MsvcEnvironment {
         self.bin_paths
             .iter()
             .map(|p| p.join("link.exe"))
-            .find(|p| p.exists())
+            .find(|p| p.is_file())
     }
 
     /// Get the path to lib.exe (static library manager)
@@ -216,7 +239,7 @@ impl MsvcEnvironment {
         self.bin_paths
             .iter()
             .map(|p| p.join("lib.exe"))
-            .find(|p| p.exists())
+            .find(|p| p.is_file())
     }
 
     /// Get the path to ml64.exe (MASM assembler)
@@ -224,7 +247,7 @@ impl MsvcEnvironment {
         self.bin_paths
             .iter()
             .map(|p| p.join("ml64.exe"))
-            .find(|p| p.exists())
+            .find(|p| p.is_file())
     }
 
     /// Get the path to nmake.exe
@@ -232,7 +255,7 @@ impl MsvcEnvironment {
         self.bin_paths
             .iter()
             .map(|p| p.join("nmake.exe"))
-            .find(|p| p.exists())
+            .find(|p| p.is_file())
     }
 
     /// Get the path to rc.exe (resource compiler)
@@ -240,7 +263,26 @@ impl MsvcEnvironment {
         self.bin_paths
             .iter()
             .map(|p| p.join("rc.exe"))
-            .find(|p| p.exists())
+            .find(|p| p.is_file())
+    }
+
+    /// Get the path to the Windows manifest tool.
+    pub fn mt_exe_path(&self) -> Option<PathBuf> {
+        self.bin_paths
+            .iter()
+            .map(|p| p.join("mt.exe"))
+            .find(|p| p.is_file())
+    }
+
+    /// Stable toolchain identity independent of its installation directory.
+    /// This identifies selected versions and architectures, not file integrity.
+    pub fn fingerprint(&self) -> String {
+        toolchain_fingerprint(
+            Some(&self.vc_tools_version),
+            (!self.windows_sdk_version.is_empty()).then_some(self.windows_sdk_version.as_str()),
+            self.host_arch,
+            self.arch,
+        )
     }
 
     /// Get all tool paths as a struct for easy access
@@ -252,6 +294,7 @@ impl MsvcEnvironment {
             ml64: self.ml64_exe_path(),
             nmake: self.nmake_exe_path(),
             rc: self.rc_exe_path(),
+            mt: self.mt_exe_path(),
         }
     }
 
@@ -295,6 +338,7 @@ impl MsvcEnvironment {
             "bin_paths": self.bin_paths,
             "arch": self.arch.to_string(),
             "host_arch": self.host_arch.to_string(),
+            "fingerprint": self.fingerprint(),
             "tools": {
                 "cl": self.cl_exe_path(),
                 "link": self.link_exe_path(),
@@ -302,6 +346,7 @@ impl MsvcEnvironment {
                 "ml64": self.ml64_exe_path(),
                 "nmake": self.nmake_exe_path(),
                 "rc": self.rc_exe_path(),
+                "mt": self.mt_exe_path(),
             }
         })
     }
@@ -322,6 +367,86 @@ pub struct ToolPaths {
     pub nmake: Option<PathBuf>,
     /// Path to rc.exe (resource compiler)
     pub rc: Option<PathBuf>,
+    /// Path to mt.exe (manifest tool)
+    pub mt: Option<PathBuf>,
+}
+
+/// Hash selected toolchain metadata, including host and target independently.
+pub fn toolchain_fingerprint(
+    msvc: Option<&str>,
+    sdk: Option<&str>,
+    host: Architecture,
+    target: Architecture,
+) -> String {
+    let identity = format!(
+        "msvc-kit.toolchain.v1\nmsvc={}\nsdk={}\nhost={}\ntarget={}\n",
+        msvc.unwrap_or_default(),
+        sdk.unwrap_or_default(),
+        host,
+        target
+    );
+    hex::encode(Sha256::digest(identity.as_bytes()))
+}
+
+/// Export an SDK-only environment without implying a compiler installation.
+pub fn get_sdk_env_vars(
+    sdk_dir: &Path,
+    version: &str,
+    arch: Architecture,
+    host_arch: Architecture,
+) -> HashMap<String, String> {
+    let mut vars = HashMap::new();
+    let root = sdk_dir.display().to_string();
+    let bin_root = sdk_dir.join("bin").join(version);
+    vars.insert("WindowsSdkDir".into(), root.clone());
+    vars.insert("WindowsSDKVersion".into(), format!("{}\\", version));
+    vars.insert("WindowsSDKLibVersion".into(), format!("{}\\", version));
+    vars.insert("WindowsSdkBinPath".into(), bin_root.display().to_string());
+    vars.insert(
+        "WindowsSdkVerBinPath".into(),
+        bin_root.display().to_string(),
+    );
+    vars.insert("UniversalCRTSdkDir".into(), root);
+    vars.insert("UCRTVersion".into(), version.into());
+    vars.insert(
+        "INCLUDE".into(),
+        ["ucrt", "shared", "um", "winrt", "cppwinrt"]
+            .iter()
+            .map(|dir| {
+                sdk_dir
+                    .join("Include")
+                    .join(version)
+                    .join(dir)
+                    .display()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join(";"),
+    );
+    vars.insert(
+        "LIB".into(),
+        ["ucrt", "um"]
+            .iter()
+            .map(|dir| {
+                sdk_dir
+                    .join("Lib")
+                    .join(version)
+                    .join(dir)
+                    .join(arch.to_string())
+                    .display()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join(";"),
+    );
+    vars.insert(
+        "PATH".into(),
+        bin_root.join(host_arch.to_string()).display().to_string(),
+    );
+    vars.insert("Platform".into(), arch.to_string());
+    vars.insert("VSCMD_ARG_HOST_ARCH".into(), host_arch.to_string());
+    vars.insert("VSCMD_ARG_TGT_ARCH".into(), arch.to_string());
+    vars
 }
 
 /// Get environment variables as a HashMap
@@ -342,23 +467,15 @@ pub fn get_env_vars(env: &MsvcEnvironment) -> HashMap<String, String> {
     );
     vars.insert("VCToolsVersion".to_string(), env.vc_tools_version.clone());
 
-    // Windows SDK environment variables
-    vars.insert(
-        "WindowsSdkDir".to_string(),
-        env.windows_sdk_dir.display().to_string(),
-    );
-    vars.insert(
-        "WindowsSDKVersion".to_string(),
-        format!("{}\\", env.windows_sdk_version),
-    );
-    vars.insert(
-        "WindowsSdkBinPath".to_string(),
-        env.windows_sdk_dir
-            .join("bin")
-            .join(&env.windows_sdk_version)
-            .display()
-            .to_string(),
-    );
+    // SDK metadata is exported only for a resolved, installed SDK.
+    if !env.windows_sdk_version.is_empty() {
+        vars.extend(get_sdk_env_vars(
+            &env.windows_sdk_dir,
+            &env.windows_sdk_version,
+            env.arch,
+            env.host_arch,
+        ));
+    }
 
     // INCLUDE path
     let include = env
@@ -391,6 +508,32 @@ pub fn get_env_vars(env: &MsvcEnvironment) -> HashMap<String, String> {
     vars.insert("Platform".to_string(), env.arch.to_string());
     vars.insert("VSCMD_ARG_HOST_ARCH".to_string(), env.host_arch.to_string());
     vars.insert("VSCMD_ARG_TGT_ARCH".to_string(), env.arch.to_string());
+
+    let target = env.arch.rust_target_triple();
+    if let Some(compiler) = env.cl_exe_path() {
+        for key in ["CC", "CXX"] {
+            let compiler = compiler.display().to_string();
+            vars.insert(key.to_string(), compiler.clone());
+            vars.insert(format!("{}_{}", key, target), compiler.clone());
+            vars.insert(format!("{}_{}", key, target.replace('-', "_")), compiler);
+        }
+    }
+    if let Some(linker) = env.link_exe_path() {
+        vars.insert(
+            format!(
+                "CARGO_TARGET_{}_LINKER",
+                target.replace('-', "_").to_uppercase()
+            ),
+            linker.display().to_string(),
+        );
+    }
+    if let Some(librarian) = env.lib_exe_path() {
+        vars.insert(format!("AR_{}", target), librarian.display().to_string());
+        vars.insert(
+            format!("AR_{}", target.replace('-', "_")),
+            librarian.display().to_string(),
+        );
+    }
 
     vars
 }

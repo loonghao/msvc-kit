@@ -1,5 +1,7 @@
 # msvc-kit
 
+版本选择现统一用于环境激活、查询、`doctor`、`run`、版本锁和 Ninja/CMake 文件。详见[工具链契约](docs/zh/guide/toolchain-contracts.md)，包括诊断、JSON/退出码、来源凭据与 DCC 消费者边界。发布前需使用本次源码构建的二进制。
+
 [![Crates.io](https://img.shields.io/crates/v/msvc-kit.svg)](https://crates.io/crates/msvc-kit)
 [![Crates.io Downloads](https://img.shields.io/crates/d/msvc-kit.svg)](https://crates.io/crates/msvc-kit)
 [![GitHub Downloads](https://img.shields.io/github/downloads/loonghao/msvc-kit/total.svg)](https://github.com/loonghao/msvc-kit/releases)

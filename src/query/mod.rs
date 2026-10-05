@@ -34,10 +34,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::env::{get_env_vars, MsvcEnvironment};
+use crate::env::{get_env_vars, get_sdk_env_vars, toolchain_fingerprint, MsvcEnvironment};
 use crate::error::{MsvcKitError, Result};
-use crate::installer::InstallInfo;
-use crate::version::{list_installed_msvc, list_installed_sdk, Architecture};
+use crate::toolchain::{resolve_toolchain, ToolchainRequest};
+use crate::version::{
+    list_installed_msvc, list_installed_sdk, select_installed_version, Architecture,
+};
 
 /// Which component to query
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,6 +141,9 @@ pub struct QueryOptions {
     /// Target architecture
     pub arch: Architecture,
 
+    /// Architecture on which tool executables run.
+    pub host_arch: Architecture,
+
     /// Which component to query
     pub component: QueryComponent,
 
@@ -157,6 +162,7 @@ impl Default for QueryOptions {
         Self {
             install_dir: PathBuf::from("msvc-kit"),
             arch: Architecture::host(),
+            host_arch: Architecture::host(),
             component: QueryComponent::default(),
             property: QueryProperty::default(),
             msvc_version: None,
@@ -188,6 +194,12 @@ impl QueryOptionsBuilder {
     /// Set target architecture
     pub fn arch(mut self, arch: Architecture) -> Self {
         self.options.arch = arch;
+        self
+    }
+
+    /// Set the host architecture independently of the target architecture.
+    pub fn host_arch(mut self, arch: Architecture) -> Self {
+        self.options.host_arch = arch;
         self
     }
 
@@ -229,6 +241,14 @@ pub struct QueryResult {
 
     /// Target architecture
     pub arch: String,
+
+    /// Architecture on which compiler and SDK tools run.
+    #[serde(default)]
+    pub host_arch: String,
+
+    /// Stable identity of selected versions and architectures (not file integrity).
+    #[serde(default)]
+    pub fingerprint: String,
 
     /// MSVC component information (if installed and queried)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -390,7 +410,8 @@ impl QueryResult {
 /// # Ok::<(), msvc_kit::MsvcKitError>(())
 /// ```
 pub fn query_installation(options: &QueryOptions) -> Result<QueryResult> {
-    let install_dir = &options.install_dir;
+    let absolute_root = crate::env::compiler_path(&std::path::absolute(&options.install_dir)?);
+    let install_dir = &absolute_root;
 
     if !install_dir.exists() {
         return Err(MsvcKitError::InstallPath(format!(
@@ -401,14 +422,24 @@ pub fn query_installation(options: &QueryOptions) -> Result<QueryResult> {
 
     // Discover installed MSVC versions
     let msvc_info = if options.component != QueryComponent::Sdk {
-        find_msvc_component(install_dir, options.arch, options.msvc_version.as_deref())?
+        find_msvc_component(
+            install_dir,
+            options.arch,
+            options.host_arch,
+            options.msvc_version.as_deref(),
+        )?
     } else {
         None
     };
 
     // Discover installed SDK versions
     let sdk_info = if options.component != QueryComponent::Msvc {
-        find_sdk_component(install_dir, options.arch, options.sdk_version.as_deref())?
+        find_sdk_component(
+            install_dir,
+            options.arch,
+            options.host_arch,
+            options.sdk_version.as_deref(),
+        )?
     } else {
         None
     };
@@ -422,39 +453,59 @@ pub fn query_installation(options: &QueryOptions) -> Result<QueryResult> {
 
     // Build environment from discovered components
     let (env_vars, tools) = if let Some(ref msvc) = msvc_info {
-        let msvc_install_info = InstallInfo {
-            component_type: "msvc".to_string(),
-            version: msvc.version.clone(),
-            install_path: msvc.install_path.clone(),
-            downloaded_files: vec![],
+        let mut env = resolve_toolchain(&ToolchainRequest {
+            install_dir: install_dir.clone(),
             arch: options.arch,
-        };
-
-        let sdk_install_info = sdk_info.as_ref().map(|sdk| InstallInfo {
-            component_type: "sdk".to_string(),
-            version: sdk.version.clone(),
-            install_path: sdk.install_path.clone(),
-            downloaded_files: vec![],
-            arch: options.arch,
-        });
-
-        let env = MsvcEnvironment::from_install_info(
-            &msvc_install_info,
-            sdk_install_info.as_ref(),
-            Architecture::host(),
-        )?;
+            host_arch: options.host_arch,
+            msvc_version: Some(msvc.version.clone()),
+            sdk_version: sdk_info.as_ref().map(|sdk| sdk.version.clone()),
+        })?;
+        if options.component == QueryComponent::Msvc {
+            // Component-filtered queries must not silently include an unqueried SDK.
+            env.windows_sdk_version.clear();
+            env.include_paths.truncate(1);
+            env.lib_paths.truncate(1);
+            env.bin_paths.truncate(1);
+        }
 
         let vars = get_env_vars(&env);
         let tools = build_tool_map(&env);
 
         (vars, tools)
     } else {
-        (HashMap::new(), HashMap::new())
+        let mut tools = HashMap::new();
+        let mut vars = HashMap::new();
+        if let Some(ref sdk) = sdk_info {
+            vars = get_sdk_env_vars(
+                &sdk.install_path,
+                &sdk.version,
+                options.arch,
+                options.host_arch,
+            );
+            for name in ["rc", "mt"] {
+                if let Some(path) = sdk
+                    .bin_paths
+                    .iter()
+                    .map(|bin| bin.join(format!("{}.exe", name)))
+                    .find(|path| path.is_file())
+                {
+                    tools.insert(name.into(), path);
+                }
+            }
+        }
+        (vars, tools)
     };
 
     Ok(QueryResult {
         install_dir: install_dir.clone(),
         arch: options.arch.to_string(),
+        host_arch: options.host_arch.to_string(),
+        fingerprint: toolchain_fingerprint(
+            msvc_info.as_ref().map(|info| info.version.as_str()),
+            sdk_info.as_ref().map(|info| info.version.as_str()),
+            options.host_arch,
+            options.arch,
+        ),
         msvc: msvc_info,
         sdk: sdk_info,
         env_vars,
@@ -466,24 +517,13 @@ pub fn query_installation(options: &QueryOptions) -> Result<QueryResult> {
 fn find_msvc_component(
     install_dir: &Path,
     arch: Architecture,
+    host_arch: Architecture,
     requested_version: Option<&str>,
 ) -> Result<Option<ComponentInfo>> {
     let msvc_versions = list_installed_msvc(install_dir);
 
-    if msvc_versions.is_empty() {
+    let Some(version) = select_installed_version(&msvc_versions, requested_version)? else {
         return Ok(None);
-    }
-
-    // Find the requested version or use latest
-    let version = if let Some(req_ver) = requested_version {
-        msvc_versions
-            .iter()
-            .find(|v| v.version.starts_with(req_ver))
-            .ok_or_else(|| {
-                MsvcKitError::VersionNotFound(format!("MSVC version '{}' not found", req_ver))
-            })?
-    } else {
-        &msvc_versions[0] // Already sorted, first = latest
     };
 
     let install_path = version.install_path.clone().ok_or_else(|| {
@@ -494,7 +534,7 @@ fn find_msvc_component(
     })?;
 
     let arch_str = arch.to_string();
-    let host_dir = arch.msvc_host_dir();
+    let host_dir = host_arch.msvc_host_dir();
     let target_dir = arch.msvc_target_dir();
 
     Ok(Some(ComponentInfo {
@@ -511,24 +551,13 @@ fn find_msvc_component(
 fn find_sdk_component(
     install_dir: &Path,
     arch: Architecture,
+    host_arch: Architecture,
     requested_version: Option<&str>,
 ) -> Result<Option<ComponentInfo>> {
     let sdk_versions = list_installed_sdk(install_dir);
 
-    if sdk_versions.is_empty() {
+    let Some(version) = select_installed_version(&sdk_versions, requested_version)? else {
         return Ok(None);
-    }
-
-    // Find the requested version or use latest
-    let version = if let Some(req_ver) = requested_version {
-        sdk_versions
-            .iter()
-            .find(|v| v.version.contains(req_ver))
-            .ok_or_else(|| {
-                MsvcKitError::VersionNotFound(format!("SDK version '{}' not found", req_ver))
-            })?
-    } else {
-        &sdk_versions[0] // Already sorted, first = latest
     };
 
     let install_path = version.install_path.clone().ok_or_else(|| {
@@ -564,7 +593,10 @@ fn find_sdk_component(
                 .join("um")
                 .join(&arch_str),
         ],
-        bin_paths: vec![install_path.join("bin").join(ver).join(&arch_str)],
+        bin_paths: vec![install_path
+            .join("bin")
+            .join(ver)
+            .join(host_arch.to_string())],
     }))
 }
 
@@ -587,7 +619,7 @@ fn build_tool_map(env: &MsvcEnvironment) -> HashMap<String, PathBuf> {
     for (name, exe) in &tool_queries {
         for bin_path in &env.bin_paths {
             let full_path = bin_path.join(exe);
-            if full_path.exists() {
+            if full_path.is_file() {
                 tools.insert(name.to_string(), full_path);
                 break;
             }
@@ -686,6 +718,8 @@ mod tests {
         let result = QueryResult {
             install_dir: PathBuf::from("C:/msvc-kit"),
             arch: "x64".to_string(),
+            host_arch: "x64".to_string(),
+            fingerprint: String::new(),
             msvc: Some(ComponentInfo {
                 component_type: "msvc".to_string(),
                 version: "14.44.34823".to_string(),
@@ -744,6 +778,8 @@ mod tests {
         let result = QueryResult {
             install_dir: PathBuf::from("C:/test"),
             arch: "x64".to_string(),
+            host_arch: "x64".to_string(),
+            fingerprint: String::new(),
             msvc: None,
             sdk: None,
             env_vars: HashMap::new(),
@@ -760,6 +796,8 @@ mod tests {
         let result = QueryResult {
             install_dir: PathBuf::from("C:/msvc-kit"),
             arch: "x64".to_string(),
+            host_arch: "x64".to_string(),
+            fingerprint: String::new(),
             msvc: Some(ComponentInfo {
                 component_type: "msvc".to_string(),
                 version: "14.44.34823".to_string(),

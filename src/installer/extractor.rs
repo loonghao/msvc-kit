@@ -4,18 +4,12 @@ use std::env;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 
 use crate::constants::{extraction as ext_const, progress as progress_const};
 use crate::error::{MsvcKitError, Result};
-
-/// Global mutex for MSI extraction.
-/// Windows Installer (msiexec) can only run one instance at a time globally.
-/// Error 1618 = "Another installation is already in progress"
-static MSI_EXTRACT_LOCK: Mutex<()> = Mutex::new(());
 
 /// Maximum retries for MSI extraction when encountering error 1618
 const MSI_MAX_RETRIES: u32 = 5;
@@ -299,11 +293,11 @@ fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> 
         None
     };
 
-    // Acquire global MSI lock to prevent concurrent msiexec invocations.
-    // Windows Installer can only run one instance at a time (error 1618).
-    let _lock = MSI_EXTRACT_LOCK
-        .lock()
-        .map_err(|e| MsvcKitError::Other(format!("Failed to acquire MSI lock: {}", e)))?;
+    // Windows Installer is shared across targets and msvc-kit processes.
+    // An OS lock releases automatically if a process exits or crashes.
+    let _lock = crate::storage::lock_file(
+        &crate::config::default_cache_root().join("locks/msi-extract.lock"),
+    )?;
 
     #[cfg(windows)]
     {
