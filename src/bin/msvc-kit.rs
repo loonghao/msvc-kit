@@ -566,9 +566,15 @@ async fn main() -> anyhow::Result<()> {
         .with(filter)
         .init();
 
-    // Load configuration, falling back to defaults but telling the user why
+    // Invalid explicit configuration must not change installation/cache roots.
     let mut config = match load_config() {
         Ok(config) => config,
+        Err(e)
+            if config_flag.is_some()
+                || std::env::var_os(msvc_kit::config::CONFIG_ENV_VAR).is_some() =>
+        {
+            return Err(e.into());
+        }
         Err(e) => {
             eprintln!("Warning: using default configuration: {e}");
             MsvcKitConfig::default()
