@@ -566,6 +566,16 @@ async fn main() -> anyhow::Result<()> {
         .with(filter)
         .init();
 
+    // Only intentional configuration creation may select an absent explicit file.
+    let explicit_config =
+        config_flag.is_some() || std::env::var_os(msvc_kit::config::CONFIG_ENV_VAR).is_some();
+    let creates_config = matches!(&cli.command, Some(Commands::Config {
+        set_dir, set_msvc, set_sdk, set_vs_channel, reset, portable, no_portable,
+    }) if set_dir.is_some() || set_msvc.is_some() || set_sdk.is_some()
+        || set_vs_channel.is_some() || *reset || *portable || *no_portable);
+    if explicit_config && !creates_config && !msvc_kit::config::get_config_path().is_file() {
+        anyhow::bail!("Explicit configuration file is missing or is not a file");
+    }
     // Invalid explicit configuration must not change installation/cache roots.
     let mut config = match load_config() {
         Ok(config) => config,

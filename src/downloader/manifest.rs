@@ -11,7 +11,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::cache::{
-    create_spinner, default_manifest_cache_dir, fetch_bytes_with_cache, meta_path_for, url_basename,
+    create_spinner, default_manifest_cache_dir, fetch_bytes_with_cache,
+    fetch_verified_bytes_with_cache, meta_path_for, url_basename,
 };
 use super::channel_availability;
 use super::MsvcComponent;
@@ -329,6 +330,16 @@ impl VsManifest {
             })
             .unwrap_or_else(|| url_basename(&manifest_url));
 
+        let manifest_sha256 = manifest_item
+            .payloads
+            .first()
+            .and_then(|payload| payload.sha256.as_deref())
+            .ok_or_else(|| {
+                MsvcKitError::Config(
+                    "The fresh channel did not supply a package manifest SHA256".into(),
+                )
+            })?;
+
         tracing::info!(
             "VS package manifest: {} ({})",
             manifest_file_name,
@@ -343,13 +354,14 @@ impl VsManifest {
             manifest_file_name
         ));
 
-        let (manifest_bytes, vsman_cached) = fetch_bytes_with_cache(
+        let (manifest_bytes, vsman_cached) = fetch_verified_bytes_with_cache(
             &client,
             &manifest_url,
             &vsman_cache,
             &spinner,
             &download_label,
             &manifest_file_name,
+            Some(manifest_sha256),
         )
         .await
         .map_err(classify_transport_error)?;
@@ -1554,12 +1566,13 @@ mod tests {
                         "version": "18.0.0",
                         "type": "Manifest",
                         "payloads": [
-                            {{ "fileName": "VisualStudio.vsman", "url": "{}", "size": 64 }}
+                            {{ "fileName": "VisualStudio.vsman", "url": "{}", "size": 64, "sha256": "{}" }}
                         ]
                     }}
                 ]
             }}"#,
-            vsman_url
+            vsman_url,
+            super::super::hash::compute_hash(vs_manifest_body().as_bytes())
         )
     }
 

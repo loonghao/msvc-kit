@@ -145,6 +145,39 @@ pub async fn fetch_bytes_with_cache(
     label: &str,
     fingerprint_name: &str,
 ) -> Result<(Vec<u8>, bool)> {
+    // A channel has no independently supplied digest. Fetch its current body;
+    // local metadata and a server's 304 cannot authenticate cached contents.
+    fetch_verified_bytes_with_cache(
+        client,
+        url,
+        cache_file,
+        spinner,
+        label,
+        fingerprint_name,
+        None,
+    )
+    .await
+}
+
+/// Cache a manifest only when its bytes match a digest from a fresh channel.
+/// Without an external digest, always fetch a full response and never fall back
+/// to cached contents after a transport failure.
+pub async fn fetch_verified_bytes_with_cache(
+    client: &reqwest::Client,
+    url: &str,
+    cache_file: &Path,
+    spinner: &ProgressBar,
+    label: &str,
+    fingerprint_name: &str,
+    expected_sha256: Option<&str>,
+) -> Result<(Vec<u8>, bool)> {
+    if expected_sha256.is_some_and(|digest| {
+        digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }) {
+        return Err(MsvcKitError::Config(
+            "Invalid official manifest SHA256".into(),
+        ));
+    }
     if let Some(parent) = cache_file.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
@@ -169,6 +202,7 @@ pub async fn fetch_bytes_with_cache(
                 && meta.name.as_deref() == Some(fingerprint_name)
                 && meta.size == Some(cached.len() as u64)
                 && meta.sha256.as_deref() == Some(digest.as_str())
+                && expected_sha256.is_some_and(|expected| digest.eq_ignore_ascii_case(expected))
                 && (meta.etag.is_some() || meta.last_modified.is_some())
         });
         if !valid {
@@ -195,7 +229,7 @@ pub async fn fetch_bytes_with_cache(
             if resp.status().is_success() {
                 let headers = resp.headers().clone();
                 let bytes = download_response_bytes_with_progress(resp, spinner, label).await?;
-
+                verify_manifest_digest(&bytes, expected_sha256, fingerprint_name)?;
                 publish_cached_bytes(cache_file, &bytes).await?;
                 let size = bytes.len() as u64;
                 let meta = ManifestCacheMeta {
@@ -230,6 +264,7 @@ pub async fn fetch_bytes_with_cache(
 
     let headers = resp.headers().clone();
     let bytes = download_response_bytes_with_progress(resp, spinner, label).await?;
+    verify_manifest_digest(&bytes, expected_sha256, fingerprint_name)?;
     publish_cached_bytes(cache_file, &bytes).await?;
 
     let size = bytes.len() as u64;
@@ -251,6 +286,20 @@ pub async fn fetch_bytes_with_cache(
     let _ = write_meta(&meta_path, &meta).await;
 
     Ok((bytes, false))
+}
+
+fn verify_manifest_digest(bytes: &[u8], expected: Option<&str>, name: &str) -> Result<()> {
+    if let Some(expected) = expected {
+        let actual = super::hash::compute_hash(bytes);
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err(MsvcKitError::HashMismatch {
+                file: name.into(),
+                expected: expected.into(),
+                actual,
+            });
+        }
+    }
+    Ok(())
 }
 
 async fn publish_cached_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -372,9 +421,20 @@ mod tests {
             .expect(1)
             .create_async()
             .await;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("manifest.json");
+        let client = reqwest::Client::new();
+        let url = format!("{}/manifest", server.url());
+        let spinner = ProgressBar::hidden();
+        let (first_body, _) =
+            fetch_bytes_with_cache(&client, &url, &path, &spinner, "fixture", "manifest.json")
+                .await
+                .unwrap();
+        first.assert_async().await;
+        first.remove_async().await;
         let changed = server
             .mock("GET", "/manifest")
-            .match_header("if-none-match", "version-1")
+            .match_header("if-none-match", mockito::Matcher::Missing)
             .with_header("ETag", "version-2")
             .with_body("BBBB")
             .expect(1)
@@ -386,15 +446,6 @@ mod tests {
             .expect(0)
             .create_async()
             .await;
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("manifest.json");
-        let client = reqwest::Client::new();
-        let url = format!("{}/manifest", server.url());
-        let spinner = ProgressBar::hidden();
-        let (first_body, _) =
-            fetch_bytes_with_cache(&client, &url, &path, &spinner, "fixture", "manifest.json")
-                .await
-                .unwrap();
         let (second_body, cached) =
             fetch_bytes_with_cache(&client, &url, &path, &spinner, "fixture", "manifest.json")
                 .await
@@ -402,7 +453,6 @@ mod tests {
         assert_eq!(first_body, b"AAAA");
         assert_eq!(second_body, b"BBBB");
         assert!(!cached);
-        first.assert_async().await;
         changed.assert_async().await;
         head.assert_async().await;
     }

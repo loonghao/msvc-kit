@@ -309,10 +309,7 @@ async fn validated_cache_hash(
     }
     if verify_hashes {
         let actual = compute_file_hash(path).await?;
-        let expected = payload
-            .sha256
-            .as_ref()
-            .or_else(|| entry.and_then(|entry| entry.computed_hash.as_ref()));
+        let expected = payload.sha256.as_ref();
         return Ok(expected
             .filter(|expected| actual.eq_ignore_ascii_case(expected))
             .map(|_| actual));
@@ -334,6 +331,16 @@ async fn download_single_payload_with_handler(
     progress: &BoxedProgressHandler,
     verify_hashes: bool,
 ) -> Result<PayloadResult> {
+    if verify_hashes
+        && payload.sha256.as_ref().is_none_or(|digest| {
+            digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+    {
+        return Err(MsvcKitError::Config(format!(
+            "Missing or invalid official payload SHA256 for {}",
+            payload.file_name
+        )));
+    }
     let file_path = payload_path(download_dir, &payload.file_name)?;
     let cached = { index.read().await.get_entry(&payload.file_name).await? };
     if let Some(hash) =

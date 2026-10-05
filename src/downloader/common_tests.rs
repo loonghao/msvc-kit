@@ -232,12 +232,12 @@ async fn stale_size_never_overrides_a_mismatched_authoritative_digest() {
 }
 
 #[tokio::test]
-async fn missing_authoritative_digest_keeps_strict_size_with_verification_enabled() {
+async fn missing_authoritative_digest_fails_before_network_with_verification_enabled() {
     let mut server = mockito::Server::new_async().await;
     let mock = server
         .mock("GET", "/payload")
         .with_body("larger payload")
-        .expect(1)
+        .expect(0)
         .create_async()
         .await;
     let root = tempfile::tempdir().unwrap();
@@ -246,8 +246,51 @@ async fn missing_authoritative_digest_keeps_strict_size_with_verification_enable
     let result = fixture_downloader(true)
         .download_packages(&[package], root.path(), "fixture")
         .await;
-    assert!(result.unwrap_err().to_string().contains("Size mismatch"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("official payload SHA256"));
     assert!(!root.path().join("fixture.vsix").exists());
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn forged_index_hash_cannot_substitute_for_missing_official_digest() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/payload")
+        .with_body("correct")
+        .expect(1)
+        .create_async()
+        .await;
+    let root = tempfile::tempdir().unwrap();
+    let mut package = payload_package(format!("{}/payload", server.url()), b"correct");
+    package.payloads[0].sha256 = None;
+    fixture_downloader(false)
+        .download_packages(std::slice::from_ref(&package), root.path(), "fixture")
+        .await
+        .unwrap();
+    let path = root.path().join("fixture.vsix");
+    std::fs::write(&path, b"altered").unwrap();
+    let mut index = super::DownloadIndex::load(&root.path().join("index.db"))
+        .await
+        .unwrap();
+    index
+        .mark_completed(
+            &package.payloads[0],
+            path,
+            Some(super::hash::compute_hash(b"altered")),
+        )
+        .await
+        .unwrap();
+    drop(index);
+    let result = fixture_downloader(true)
+        .download_packages(&[package], root.path(), "fixture")
+        .await;
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("official payload SHA256"));
     mock.assert_async().await;
 }
 
