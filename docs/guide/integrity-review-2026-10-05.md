@@ -78,6 +78,12 @@ new channel-to-manifest integrity boundary.
 
 ## PR history and merge gates
 
+The first approved continuation CI run reproduced the official manifest SHA
+mismatch in action/bundle acquisition. Rust and coverage also exposed a legacy
+CLI fixture using an empty, schema-invalid explicit configuration. That fixture
+now serializes valid isolated settings before testing doctor JSON and child exit
+codes. Production configuration validation remains unchanged and strict.
+
 At review time #176 remained at
 `2736536755659e5f18c064c5d2d5bcc46c3c3e19` and #97 at
 `7c80520b6325aeaeb53dc5ffc5232dcb2d1859f8`.

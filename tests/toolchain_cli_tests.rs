@@ -43,8 +43,14 @@ fn cli_environment_obeys_configured_version_and_json_stays_flat() {
 fn doctor_failure_is_machine_readable_and_run_preserves_child_exit() {
     let temp = tempfile::tempdir().unwrap();
     install(temp.path(), "14.44.35207");
-    let config = temp.path().join("empty.toml");
-    std::fs::write(&config, "").unwrap();
+    // Exercise doctor/run with valid isolated settings. An empty TOML file is
+    // an invalid explicit configuration and must fail before either command.
+    let config = temp.path().join("config.toml");
+    let settings = msvc_kit::MsvcKitConfig {
+        install_dir: temp.path().into(),
+        ..Default::default()
+    };
+    std::fs::write(&config, toml::to_string(&settings).unwrap()).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_msvc-kit"))
         .arg("--config")
         .arg(&config)
