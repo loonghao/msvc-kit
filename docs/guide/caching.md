@@ -28,15 +28,15 @@ The download index is a [redb](https://github.com/cberner/redb) database that tr
 
 When downloading, files are skipped based on:
 
-Payload reuse requires the expected source identity. With verification enabled, msvc-kit rehashes the actual cached file; the index's previous hash is not sufficient. A matching manifest SHA256 takes precedence over inconsistent manifest size metadata. Without an expected digest, or with verification disabled, file size must match. Downloads use private temporary files and publish only after validation; receipts record actual bytes. Interrupted downloads restart on retry.
+Payload reuse requires the expected source identity. With verification enabled, msvc-kit requires an official SHA256 and rehashes the actual cached file; the index's previous hash is not sufficient. A matching manifest SHA256 takes precedence over inconsistent manifest size metadata. Missing or malformed official digests fail with verification enabled. With verification disabled, file size must match. Downloads use private temporary files and publish only after validation; receipts record actual bytes. Interrupted downloads restart on retry.
 
-Manifest reuse validates its cached SHA256 and uses server ETag/Last-Modified conditional requests. Equal content length alone does not establish freshness. Download caches and manifests use process locks; a busy index is never renamed as corrupt.
+Channels always fetch a full current response. A package manifest must match the SHA256 declared by that fresh channel before parsing or cache publication. Only those externally authenticated bytes may use ETag/Last-Modified conditional requests. A neighboring metadata file or equal content length cannot establish trust. Download caches and manifests use process locks; a busy index is never renamed as corrupt.
 
 ## Manifest Cache
 
 VS manifests are cached under the configured cache directory: an explicit `cache_dir` from the TOML file, otherwise `<install_dir>/cache/manifests/` when the installation directory is not the platform default (`MSVC_KIT_DIR` or `config --set-dir`), otherwise the platform default cache root listed above. Run `msvc-kit config` to print the cache directory in use.
 
-Manifests are cached with HTTP conditional requests:
+Authenticated package manifests can use HTTP conditional requests:
 
 ```
 GET /manifest.json
