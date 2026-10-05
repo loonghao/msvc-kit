@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::downloader::{hash::compute_file_hash, DownloadIndex};
+use crate::downloader::{hash::compute_file_hash, DownloadIndex, DownloadStatus};
 use crate::storage::atomic_write;
 use crate::toolchain::{resolve_toolchain, ToolchainRequest};
 use crate::{Architecture, InstallInfo, MsvcKitError, Result};
@@ -70,6 +70,11 @@ pub struct InstallationReceipt {
     pub payloads: Vec<LockedPayload>,
 }
 
+impl InstallationReceipt {
+    /// v1 did not distinguish verified acquisition from locally observed bytes.
+    pub const SCHEMA: &'static str = "msvc-kit.installation-receipt.v2";
+}
+
 /// Exact installed versions plus optional source provenance from msvc-kit downloads.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -115,7 +120,7 @@ impl ToolchainLock {
             );
             if path.exists() {
                 let receipt: InstallationReceipt = serde_json::from_slice(&std::fs::read(path)?)?;
-                if receipt.schema != "msvc-kit.installation-receipt.v1"
+                if receipt.schema != InstallationReceipt::SCHEMA
                     || receipt.component != component
                     || receipt.version != *version
                     || receipt.arch != request.arch
@@ -164,6 +169,7 @@ impl ToolchainLock {
 
     /// Check acquired archives before extraction when this lock contains their source provenance.
     pub async fn verify_download(&self, info: &InstallInfo) -> Result<()> {
+        self.validate()?;
         let Some(receipt) = self
             .receipts
             .iter()
@@ -250,7 +256,7 @@ impl ToolchainLock {
                     )))
                 }
             };
-            if receipt.schema != "msvc-kit.installation-receipt.v1"
+            if receipt.schema != InstallationReceipt::SCHEMA
                 || &receipt.version != expected
                 || receipt.arch != self.arch
                 || receipt.host_arch != self.host_arch
@@ -260,6 +266,11 @@ impl ToolchainLock {
                 ));
             }
             let mut names = std::collections::HashSet::new();
+            if receipt.payloads.is_empty() {
+                return Err(MsvcKitError::Config(
+                    "Source receipt has no verified payloads".into(),
+                ));
+            }
             for payload in &receipt.payloads {
                 if payload.file_name.is_empty() || !names.insert(&payload.file_name) {
                     return Err(MsvcKitError::Config(
@@ -280,7 +291,8 @@ impl ToolchainLock {
     }
 }
 
-/// Persist provenance only after extraction has completed successfully.
+/// Persist provenance only after extraction and rechecking every verified archive.
+/// An index or receipt is a local record, not a substitute for fresh publisher verification.
 pub async fn record_installation(
     info: &InstallInfo,
     root: &Path,
@@ -288,19 +300,56 @@ pub async fn record_installation(
     vs_channel: Option<String>,
     components: Vec<String>,
 ) -> Result<()> {
+    if info.downloaded_files.is_empty() {
+        return Err(MsvcKitError::Config(
+            "Cannot record provenance without verified payloads".into(),
+        ));
+    }
     let mut payloads = Vec::new();
     for file in &info.downloaded_files {
         let entry = source_entry(file).await?;
+        let expected = entry
+            .sha256
+            .as_deref()
+            .filter(|digest| {
+                digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+            .ok_or_else(|| {
+                MsvcKitError::Config(format!(
+                    "No valid official payload SHA256 for {}",
+                    entry.file_name
+                ))
+            })?;
+        if entry.status != DownloadStatus::Completed
+            || !entry.hash_verified
+            || !entry
+                .computed_hash
+                .as_deref()
+                .is_some_and(|computed| computed.eq_ignore_ascii_case(expected))
+        {
+            return Err(MsvcKitError::Config(format!(
+                "Payload {} has not passed official SHA256 verification",
+                entry.file_name
+            )));
+        }
+        let actual = compute_file_hash(file).await?;
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err(MsvcKitError::HashMismatch {
+                file: entry.file_name,
+                expected: expected.into(),
+                actual,
+            });
+        }
         payloads.push(LockedPayload {
             file_name: entry.file_name,
             url: entry.url,
             size: std::fs::metadata(file)?.len(),
-            sha256: compute_file_hash(file).await?,
+            sha256: actual,
         });
     }
     payloads.sort_by(|left, right| left.file_name.cmp(&right.file_name));
     let receipt = InstallationReceipt {
-        schema: "msvc-kit.installation-receipt.v1".into(),
+        schema: InstallationReceipt::SCHEMA.into(),
         component: info.component_type.clone(),
         version: info.version.clone(),
         arch: info.arch,

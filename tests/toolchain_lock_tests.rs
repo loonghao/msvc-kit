@@ -6,6 +6,128 @@ use msvc_kit::toolchain_lock::{
 use msvc_kit::{Architecture, InstallInfo};
 use sha2::{Digest, Sha256};
 
+#[tokio::test]
+async fn receipt_rejects_unverified_or_changed_payloads_without_replacing_previous_receipt() {
+    for case in [
+        "unverified",
+        "missing-sha",
+        "malformed-sha",
+        "computed-sha",
+        "changed-bytes",
+        "partial",
+        "empty",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("payload.vsix");
+        std::fs::write(&file, b"good").unwrap();
+        let hash = hex::encode(Sha256::digest(b"good"));
+        let payload = PackagePayload {
+            file_name: "payload.vsix".into(),
+            url: "https://example.test/package".into(),
+            size: 4,
+            sha256: Some(hash.clone()),
+        };
+        let mut index = DownloadIndex::load(&temp.path().join("index.db"))
+            .await
+            .unwrap();
+        index
+            .mark_completed(&payload, file.clone(), Some(hash))
+            .await
+            .unwrap();
+        let mut entry = index.get_entry("payload.vsix").await.unwrap().unwrap();
+        match case {
+            "unverified" => entry.hash_verified = false,
+            "missing-sha" => entry.sha256 = None,
+            "malformed-sha" => entry.sha256 = Some("z".repeat(64)),
+            "computed-sha" => entry.computed_hash = Some("0".repeat(64)),
+            "changed-bytes" => std::fs::write(&file, b"evil").unwrap(),
+            "partial" => entry.status = msvc_kit::downloader::DownloadStatus::Partial,
+            "empty" => {}
+            _ => unreachable!(),
+        }
+        index.upsert_entry(&entry).await.unwrap();
+        drop(index);
+        let info = InstallInfo {
+            component_type: "msvc".into(),
+            version: "14.44.35207".into(),
+            arch: Architecture::X64,
+            install_path: temp.path().into(),
+            downloaded_files: if case == "empty" { vec![] } else { vec![file] },
+        };
+        let receipt = temp
+            .path()
+            .join(".msvc-kit/receipts/msvc-14.44.35207-x64-x64.json");
+        std::fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+        std::fs::write(&receipt, b"previous receipt").unwrap();
+        assert!(
+            record_installation(
+                &info,
+                temp.path(),
+                Architecture::X64,
+                Some("17".into()),
+                vec![]
+            )
+            .await
+            .is_err(),
+            "case {case} must not publish verified provenance"
+        );
+        assert_eq!(
+            std::fs::read(&receipt).unwrap(),
+            b"previous receipt",
+            "case {case} replaced the previous receipt"
+        );
+    }
+}
+
+#[tokio::test]
+async fn receipt_accepts_full_official_sha_with_stale_size_and_uses_actual_size() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("payload.vsix");
+    std::fs::write(&file, b"good").unwrap();
+    let hash = hex::encode(Sha256::digest(b"good"));
+    let payload = PackagePayload {
+        file_name: "payload.vsix".into(),
+        url: "https://example.test/package".into(),
+        size: 999,
+        sha256: Some(hash.to_uppercase()),
+    };
+    let mut index = DownloadIndex::load(&temp.path().join("index.db"))
+        .await
+        .unwrap();
+    index
+        .mark_completed(&payload, file.clone(), Some(hash.clone()))
+        .await
+        .unwrap();
+    drop(index);
+    let info = InstallInfo {
+        component_type: "msvc".into(),
+        version: "14.44.35207".into(),
+        arch: Architecture::X64,
+        install_path: temp.path().into(),
+        downloaded_files: vec![file],
+    };
+    record_installation(
+        &info,
+        temp.path(),
+        Architecture::X64,
+        Some("17".into()),
+        vec![],
+    )
+    .await
+    .unwrap();
+    let receipt: InstallationReceipt = serde_json::from_slice(
+        &std::fs::read(
+            temp.path()
+                .join(".msvc-kit/receipts/msvc-14.44.35207-x64-x64.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(receipt.schema, "msvc-kit.installation-receipt.v2");
+    assert_eq!(receipt.payloads[0].size, 4);
+    assert_eq!(receipt.payloads[0].sha256, hash);
+}
+
 fn selection() -> ToolchainLock {
     ToolchainLock {
         schema: ToolchainLock::SCHEMA.into(),
@@ -84,7 +206,7 @@ async fn locked_sources_reject_modified_bytes_and_source_urls_before_extraction(
     drop(index);
     let mut lock = selection();
     lock.receipts.push(InstallationReceipt {
-        schema: "msvc-kit.installation-receipt.v1".into(),
+        schema: InstallationReceipt::SCHEMA.into(),
         component: "msvc".into(),
         version: lock.msvc_version.clone(),
         arch: lock.arch,
@@ -106,6 +228,9 @@ async fn locked_sources_reject_modified_bytes_and_source_urls_before_extraction(
         downloaded_files: vec![file.clone()],
     };
     lock.verify_download(&info).await.unwrap();
+    let mut legacy = lock.clone();
+    legacy.receipts[0].schema = "msvc-kit.installation-receipt.v1".into();
+    assert!(legacy.verify_download(&info).await.is_err());
     std::fs::write(&file, b"evil").unwrap();
     assert!(lock.verify_download(&info).await.is_err());
     std::fs::write(&file, b"good").unwrap();
@@ -181,8 +306,12 @@ async fn recorded_receipts_capture_exact_selection_and_missing_provenance_fails(
     // Receipts from a different selection cannot become a new captured lock.
     let receipt = install.join(".msvc-kit/receipts/msvc-14.44.35207-x64-x64.json");
     let mut bad = lock.receipts[0].clone();
+    bad.schema = "msvc-kit.installation-receipt.v1".into();
+    std::fs::write(&receipt, serde_json::to_vec(&bad).unwrap()).unwrap();
+    assert!(ToolchainLock::capture(&request).is_err());
+    bad.schema = InstallationReceipt::SCHEMA.into();
     bad.host_arch = Architecture::Arm64;
-    std::fs::write(receipt, serde_json::to_vec(&bad).unwrap()).unwrap();
+    std::fs::write(&receipt, serde_json::to_vec(&bad).unwrap()).unwrap();
     assert!(ToolchainLock::capture(&request).is_err());
 }
 
@@ -192,7 +321,7 @@ fn lock_rejects_invalid_receipt_identity_and_payloads_before_publication() {
     let path = temp.path().join("lock.json");
     let mut lock = selection();
     lock.receipts.push(InstallationReceipt {
-        schema: "msvc-kit.installation-receipt.v1".into(),
+        schema: InstallationReceipt::SCHEMA.into(),
         component: "sdk".into(),
         version: lock.sdk_version.clone(),
         arch: lock.arch,
@@ -219,7 +348,19 @@ fn lock_rejects_invalid_receipt_identity_and_payloads_before_publication() {
     changed.receipts[0].version = "10.0.1.0".into();
     invalid.push(changed);
     let mut changed = lock.clone();
+    changed.receipts[0].schema = "msvc-kit.installation-receipt.v1".into();
+    let legacy = temp.path().join("legacy-source-lock.json");
+    std::fs::write(&legacy, serde_json::to_vec(&changed).unwrap()).unwrap();
+    assert!(
+        ToolchainLock::load(&legacy).is_err(),
+        "legacy receipt cannot become verified provenance through a selection lock"
+    );
+    invalid.push(changed);
+    let mut changed = lock.clone();
     changed.receipts[0].payloads[0].file_name.clear();
+    invalid.push(changed);
+    let mut changed = lock.clone();
+    changed.receipts[0].payloads.clear();
     invalid.push(changed);
     let mut changed = lock.clone();
     let duplicate = changed.receipts[0].payloads[0].clone();

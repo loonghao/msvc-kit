@@ -76,6 +76,40 @@ equivalent integrity proof is available. The earlier x64 wheel's numerical smoke
 test remains a functional result for the prior candidate; it does not prove this
 new channel-to-manifest integrity boundary.
 
+## Independent receipt review follow-up
+
+A separate reviewer found that `record_installation` recorded an observed file
+SHA without checking whether it matched the official expected payload SHA.
+Unchecked downloads and same-size changes after acquisition could therefore
+produce ordinary v1 source receipts. This did not bypass py-dem-bones' strict
+acquisition, which never enables `--no-verify`, but it blurred verified and
+unverified source provenance.
+
+Receipt generation now requires a Completed index entry, a valid official SHA,
+verified status and a matching computed index SHA, then rehashes the entire
+archive against that official SHA. Every payload must pass before atomic receipt
+publication; failures preserve the previous receipt. A matching SHA still allows
+the actual VSIX size to replace stale declared size. Empty payload receipts fail.
+
+New receipts use `msvc-kit.installation-receipt.v2`. Capture, lock loading and
+download verification reject old v1 receipts because they did not distinguish
+verified provenance. Selection-only locks with no receipts retain their v1
+container format. Old source receipts require fresh verified acquisition, not
+a schema edit or a locally computed digest. These local records are editable
+source pins, not independent publisher attestations or proofs that an installed
+tree is unmodified. Every strict acquisition still checks the fresh official
+channel/catalog/payload chain.
+
+The new receipt regressions first failed on the frozen v1 source. The corrected
+lock suite covers unchecked entries, absent/malformed expected hashes, stale
+computed hashes, same-size archive mutation, partial/empty payload sets, v1
+rejection, preservation after failure, and matching official SHA with stale size.
+The current official manifest mismatch remains a separate external gate.
+
+Validation used Rust 1.93.1 and a single compiler worker: the lock/receipt suite
+passed 7 tests, doctor passed 7, and execution passed 3. Locked Clippy for the
+library, CLI and lock tests passed with warnings denied; formatting passed.
+
 ## PR history and merge gates
 
 The first approved continuation CI run reproduced the official manifest SHA
