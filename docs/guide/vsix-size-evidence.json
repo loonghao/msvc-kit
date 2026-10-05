@@ -1,0 +1,51 @@
+{
+  "channel_url": "https://aka.ms/vs/17/release/channel",
+  "manifest_url": "https://download.visualstudio.microsoft.com/download/pr/bc92e2cb-33de-4a0c-995d-efa817f16b16/6e470016e4324c84c255ffd0beb3767d17ec89cc8561e9409ee3e1f6d29400f5/VisualStudio.vsman",
+  "manifest_sha256": "f0a50ea157222c29abd5ea6ff01bfc3c33b04e011c5e45ee2ca38ef0778e5643",
+  "samples": [
+    {
+      "package": "Microsoft.VC.14.44.17.14.ASAN.Headers.base",
+      "manifest_size": 90066,
+      "actual_size": 97819,
+      "sha256": "f07d0d646b4959c36f29f3e6acef785d03cf9fb3165cdfa20318ed38cd4d7077",
+      "manifest_sha256": "f07d0d646b4959c36f29f3e6acef785d03cf9fb3165cdfa20318ed38cd4d7077",
+      "hash_matches": true,
+      "compressed_entries_size": 93349,
+      "zip_valid": true,
+      "url": "https://download.visualstudio.microsoft.com/download/pr/67cf767c-5e71-47c2-a54a-cd5631e28942/f07d0d646b4959c36f29f3e6acef785d03cf9fb3165cdfa20318ed38cd4d7077/Microsoft.VC.14.44.17.14.ASAN.Headers.base.vsix"
+    },
+    {
+      "package": "Microsoft.VC.14.44.17.14.ASAN.X86.OneCore",
+      "manifest_size": 1067,
+      "actual_size": 9523,
+      "sha256": "4682cfff494d49a2d280eee62f1321434ea15cd6ea2e1032b9972ce7a0ccee01",
+      "manifest_sha256": "4682cfff494d49a2d280eee62f1321434ea15cd6ea2e1032b9972ce7a0ccee01",
+      "hash_matches": true,
+      "compressed_entries_size": 8491,
+      "zip_valid": true,
+      "url": "https://download.visualstudio.microsoft.com/download/pr/67cf767c-5e71-47c2-a54a-cd5631e28942/4682cfff494d49a2d280eee62f1321434ea15cd6ea2e1032b9972ce7a0ccee01/Microsoft.VC.14.44.17.14.ASAN.X86.OneCore.vsix"
+    },
+    {
+      "package": "Microsoft.VC.14.44.17.14.ATL.Headers",
+      "manifest_size": 1063,
+      "actual_size": 8712,
+      "sha256": "f146dd597a37ec9b503c1fe575c61fae836420041558b6b451cdc4058c79cc5f",
+      "manifest_sha256": "f146dd597a37ec9b503c1fe575c61fae836420041558b6b451cdc4058c79cc5f",
+      "hash_matches": true,
+      "compressed_entries_size": 7680,
+      "zip_valid": true,
+      "url": "https://download.visualstudio.microsoft.com/download/pr/d2fa077f-a814-4fb2-b903-1fca7658d17e/f146dd597a37ec9b503c1fe575c61fae836420041558b6b451cdc4058c79cc5f/Microsoft.VC.14.44.17.14.ATL.Headers.vsix"
+    },
+    {
+      "package": "Microsoft.VC.14.44.17.14.ATL.Headers.base",
+      "manifest_size": 579876,
+      "actual_size": 585841,
+      "sha256": "f8d375a254b6cfdbe0e7dc4fe7342d6212052068eb6394070dd932c815adb500",
+      "manifest_sha256": "f8d375a254b6cfdbe0e7dc4fe7342d6212052068eb6394070dd932c815adb500",
+      "hash_matches": true,
+      "compressed_entries_size": 570135,
+      "zip_valid": true,
+      "url": "https://download.visualstudio.microsoft.com/download/pr/d2fa077f-a814-4fb2-b903-1fca7658d17e/f8d375a254b6cfdbe0e7dc4fe7342d6212052068eb6394070dd932c815adb500/Microsoft.VC.14.44.17.14.ATL.Headers.base.vsix"
+    }
+  ]
+}

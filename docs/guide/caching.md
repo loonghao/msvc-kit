@@ -28,7 +28,7 @@ The download index is a [redb](https://github.com/cberner/redb) database that tr
 
 When downloading, files are skipped based on:
 
-Payload reuse requires the expected source identity and file size. With verification enabled, msvc-kit rehashes the actual cached file; the index's previous hash is not sufficient. Downloads use private temporary files and publish only after size and hash validation. Interrupted downloads restart on retry.
+Payload reuse requires the expected source identity. With verification enabled, msvc-kit rehashes the actual cached file; the index's previous hash is not sufficient. A matching manifest SHA256 takes precedence over inconsistent manifest size metadata. Without an expected digest, or with verification disabled, file size must match. Downloads use private temporary files and publish only after validation; receipts record actual bytes. Interrupted downloads restart on retry.
 
 Manifest reuse validates its cached SHA256 and uses server ETag/Last-Modified conditional requests. Equal content length alone does not establish freshness. Download caches and manifests use process locks; a busy index is never renamed as corrupt.
 

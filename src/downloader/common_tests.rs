@@ -144,6 +144,142 @@ async fn payload_size_is_checked_even_when_hash_verification_is_disabled() {
 }
 
 #[tokio::test]
+async fn authoritative_digest_allows_stale_manifest_size_and_reuses_verified_cache() {
+    let mut server = mockito::Server::new_async().await;
+    let bytes = b"signed payload";
+    let mock = server
+        .mock("GET", "/payload")
+        .with_body(bytes)
+        .expect(1)
+        .create_async()
+        .await;
+    let root = tempfile::tempdir().unwrap();
+    let mut package = payload_package(format!("{}/payload", server.url()), bytes);
+    package.payloads[0].size = 3;
+    let downloader = fixture_downloader(true);
+    downloader
+        .download_packages(std::slice::from_ref(&package), root.path(), "fixture")
+        .await
+        .unwrap();
+    {
+        let mut index = super::DownloadIndex::load(&root.path().join("index.db"))
+            .await
+            .unwrap();
+        let mut entry = index.get_entry("fixture.vsix").await.unwrap().unwrap();
+        assert_eq!(entry.size, 3, "Retain the declared source size");
+        assert_eq!(entry.bytes_downloaded, bytes.len() as u64);
+        assert!(entry.hash_verified);
+        // An older cache index recorded the manifest's size as downloaded bytes.
+        entry.bytes_downloaded = entry.size;
+        index.upsert_entry(&entry).await.unwrap();
+    }
+    downloader
+        .download_packages(&[package], root.path(), "fixture")
+        .await
+        .unwrap();
+    let index = super::DownloadIndex::load(&root.path().join("index.db"))
+        .await
+        .unwrap();
+    let entry = index.get_entry("fixture.vsix").await.unwrap().unwrap();
+    assert_eq!(entry.bytes_downloaded, bytes.len() as u64);
+    assert_eq!(std::fs::read(&entry.local_path).unwrap(), bytes);
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn matching_authoritative_digest_adopts_unindexed_cache_with_stale_size() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"signed payload";
+    std::fs::write(root.path().join("fixture.vsix"), bytes).unwrap();
+    let mut package = payload_package("http://127.0.0.1:1/not-requested".into(), bytes);
+    package.payloads[0].size = 3;
+    fixture_downloader(true)
+        .download_packages(&[package], root.path(), "fixture")
+        .await
+        .unwrap();
+    let index = super::DownloadIndex::load(&root.path().join("index.db"))
+        .await
+        .unwrap();
+    let entry = index.get_entry("fixture.vsix").await.unwrap().unwrap();
+    assert_eq!(entry.bytes_downloaded, bytes.len() as u64);
+    assert!(entry.hash_verified);
+}
+
+#[tokio::test]
+async fn stale_size_never_overrides_a_mismatched_authoritative_digest() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/payload")
+        .with_body("malicious larger payload")
+        .expect(1)
+        .create_async()
+        .await;
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("fixture.vsix"), b"old").unwrap();
+    let package = payload_package(format!("{}/payload", server.url()), b"new");
+    let result = fixture_downloader(true)
+        .download_packages(&[package], root.path(), "fixture")
+        .await;
+    assert!(matches!(
+        result,
+        Err(crate::MsvcKitError::HashMismatch { .. })
+    ));
+    assert_eq!(
+        std::fs::read(root.path().join("fixture.vsix")).unwrap(),
+        b"old"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn missing_authoritative_digest_keeps_strict_size_with_verification_enabled() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/payload")
+        .with_body("larger payload")
+        .expect(1)
+        .create_async()
+        .await;
+    let root = tempfile::tempdir().unwrap();
+    let mut package = payload_package(format!("{}/payload", server.url()), b"new");
+    package.payloads[0].sha256 = None;
+    let result = fixture_downloader(true)
+        .download_packages(&[package], root.path(), "fixture")
+        .await;
+    assert!(result.unwrap_err().to_string().contains("Size mismatch"));
+    assert!(!root.path().join("fixture.vsix").exists());
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn verification_disabled_cannot_reuse_a_size_exception_from_verified_cache() {
+    let mut server = mockito::Server::new_async().await;
+    let bytes = b"signed payload";
+    let mock = server
+        .mock("GET", "/payload")
+        .with_body(bytes)
+        .expect(2)
+        .create_async()
+        .await;
+    let root = tempfile::tempdir().unwrap();
+    let mut package = payload_package(format!("{}/payload", server.url()), bytes);
+    package.payloads[0].size = 3;
+    fixture_downloader(true)
+        .download_packages(std::slice::from_ref(&package), root.path(), "fixture")
+        .await
+        .unwrap();
+    let result = fixture_downloader(false)
+        .download_packages(&[package], root.path(), "fixture")
+        .await;
+    assert!(result.unwrap_err().to_string().contains("Size mismatch"));
+    assert_eq!(
+        std::fs::read(root.path().join("fixture.vsix")).unwrap(),
+        bytes
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn simultaneous_cache_users_serialize_before_opening_the_database() {
     let mut server = mockito::Server::new_async().await;
     let mock = server

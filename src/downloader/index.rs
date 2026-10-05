@@ -20,6 +20,7 @@ pub enum DownloadStatus {
 pub struct IndexEntry {
     pub file_name: String,
     pub url: String,
+    /// Declared manifest size, retained as part of source identity.
     pub size: u64,
     /// Expected SHA256 from manifest (may be None)
     pub sha256: Option<String>,
@@ -29,6 +30,7 @@ pub struct IndexEntry {
     pub local_path: PathBuf,
     pub status: DownloadStatus,
     #[serde(default)]
+    /// Actual bytes on disk for completed downloads.
     pub bytes_downloaded: u64,
     #[serde(default)]
     pub hash_verified: bool,
@@ -280,10 +282,15 @@ impl DownloadIndex {
         local_path: PathBuf,
         computed_hash: Option<String>,
     ) -> Result<()> {
+        let actual_size = tokio::fs::metadata(&local_path).await?.len();
         let identity_matches = self
             .get_entry(&payload.file_name)
             .await?
-            .is_some_and(|entry| entry.url == payload.url && entry.sha256 == payload.sha256);
+            .is_some_and(|entry| {
+                entry.url == payload.url
+                    && entry.sha256 == payload.sha256
+                    && entry.bytes_downloaded == actual_size
+            });
         if identity_matches
             && self
                 .is_entry_unchanged(
@@ -312,7 +319,7 @@ impl DownloadIndex {
             computed_hash,
             local_path,
             status: DownloadStatus::Completed,
-            bytes_downloaded: payload.size,
+            bytes_downloaded: actual_size,
             hash_verified,
             updated_at: Utc::now(),
         };

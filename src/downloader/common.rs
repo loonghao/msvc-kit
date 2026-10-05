@@ -302,7 +302,9 @@ async fn validated_cache_hash(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    if !metadata.is_file() || metadata.len() != payload.size {
+    if !metadata.is_file()
+        || (metadata.len() != payload.size && (!verify_hashes || payload.sha256.is_none()))
+    {
         return Ok(None);
     }
     if verify_hashes {
@@ -337,13 +339,11 @@ async fn download_single_payload_with_handler(
     if let Some(hash) =
         validated_cache_hash(payload, &file_path, cached.as_ref(), verify_hashes).await?
     {
-        if cached.is_none() {
-            index
-                .write()
-                .await
-                .mark_completed(payload, file_path.clone(), Some(hash))
-                .await?;
-        }
+        index
+            .write()
+            .await
+            .mark_completed(payload, file_path.clone(), Some(hash))
+            .await?;
         progress.on_progress(payload.size);
         progress.on_file_complete(&payload.file_name, "cached");
         return Ok(PayloadResult {
@@ -353,7 +353,7 @@ async fn download_single_payload_with_handler(
         });
     }
     progress.on_file_start(&payload.file_name, payload.size);
-    let hash =
+    let (hash, actual_size) =
         download_file_with_streaming_hash(client, payload, &file_path, progress, verify_hashes)
             .await?;
     index
@@ -364,7 +364,7 @@ async fn download_single_payload_with_handler(
     progress.on_file_complete(&payload.file_name, "downloaded");
     Ok(PayloadResult {
         path: file_path,
-        transferred: payload.size,
+        transferred: actual_size,
         outcome: PayloadOutcome::Downloaded,
     })
 }
@@ -376,7 +376,7 @@ async fn download_file_with_streaming_hash(
     path: &Path,
     progress: &BoxedProgressHandler,
     verify_hashes: bool,
-) -> Result<String> {
+) -> Result<(String, u64)> {
     let parent = path
         .parent()
         .ok_or_else(|| MsvcKitError::InstallPath("Payload has no cache directory".into()))?;
@@ -443,12 +443,6 @@ async fn download_file_with_streaming_hash(
         file.flush().await?;
         file.sync_all().await?;
         drop(file);
-        if downloaded != payload.size {
-            return Err(MsvcKitError::Other(format!(
-                "Size mismatch for {}: expected {}, received {}",
-                payload.file_name, payload.size, downloaded
-            )));
-        }
         let computed_hash = hex::encode(hasher.finalize());
         if verify_hashes {
             if let Some(expected) = &payload.sha256 {
@@ -461,10 +455,25 @@ async fn download_file_with_streaming_hash(
                 }
             }
         }
+        if downloaded != payload.size {
+            if !verify_hashes || payload.sha256.is_none() {
+                return Err(MsvcKitError::Other(format!(
+                    "Size mismatch for {}: expected {}, received {}",
+                    payload.file_name, payload.size, downloaded
+                )));
+            }
+            // Microsoft publishes some signed VSIX payloads with stale size
+            // metadata. A matching authoritative digest identifies the exact
+            // bytes; an index's previous digest alone cannot waive this check.
+            debug!(
+                "Verified {} SHA256 despite manifest size {} differing from actual {}",
+                payload.file_name, payload.size, downloaded
+            );
+        }
         temporary
             .persist(path)
             .map_err(|error| MsvcKitError::Io(error.error))?;
-        return Ok(computed_hash);
+        return Ok((computed_hash, downloaded));
     }
     Err(MsvcKitError::Other(format!(
         "Download failed for {} after {} retries",
