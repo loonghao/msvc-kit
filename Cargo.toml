@@ -41,7 +41,7 @@ reqwest = { version = "0.13.2", default-features = false, features = ["json", "s
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["raw_value"] }
 simd-json = "0.18"
 chrono = { version = "0.4", features = ["serde"] }
 toml = "1.0.0"
@@ -76,6 +76,7 @@ futures = "0.3"
 # SHA256 verification
 sha2 = "0.11"
 hex = "0.4"
+base64 = "0.22"
 tempfile = "3.25"
 
 # Self-update via axoupdater (optional, compatible with cargo-dist releases)
@@ -91,6 +92,7 @@ askama = "0.16.0"
 # Windows registry (Windows only)
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 
 [dev-dependencies]
 rstest = "0.27"

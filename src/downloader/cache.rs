@@ -171,6 +171,90 @@ pub async fn fetch_verified_bytes_with_cache(
     fingerprint_name: &str,
     expected_sha256: Option<&str>,
 ) -> Result<(Vec<u8>, bool)> {
+    fetch_with_integrity(
+        client,
+        url,
+        cache_file,
+        spinner,
+        label,
+        fingerprint_name,
+        ManifestIntegrity {
+            expected_sha256,
+            fresh_channel: None,
+        },
+    )
+    .await
+}
+
+/// Authenticate the catalog by its fresh channel digest or Microsoft's signed
+/// release. Cache validators are usable only after the same authentication.
+pub(super) async fn fetch_catalog_bytes_with_cache(
+    client: &reqwest::Client,
+    url: &str,
+    cache_file: &Path,
+    spinner: &ProgressBar,
+    label: &str,
+    fingerprint_name: &str,
+    source: (&str, &[u8]),
+) -> Result<(Vec<u8>, bool)> {
+    fetch_with_integrity(
+        client,
+        url,
+        cache_file,
+        spinner,
+        label,
+        fingerprint_name,
+        ManifestIntegrity {
+            expected_sha256: Some(source.0),
+            fresh_channel: Some(source.1),
+        },
+    )
+    .await
+}
+
+struct ManifestIntegrity<'a> {
+    expected_sha256: Option<&'a str>,
+    fresh_channel: Option<&'a [u8]>,
+}
+
+impl ManifestIntegrity<'_> {
+    async fn verify(&self, bytes: &[u8], name: &str) -> Result<()> {
+        let Some(expected) = self.expected_sha256 else {
+            return Ok(());
+        };
+        let actual = super::hash::compute_hash(bytes);
+        if actual.eq_ignore_ascii_case(expected) {
+            return Ok(());
+        }
+        if let Some(channel) = self.fresh_channel {
+            let catalog = bytes.to_vec();
+            let channel = channel.to_vec();
+            tokio::task::spawn_blocking(move || {
+                super::manifest_trust::verify_catalog(&catalog, &channel)
+            })
+            .await
+            .map_err(|error| MsvcKitError::Other(error.to_string()))??;
+            tracing::warn!(expected, actual, "Catalog digest differs from channel metadata; authenticated Microsoft signatures and matching release instead");
+            return Ok(());
+        }
+        Err(MsvcKitError::HashMismatch {
+            file: name.into(),
+            expected: expected.into(),
+            actual,
+        })
+    }
+}
+
+async fn fetch_with_integrity(
+    client: &reqwest::Client,
+    url: &str,
+    cache_file: &Path,
+    spinner: &ProgressBar,
+    label: &str,
+    fingerprint_name: &str,
+    integrity: ManifestIntegrity<'_>,
+) -> Result<(Vec<u8>, bool)> {
+    let expected_sha256 = integrity.expected_sha256;
     if expected_sha256.is_some_and(|digest| {
         digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
     }) {
@@ -202,10 +286,10 @@ pub async fn fetch_verified_bytes_with_cache(
                 && meta.name.as_deref() == Some(fingerprint_name)
                 && meta.size == Some(cached.len() as u64)
                 && meta.sha256.as_deref() == Some(digest.as_str())
-                && expected_sha256.is_some_and(|expected| digest.eq_ignore_ascii_case(expected))
+                && expected_sha256.is_some()
                 && (meta.etag.is_some() || meta.last_modified.is_some())
         });
-        if !valid {
+        if !valid || integrity.verify(cached, fingerprint_name).await.is_err() {
             cached_bytes = None;
         }
     }
@@ -229,7 +313,7 @@ pub async fn fetch_verified_bytes_with_cache(
             if resp.status().is_success() {
                 let headers = resp.headers().clone();
                 let bytes = download_response_bytes_with_progress(resp, spinner, label).await?;
-                verify_manifest_digest(&bytes, expected_sha256, fingerprint_name)?;
+                integrity.verify(&bytes, fingerprint_name).await?;
                 publish_cached_bytes(cache_file, &bytes).await?;
                 let size = bytes.len() as u64;
                 let meta = ManifestCacheMeta {
@@ -264,7 +348,7 @@ pub async fn fetch_verified_bytes_with_cache(
 
     let headers = resp.headers().clone();
     let bytes = download_response_bytes_with_progress(resp, spinner, label).await?;
-    verify_manifest_digest(&bytes, expected_sha256, fingerprint_name)?;
+    integrity.verify(&bytes, fingerprint_name).await?;
     publish_cached_bytes(cache_file, &bytes).await?;
 
     let size = bytes.len() as u64;
@@ -286,20 +370,6 @@ pub async fn fetch_verified_bytes_with_cache(
     let _ = write_meta(&meta_path, &meta).await;
 
     Ok((bytes, false))
-}
-
-fn verify_manifest_digest(bytes: &[u8], expected: Option<&str>, name: &str) -> Result<()> {
-    if let Some(expected) = expected {
-        let actual = super::hash::compute_hash(bytes);
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err(MsvcKitError::HashMismatch {
-                file: name.into(),
-                expected: expected.into(),
-                actual,
-            });
-        }
-    }
-    Ok(())
 }
 
 async fn publish_cached_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -375,6 +445,107 @@ pub async fn download_response_bytes_with_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "requires current Microsoft manifests and online certificate revocation"]
+    async fn signed_catalog_cache_reauthenticates_before_304_and_failed_refresh() {
+        let client = reqwest::Client::new();
+        let channel = client
+            .get("https://aka.ms/vs/17/release/channel")
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let parsed: super::super::manifest::ChannelManifest =
+            serde_json::from_slice(&channel).unwrap();
+        let source = &parsed
+            .channel_items
+            .iter()
+            .find(|item| item.id == "Microsoft.VisualStudio.Manifests.VisualStudio")
+            .unwrap()
+            .payloads[0];
+        let catalog = client
+            .get(&source.url)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        super::super::manifest_trust::verify_catalog(&catalog, &channel).unwrap();
+
+        let mut server = mockito::Server::new_async().await;
+        let full = server
+            .mock("GET", "/catalog")
+            .match_header("if-none-match", mockito::Matcher::Missing)
+            .with_header("ETag", "signed-release")
+            .with_body(&catalog)
+            .expect(2)
+            .create_async()
+            .await;
+        let conditional = server
+            .mock("GET", "/catalog")
+            .match_header("if-none-match", "signed-release")
+            .with_status(304)
+            .expect(1)
+            .create_async()
+            .await;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("VisualStudio.vsman");
+        let url = format!("{}/catalog", server.url());
+        // Force the alternative authentication path even if Microsoft repairs
+        // channel metadata. Neither this digest nor the mock server is trusted.
+        let mismatching = super::super::hash::compute_hash(b"different catalog");
+        let spinner = ProgressBar::hidden();
+        let (_, cached) = fetch_catalog_bytes_with_cache(
+            &client,
+            &url,
+            &path,
+            &spinner,
+            "catalog",
+            "VisualStudio.vsman",
+            (&mismatching, &channel),
+        )
+        .await
+        .unwrap();
+        assert!(!cached);
+        let (body, cached) = fetch_catalog_bytes_with_cache(
+            &client,
+            &url,
+            &path,
+            &spinner,
+            "catalog",
+            "VisualStudio.vsman",
+            (&mismatching, &channel),
+        )
+        .await
+        .unwrap();
+        assert!(cached);
+        assert_eq!(body.as_slice(), catalog.as_ref());
+        let mut invalid_channel = channel.to_vec();
+        invalid_channel[0] = b'[';
+        assert!(fetch_catalog_bytes_with_cache(
+            &client,
+            &url,
+            &path,
+            &spinner,
+            "catalog",
+            "VisualStudio.vsman",
+            (&mismatching, &invalid_channel)
+        )
+        .await
+        .is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), catalog.as_ref());
+        full.assert_async().await;
+        conditional.assert_async().await;
+    }
 
     #[test]
     fn test_url_basename() {

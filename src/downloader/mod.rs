@@ -7,6 +7,9 @@ pub mod hash;
 pub mod http;
 mod index;
 mod manifest;
+mod manifest_trust;
+#[cfg(windows)]
+mod manifest_trust_windows;
 mod msvc;
 pub mod progress;
 mod sdk;

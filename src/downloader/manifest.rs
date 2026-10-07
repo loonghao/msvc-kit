@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use super::cache::{
     create_spinner, default_manifest_cache_dir, fetch_bytes_with_cache,
-    fetch_verified_bytes_with_cache, meta_path_for, url_basename,
+    fetch_catalog_bytes_with_cache, meta_path_for, url_basename,
 };
 use super::channel_availability;
 use super::MsvcComponent;
@@ -354,14 +354,14 @@ impl VsManifest {
             manifest_file_name
         ));
 
-        let (manifest_bytes, vsman_cached) = fetch_verified_bytes_with_cache(
+        let (manifest_bytes, vsman_cached) = fetch_catalog_bytes_with_cache(
             &client,
             &manifest_url,
             &vsman_cache,
             &spinner,
             &download_label,
             &manifest_file_name,
-            Some(manifest_sha256),
+            (manifest_sha256, &channel_bytes),
         )
         .await
         .map_err(classify_transport_error)?;

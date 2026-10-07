@@ -14,15 +14,16 @@ reviewer's approval. CI and independent approval remain required before merge.
    `src/downloader/cache.rs` accepted a body whose SHA matched its neighboring
    metadata file, then reused it after a server 304. Altering both files while
    retaining the original ETag reproduced acceptance of the altered body.
-   Channels now always require a fresh full response. Package manifest cache
-   reuse requires the digest supplied by that fresh channel as well as the
-   local consistency checks. Network and digest failures return errors.
+   The initial correction required a fresh full channel response and its digest
+   for package manifest cache reuse, in addition to local consistency checks.
+   Network and digest failures returned errors. The authenticated Windows
+   alternative added on 2026-10-08 is described below.
 2. **P1: the channel's package manifest SHA was ignored.**
    `src/downloader/manifest.rs` fetched and parsed a valid JSON manifest even
    when its SHA differed from the freshly served channel payload. A fixture
-   reproduced this. The digest is now mandatory and checked before cache
-   publication or parsing. Existing valid cache bytes survive a failed refresh
-   but are not returned as a successful result.
+   reproduced this. The initial correction made the channel digest mandatory
+   before cache publication or parsing. Existing valid cache bytes survived a
+   failed refresh but were not returned as a successful result.
 3. **P1: an absent explicit configuration selected defaults.**
    `--config` and `MSVC_KIT_CONFIG` with a nonexistent file exited successfully
    and selected the default root. Missing files now fail before operational
@@ -52,7 +53,7 @@ The corrected CLI source commit is
 The two initial manifest regressions failed on the frozen input before the
 corrections. Raw logs and test cache paths are excluded from public files.
 
-## New upstream integrity blocker
+## Upstream mismatch observed on 2026-10-05
 
 A fresh VS17 channel advertised the following package manifest:
 
@@ -65,16 +66,50 @@ A fresh VS17 channel advertised the following package manifest:
 
 The direct official URL, an identity-encoding/no-cache request, and a cache-bypass
 query returned the same mismatching bytes. There was no Content-Encoding header.
-The file contains signature metadata, but this task has not verified its signing
-format and trust chain. A computed hash or unverified signature is not an override
-for the declared digest. The updated acquisition path fails closed on this input.
+At that point, the file's signing format and trust chain had not been verified.
+A computed hash or unverified signature could not override the declared digest.
+The initial corrected acquisition path therefore failed closed on this input.
 
 `manifest-integrity-evidence.json` records only public source URLs, byte counts
-and hashes. This prevents claiming fresh acquisition, all ABI checks, or merge
-readiness until an authoritative matching source or independently validated
-equivalent integrity proof is available. The earlier x64 wheel's numerical smoke
+and hashes. Those results did not establish fresh acquisition, all ABI checks, or
+merge readiness. They required an authoritative matching source or independently
+validated equivalent integrity proof. The earlier x64 wheel's numerical smoke
 test remains a functional result for the prior candidate; it does not prove this
 new channel-to-manifest integrity boundary.
+
+## Signed-manifest resolution added on 2026-10-08
+
+Matching the fresh channel's SHA256 remains the standard authentication path.
+For a mismatching package catalog, the Windows-only alternative verifies the
+original SHA256/RSA signatures of both the fresh channel and catalog. Windows
+must validate each signer's current code-signing chain, explicit Code Signing
+EKU, Microsoft publisher CN and organization, and revocation status. Unavailable
+revocation information fails closed. The chain must end at Microsoft Root
+Certificate Authority 2011, pinned by DER SHA256:
+`847df6a78497943f27fc72eb93f9a637320a02b561d0a91b09e87a7807ed7c61`.
+The root certificate is independently published by
+[Microsoft PKI](https://www.microsoft.com/pki/certs/MicRooCerAut2011_2011_03_22.crt).
+
+The catalog must match the authenticated channel's `buildVersion`, channel item
+version, `productLine` and `productSemanticVersion`, with the expected
+`manifestType` and `manifestName`. Cached fallback bytes repeat the signature,
+current certificate trust and release-identity checks before 304 reuse. The
+implementation uses native Windows cryptography without an external process or
+additional DLL. Other platforms continue rejecting a catalog digest mismatch.
+Individual package SHA256 verification is unchanged.
+
+This replaces the earlier digest-only acquisition gate with an independently
+authenticated alternative; it does not assert that current PR-head CI has passed.
+Fresh acquisition, the Action matrix and Bundle validation must succeed on the
+exact candidate before merge.
+
+Local validation with Rust 1.93.1 passed the complete all-features test suite,
+including 23 doctests. A live-cache test using real Microsoft VS17 signed
+documents passed the initial 200 download, signature revalidation before 304
+reuse, and rejection of an invalid fresh channel while preserving the previous
+cache. VitePress documentation also built successfully. These local results do
+not establish current PR-head CI success; Clippy validation was still running
+when this evidence was recorded.
 
 ## Independent receipt review follow-up
 
@@ -104,13 +139,17 @@ The new receipt regressions first failed on the frozen v1 source. The corrected
 lock suite covers unchecked entries, absent/malformed expected hashes, stale
 computed hashes, same-size archive mutation, partial/empty payload sets, v1
 rejection, preservation after failure, and matching official SHA with stale size.
-The current official manifest mismatch remains a separate external gate.
+At that stage the official manifest mismatch remained an acquisition gate; the
+2026-10-08 signed-manifest resolution above addresses that separate boundary.
 
 Validation used Rust 1.93.1 and a single compiler worker: the lock/receipt suite
 passed 7 tests, doctor passed 7, and execution passed 3. Locked Clippy for the
 library, CLI and lock tests passed with warnings denied; formatting passed.
 
 ## PR history and merge gates
+
+The following records the earlier continuation and its gates, before the
+2026-10-08 signed-manifest implementation.
 
 The first approved continuation CI run reproduced the official manifest SHA
 mismatch in action/bundle acquisition. Rust and coverage also exposed a legacy
@@ -140,8 +179,9 @@ main `21797949b9fe0d425b35a390fddb553a9632b5d7`; preserve the remote head as an
 ancestor. Fetch and compare again immediately before each ordinary push. A remote
 change must be reconciled, reviewed and tested. Never force-push.
 
-Only #176 and #97 are approved for remote updates. No release, tag, repository
-security change or global toolchain change is part of this work. Do not merge
+The scope recorded for that review approved only #176 and #97 for remote updates.
+No release, tag, repository security change or global toolchain change was part
+of that work. Do not merge
 with a failing integrity check, untested required ABI, or missing independent
 review. Other PRs inherit the shared migration only after its approved landing;
 their coverage is recorded in py-dem-bones' PR matrix and rollout report.
