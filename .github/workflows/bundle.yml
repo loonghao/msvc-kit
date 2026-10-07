@@ -23,6 +23,7 @@ on:
       - "src/lib.rs"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "tests/bundle-contract-tests.ps1"
       - ".github/workflows/bundle.yml"
 
 permissions:
@@ -42,6 +43,10 @@ jobs:
       BUNDLE_ARCH: ${{ inputs.arch || 'x64' }}
     steps:
       - uses: actions/checkout@v7
+
+      - name: Check bundle activation contracts
+        shell: pwsh
+        run: ./tests/bundle-contract-tests.ps1
 
       - name: Setup vx
         uses: loonghao/vx@v0.9.34
@@ -165,9 +170,11 @@ jobs:
           if ($env:VSCMD_ARG_HOST_ARCH -ne 'x64' -or $env:VSCMD_ARG_TGT_ARCH -ne $env:BUNDLE_ARCH) {
             throw 'PowerShell activation selected incorrect architectures'
           }
-          $compiler = (Get-Command cl.exe -CommandType Application -ErrorAction Stop).Source
-          if (-not [string]::Equals($compiler, $env:BUNDLE_CL, [StringComparison]::OrdinalIgnoreCase)) {
-            throw 'PowerShell activation did not select the extracted bundle compiler'
+          $compiler = (Get-Command cl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          $actualCompiler = [IO.Path]::GetFullPath($compiler)
+          $expectedCompiler = [IO.Path]::GetFullPath($env:BUNDLE_CL)
+          if (-not [string]::Equals($actualCompiler, $expectedCompiler, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "PowerShell activation selected '$actualCompiler'; expected '$expectedCompiler'"
           }
           & $compiler /?
           if ($LASTEXITCODE -ne 0) { throw 'Activated compiler failed' }
