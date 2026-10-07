@@ -15,6 +15,10 @@ on:
       - "src/downloader/**"
       - "src/installer/**"
       - "src/env/**"
+      - "src/toolchain/**"
+      - "src/doctor/**"
+      - "src/scripts/**"
+      - "templates/**"
       - "src/version/**"
       - "src/lib.rs"
       - "Cargo.toml"
@@ -51,15 +55,22 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup tools (vx)
-        run: vx setup
+        shell: pwsh
+        run: |
+          vx setup
+          if ($LASTEXITCODE -ne 0) { throw 'Tool setup failed' }
 
       - name: Add Rust components
-        run: vx rustup component add clippy rustfmt
+        shell: pwsh
+        run: |
+          vx rustup component add clippy rustfmt
+          if ($LASTEXITCODE -ne 0) { throw 'Rust component setup failed' }
 
       - name: Setup MSVC Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
         with:
-          arch: ${{ inputs.arch == 'x86' && 'x86' || inputs.arch == 'arm64' && 'amd64_arm64' || 'amd64' }}
+          # The CLI runs on the x64 runner; BUNDLE_ARCH selects its output target.
+          arch: amd64
 
       - name: Fix MSVC linker (remove Git's link.exe)
         run: Remove-Item 'C:\Program Files\Git\usr\bin\link.exe' -Force -ErrorAction SilentlyContinue
@@ -71,7 +82,10 @@ jobs:
           shared-key: bundle-${{ inputs.arch || 'x64' }}
 
       - name: Build msvc-kit (release)
-        run: vx just build-release-locked
+        shell: pwsh
+        run: |
+          vx just build-release-locked
+          if ($LASTEXITCODE -ne 0) { throw 'CLI build failed' }
 
       - name: Create bundle with msvc-kit
         shell: pwsh
@@ -80,7 +94,9 @@ jobs:
           & ".\target\release\msvc-kit.exe" bundle `
             --accept-license `
             --arch $env:BUNDLE_ARCH `
+            --host-arch x64 `
             --output $bundleDir
+          if ($LASTEXITCODE -ne 0) { throw 'Bundle creation failed' }
           
           # Verify bundle structure (new layout without runtime/ subdirectory)
           if (-not (Test-Path "$bundleDir\setup.bat")) {
@@ -98,31 +114,82 @@ jobs:
           
           Write-Host "✅ Bundle structure validated"
 
+      - name: Validate extracted toolchain selection and compilation
+        shell: pwsh
+        run: |
+          $bundleDir = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'test-bundle'))
+          $selection = @('--dir', $bundleDir, '--arch', $env:BUNDLE_ARCH, '--host-arch', 'x64')
+          $queryJson = & .\target\release\msvc-kit.exe query @selection --format json | Out-String
+          if ($LASTEXITCODE -ne 0) { throw 'Bundle toolchain query failed' }
+          $query = $queryJson | ConvertFrom-Json
+          if ($query.arch -ne $env:BUNDLE_ARCH -or $query.host_arch -ne 'x64') {
+            throw 'Bundle query selected incorrect host/target architectures'
+          }
+          $compiler = [IO.Path]::GetFullPath($query.tools.cl)
+          $bundlePrefix = $bundleDir.TrimEnd('\') + '\'
+          if (-not $compiler.StartsWith($bundlePrefix, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
+            throw 'Selected compiler is not inside the extracted bundle'
+          }
+          $sdkBin = Join-Path $bundleDir "Windows Kits\10\bin\$($query.sdk.version)\x64"
+          foreach ($tool in @('rc', 'mt')) {
+            $expected = Join-Path $sdkBin "$tool.exe"
+            if (-not [string]::Equals([IO.Path]::GetFullPath($query.tools.$tool), $expected, [StringComparison]::OrdinalIgnoreCase)) {
+              throw "Bundle selected incorrect SDK host tool: $tool"
+            }
+          }
+          & .\target\release\msvc-kit.exe doctor @selection --compile
+          if ($LASTEXITCODE -ne 0) { throw 'Extracted bundle compile probe failed' }
+          "BUNDLE_CL=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Validate setup.bat activates environment
         shell: cmd
         run: |
-          cd test-bundle
+          cd /d "%GITHUB_WORKSPACE%\test-bundle"
+          if not "%errorlevel%"=="0" exit /b %errorlevel%
           call setup.bat
+          if not "%errorlevel%"=="0" exit /b %errorlevel%
+          if /i not "%VSCMD_ARG_HOST_ARCH%"=="x64" exit /b 1
+          if /i not "%VSCMD_ARG_TGT_ARCH%"=="%BUNDLE_ARCH%" exit /b 1
+          for %%I in (cl.exe) do if /i not "%%~$PATH:I"=="%BUNDLE_CL%" exit /b 1
           where cl
+          if not "%errorlevel%"=="0" exit /b %errorlevel%
           cl /?
+          if not "%errorlevel%"=="0" exit /b %errorlevel%
 
       - name: Validate setup.ps1 activates environment
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           Set-Location test-bundle
           . .\setup.ps1
-          Get-Command cl
-          cl /?
+          if ($env:VSCMD_ARG_HOST_ARCH -ne 'x64' -or $env:VSCMD_ARG_TGT_ARCH -ne $env:BUNDLE_ARCH) {
+            throw 'PowerShell activation selected incorrect architectures'
+          }
+          $compiler = (Get-Command cl.exe -CommandType Application -ErrorAction Stop).Source
+          if (-not [string]::Equals($compiler, $env:BUNDLE_CL, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'PowerShell activation did not select the extracted bundle compiler'
+          }
+          & $compiler /?
+          if ($LASTEXITCODE -ne 0) { throw 'Activated compiler failed' }
 
       - name: Test simple compilation
         shell: cmd
         run: |
-          cd test-bundle
+          cd /d "%GITHUB_WORKSPACE%\test-bundle"
+          if not "%errorlevel%"=="0" exit /b %errorlevel%
           call setup.bat
+          if not "%errorlevel%"=="0" exit /b %errorlevel%
+          for %%I in (cl.exe) do if /i not "%%~$PATH:I"=="%BUNDLE_CL%" exit /b 1
           echo int main() { return 0; } > test.c
           cl /nologo test.c
+          if not "%errorlevel%"=="0" exit /b %errorlevel%
+          if /i not "%BUNDLE_ARCH%"=="x64" goto cross_compiled
           test.exe
+          if not "%errorlevel%"=="0" exit /b %errorlevel%
           echo ✅ Compilation test passed
+          exit /b 0
+          :cross_compiled
+          echo ✅ Cross-compilation test passed; target executable was not run on the x64 host
 
       # Note: Bundle is NOT uploaded to releases due to Microsoft license restrictions.
       # Users should run `msvc-kit bundle --accept-license` locally to create their own bundle.
