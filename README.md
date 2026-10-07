@@ -14,6 +14,8 @@
 
 A portable MSVC Build Tools installer and manager for Rust/Windows.
 
+Selected versions now flow consistently through activation, queries, `doctor`, `run`, locks and Ninja/CMake files. See [toolchain contracts](docs/guide/toolchain-contracts.md) for diagnostics, JSON/exit behavior, acquisition receipts and DCC consumer boundaries. These additions require a binary built from this revision until included in a release.
+
 ### TL;DR
 
 ```bash
@@ -34,7 +36,7 @@ msvc-kit setup --script --shell powershell | Invoke-Expression
 - **Auto environment setup** for immediate use (cc-rs compatible)
 - **Version management** for host/target architectures (x64, x86, arm64, arm)
 - **Library API** for programmatic usage
-- **Resumable downloads** with redb-based index for fast skip
+- **Atomic downloads** with a redb index and verified cache reuse
 - **Manifest caching** with ETag/Last-Modified conditional requests
 - **TLS backend** uses `native-tls` (Windows schannel) to avoid `rustls`/`awslc-sys` build issues
 - **Multi-format extraction** (VSIX, MSI, CAB)

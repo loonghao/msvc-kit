@@ -1492,6 +1492,7 @@ dependencies = [
  "askama",
  "async-trait",
  "axoupdater",
+ "base64 0.22.1",
  "bincode",
  "cab",
  "chrono",
@@ -1515,6 +1516,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "windows-sys 0.61.2",
  "winreg",
  "zip",
 ]

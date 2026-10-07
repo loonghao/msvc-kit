@@ -1,5 +1,9 @@
 # GitHub Action
 
+The action consumes `query` JSON as its environment source and validates selected tools with a compile probe. `host-arch` is forwarded through acquisition and query. Cross-compilation requires a CLI supporting host selection; unsupported older releases fail clearly. MSVC-only and SDK-only outputs omit the other component.
+
+Release bootstrap discovers the actual executable asset in GitHub release metadata and checks its SHA256 digest. `msvc-kit-path` can select an explicitly trusted executable, including a source build. `vs-channel` selects package discovery and `lockfile` enables exact selection/source verification with a capable CLI. See [toolchain contracts](./toolchain-contracts.md).
+
 msvc-kit provides an official GitHub Action for easily setting up the MSVC build environment in CI/CD pipelines.
 
 ## Basic Usage

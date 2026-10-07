@@ -16,30 +16,38 @@ set "VCToolsInstallDir=%BUNDLE_ROOT%\VC\Tools\MSVC\{{ msvc_version }}"
 set "VCToolsVersion={{ msvc_version }}"
 
 REM SDK paths
+{% if !sdk_version.is_empty() %}
 set "WindowsSdkDir=%BUNDLE_ROOT%\Windows Kits\10"
 set "WindowsSDKVersion={{ sdk_version }}\"
 set "WindowsSdkBinPath=%BUNDLE_ROOT%\Windows Kits\10\bin\{{ sdk_version }}"
+{% endif %}
 
 REM INCLUDE paths
 set "INCLUDE=%BUNDLE_ROOT%\VC\Tools\MSVC\{{ msvc_version }}\include"
+{% if !sdk_version.is_empty() %}
 set "INCLUDE=%INCLUDE%;%BUNDLE_ROOT%\Windows Kits\10\Include\{{ sdk_version }}\ucrt"
 set "INCLUDE=%INCLUDE%;%BUNDLE_ROOT%\Windows Kits\10\Include\{{ sdk_version }}\shared"
 set "INCLUDE=%INCLUDE%;%BUNDLE_ROOT%\Windows Kits\10\Include\{{ sdk_version }}\um"
 set "INCLUDE=%INCLUDE%;%BUNDLE_ROOT%\Windows Kits\10\Include\{{ sdk_version }}\winrt"
 set "INCLUDE=%INCLUDE%;%BUNDLE_ROOT%\Windows Kits\10\Include\{{ sdk_version }}\cppwinrt"
+{% endif %}
 
 REM LIB paths
 set "LIB=%BUNDLE_ROOT%\VC\Tools\MSVC\{{ msvc_version }}\lib\{{ arch }}"
+{% if !sdk_version.is_empty() %}
 set "LIB=%LIB%;%BUNDLE_ROOT%\Windows Kits\10\Lib\{{ sdk_version }}\ucrt\{{ arch }}"
 set "LIB=%LIB%;%BUNDLE_ROOT%\Windows Kits\10\Lib\{{ sdk_version }}\um\{{ arch }}"
+{% endif %}
 
 REM PATH additions
 set "PATH=%BUNDLE_ROOT%\VC\Tools\MSVC\{{ msvc_version }}\bin\{{ host_arch }}\{{ target_arch }};%PATH%"
-set "PATH=%BUNDLE_ROOT%\Windows Kits\10\bin\{{ sdk_version }}\{{ arch }};%PATH%"
+{% if !sdk_version.is_empty() %}
+set "PATH=%BUNDLE_ROOT%\Windows Kits\10\bin\{{ sdk_version }}\{{ host_name }};%PATH%"
+{% endif %}
 
 REM Platform info
 set "Platform={{ arch }}"
-set "VSCMD_ARG_HOST_ARCH={{ arch }}"
+set "VSCMD_ARG_HOST_ARCH={{ host_name }}"
 set "VSCMD_ARG_TGT_ARCH={{ arch }}"
 
 REM End local and export variables
@@ -47,9 +55,11 @@ endlocal & (
     set "VCINSTALLDIR=%VCINSTALLDIR%"
     set "VCToolsInstallDir=%VCToolsInstallDir%"
     set "VCToolsVersion=%VCToolsVersion%"
+{% if !sdk_version.is_empty() %}
     set "WindowsSdkDir=%WindowsSdkDir%"
     set "WindowsSDKVersion=%WindowsSDKVersion%"
     set "WindowsSdkBinPath=%WindowsSdkBinPath%"
+{% endif %}
     set "INCLUDE=%INCLUDE%"
     set "LIB=%LIB%"
     set "PATH=%PATH%"

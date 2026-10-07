@@ -61,6 +61,7 @@ fn test_tool_paths_reexport() {
         ml64: None,
         nmake: None,
         rc: None,
+        mt: None,
     };
 }
 

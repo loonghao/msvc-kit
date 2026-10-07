@@ -11,7 +11,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::cache::{
-    create_spinner, default_manifest_cache_dir, fetch_bytes_with_cache, meta_path_for, url_basename,
+    create_spinner, default_manifest_cache_dir, fetch_bytes_with_cache,
+    fetch_catalog_bytes_with_cache, meta_path_for, url_basename,
 };
 use super::channel_availability;
 use super::MsvcComponent;
@@ -329,6 +330,16 @@ impl VsManifest {
             })
             .unwrap_or_else(|| url_basename(&manifest_url));
 
+        let manifest_sha256 = manifest_item
+            .payloads
+            .first()
+            .and_then(|payload| payload.sha256.as_deref())
+            .ok_or_else(|| {
+                MsvcKitError::Config(
+                    "The fresh channel did not supply a package manifest SHA256".into(),
+                )
+            })?;
+
         tracing::info!(
             "VS package manifest: {} ({})",
             manifest_file_name,
@@ -343,13 +354,14 @@ impl VsManifest {
             manifest_file_name
         ));
 
-        let (manifest_bytes, vsman_cached) = fetch_bytes_with_cache(
+        let (manifest_bytes, vsman_cached) = fetch_catalog_bytes_with_cache(
             &client,
             &manifest_url,
             &vsman_cache,
             &spinner,
             &download_label,
             &manifest_file_name,
+            (manifest_sha256, &channel_bytes),
         )
         .await
         .map_err(classify_transport_error)?;
@@ -428,7 +440,7 @@ impl VsManifest {
             })
             .collect();
 
-        versions.sort();
+        versions.sort_by(|left, right| crate::version::compare_versions(left, right));
         versions.dedup();
         versions.last().cloned()
     }
@@ -442,7 +454,7 @@ impl VsManifest {
             .filter_map(|pkg| pkg.id.split('_').nth(1).and_then(normalize_sdk_version))
             .collect();
 
-        versions.sort();
+        versions.sort_by(|left, right| crate::version::compare_versions(left, right));
         versions.dedup();
         versions.last().cloned()
     }
@@ -621,11 +633,9 @@ impl VsManifest {
                         // Allow: matching target, neutral, or x86 when targeting x64
                         chip == target || chip == "neutral" || (chip == "x86" && target == "x64")
                     })
-                    .unwrap_or_else(|| {
-                        // If no chip field, check if package ID has architecture info
-                        // If ID also has no architecture, it's likely a neutral/common package
-                        !has_arch_in_id
-                    })
+                    // Architecture suffixes were already checked above. An
+                    // absent chip field must not reject a matching ID suffix.
+                    .unwrap_or(true)
             })
             .map(|pkg| self.vs_package_to_package(pkg))
             .collect()
@@ -647,7 +657,7 @@ impl VsManifest {
             })
             .collect();
 
-        versions.sort();
+        versions.sort_by(|left, right| crate::version::compare_versions(left, right));
         versions.dedup();
         versions
     }
@@ -661,7 +671,7 @@ impl VsManifest {
             .filter_map(|pkg| pkg.id.split('_').nth(1).and_then(normalize_sdk_version))
             .collect();
 
-        versions.sort();
+        versions.sort_by(|left, right| crate::version::compare_versions(left, right));
         versions.dedup();
         versions
     }
@@ -688,7 +698,7 @@ impl VsManifest {
             .map(|pkg| pkg.version.clone())
             .collect();
 
-        matching_versions.sort();
+        matching_versions.sort_by(|left, right| crate::version::compare_versions(left, right));
         matching_versions.dedup();
 
         // Return the latest matching version
@@ -713,9 +723,10 @@ impl VsManifest {
         }
 
         // Try to match by build number
-        versions.into_iter().find(|v| {
-            v.contains(prefix) || v.split('.').nth(2).map(|b| b == prefix).unwrap_or(false)
-        })
+        versions
+            .into_iter()
+            .filter(|version| crate::version::version_matches(version, prefix))
+            .max_by(|left, right| crate::version::compare_versions(left, right))
     }
 
     fn vs_package_to_package(&self, pkg: &VsPackage) -> Package {
@@ -1555,12 +1566,13 @@ mod tests {
                         "version": "18.0.0",
                         "type": "Manifest",
                         "payloads": [
-                            {{ "fileName": "VisualStudio.vsman", "url": "{}", "size": 64 }}
+                            {{ "fileName": "VisualStudio.vsman", "url": "{}", "size": 64, "sha256": "{}" }}
                         ]
                     }}
                 ]
             }}"#,
-            vsman_url
+            vsman_url,
+            super::super::hash::compute_hash(vs_manifest_body().as_bytes())
         )
     }
 

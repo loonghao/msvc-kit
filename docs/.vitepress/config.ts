@@ -51,6 +51,7 @@ export default defineConfig({
                 { text: '配置', link: '/zh/guide/cli-config' },
                 { text: '列表和清理（英文）', link: '/guide/cli-list-clean' },
                 { text: '查询', link: '/zh/guide/cli-query' },
+                { text: '工具链契约', link: '/zh/guide/toolchain-contracts' },
               ],
             },
             {
@@ -120,6 +121,7 @@ export default defineConfig({
             { text: 'Configuration', link: '/guide/cli-config' },
             { text: 'List & Clean', link: '/guide/cli-list-clean' },
             { text: 'Query', link: '/guide/cli-query' },
+            { text: 'Toolchain Contracts', link: '/guide/toolchain-contracts' },
           ],
         },
         {

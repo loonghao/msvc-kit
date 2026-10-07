@@ -10,6 +10,48 @@ const CACHE_DIR_LABEL: &str = "Cache directory: ";
 const CONFIG_ENV_VAR: &str = "MSVC_KIT_CONFIG";
 const PORTABLE_ENV_VAR: &str = "MSVC_KIT_PORTABLE";
 
+#[test]
+fn invalid_explicit_config_fails_without_default_fallback() {
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("invalid.toml");
+    std::fs::write(&config, "{\"install_dir\":\"unexpected\"}").unwrap();
+    for through_flag in [true, false] {
+        let mut command = msvc_kit();
+        if through_flag {
+            command.arg("--config").arg(&config);
+        } else {
+            command.env(CONFIG_ENV_VAR, &config);
+        }
+        let output = command.arg("config").output().unwrap();
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("invalid configuration file"));
+        assert!(!error.contains("using default configuration"));
+        assert!(!root.path().join("unexpected").exists());
+    }
+}
+
+/// Run the CLI with a clean configuration environment
+#[test]
+fn missing_explicit_config_fails_without_default_fallback() {
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("absent.toml");
+    for through_flag in [true, false] {
+        let mut command = msvc_kit();
+        if through_flag {
+            command.arg("--config").arg(&config);
+        } else {
+            command.env(CONFIG_ENV_VAR, &config);
+        }
+        let output = command.arg("config").output().unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr)
+            .contains("Explicit configuration file is missing"));
+        assert!(output.stdout.is_empty());
+        assert!(!config.exists());
+    }
+}
+
 /// Run the CLI with a clean configuration environment
 fn msvc_kit() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_msvc-kit"));

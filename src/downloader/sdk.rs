@@ -9,6 +9,38 @@ use super::{
 };
 use crate::error::{MsvcKitError, Result};
 use crate::installer::InstallInfo;
+use crate::version::Architecture;
+
+fn select_sdk_version(manifest: &VsManifest, requested: Option<&str>) -> Result<String> {
+    let version = match requested {
+        Some(requested) => manifest.resolve_sdk_version(requested),
+        None => manifest.get_latest_sdk_version(),
+    };
+    version.ok_or_else(|| {
+        MsvcKitError::VersionNotFound(format!(
+            "Windows SDK selector {:?} not found. Available: {:?}",
+            requested,
+            manifest.list_sdk_versions()
+        ))
+    })
+}
+
+fn sdk_packages(
+    manifest: &VsManifest,
+    version: &str,
+    target: &str,
+    host: &str,
+) -> Vec<super::Package> {
+    let mut packages = manifest.find_sdk_packages(version, target);
+    if target != host {
+        for package in manifest.find_sdk_packages(version, host) {
+            if !packages.iter().any(|existing| existing.id == package.id) {
+                packages.push(package);
+            }
+        }
+    }
+    packages
+}
 
 /// Windows SDK downloader
 pub struct SdkDownloader {
@@ -43,22 +75,17 @@ impl SdkDownloader {
         let (manifest, channel) = VsManifest::fetch_with_selection(selection, &cache_dir).await?;
         tracing::debug!("Using {} for package discovery", channel);
 
-        let available_versions = manifest.list_sdk_versions();
-        let version = self
-            .downloader
-            .options
-            .sdk_version
-            .clone()
-            .or_else(|| manifest.get_latest_sdk_version())
-            .ok_or_else(|| {
-                MsvcKitError::VersionNotFound(format!(
-                    "No Windows SDK version found. Available: {:?}",
-                    available_versions
-                ))
-            })?;
+        let version =
+            select_sdk_version(&manifest, self.downloader.options.sdk_version.as_deref())?;
 
         let target_arch = self.downloader.options.arch.to_string();
-        let packages = manifest.find_sdk_packages(&version, &target_arch);
+        let host_arch = self
+            .downloader
+            .options
+            .host_arch
+            .unwrap_or(Architecture::host())
+            .to_string();
+        let packages = sdk_packages(&manifest, &version, &target_arch, &host_arch);
 
         let file_count: usize = packages.iter().map(|p| p.payloads.len()).sum();
         let total_size: u64 = packages.iter().map(|p| p.total_size).sum();
@@ -118,18 +145,8 @@ impl SdkDownloader {
         tracing::debug!("Available SDK versions: {:?}", available_versions);
 
         // Determine version to download
-        let version = self
-            .downloader
-            .options
-            .sdk_version
-            .clone()
-            .or_else(|| manifest.get_latest_sdk_version())
-            .ok_or_else(|| {
-                MsvcKitError::VersionNotFound(format!(
-                    "No Windows SDK version found. Available: {:?}",
-                    available_versions
-                ))
-            })?;
+        let version =
+            select_sdk_version(&manifest, self.downloader.options.sdk_version.as_deref())?;
 
         tracing::info!("Selected Windows SDK version: {}", version);
 
@@ -139,7 +156,13 @@ impl SdkDownloader {
         tracing::info!("Target architecture: {}", target_arch);
 
         // Find packages to download
-        let packages = manifest.find_sdk_packages(&version, &target_arch);
+        let host_arch = self
+            .downloader
+            .options
+            .host_arch
+            .unwrap_or(Architecture::host())
+            .to_string();
+        let packages = sdk_packages(&manifest, &version, &target_arch, &host_arch);
 
         if packages.is_empty() {
             return Err(MsvcKitError::ComponentNotFound(format!(
@@ -242,5 +265,65 @@ mod tests {
         // Verify manifest_cache_dir uses the injected cache manager
         let cache_dir = downloader.downloader.manifest_cache_dir();
         assert_eq!(cache_dir, temp_dir.path().join("manifests"));
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+    use crate::downloader::manifest::VsPackage;
+    use std::collections::HashMap;
+
+    fn manifest() -> VsManifest {
+        let packages = [
+            "Win11SDK_10.0.26100_x64",
+            "Win11SDK_10.0.26100_arm64",
+            "Win11SDK_10.0.26100_neutral",
+        ]
+        .into_iter()
+        .map(|id| VsPackage {
+            id: id.into(),
+            version: "10.0.26100.0".into(),
+            package_type: "MSI".into(),
+            chip: None,
+            language: None,
+            payloads: vec![],
+            dependencies: HashMap::new(),
+            machine_arch: None,
+            product_arch: None,
+        })
+        .collect();
+        VsManifest {
+            manifest_version: "1".into(),
+            engine_version: None,
+            packages,
+        }
+    }
+
+    #[test]
+    fn cross_sdk_selection_includes_host_tools_and_target_components_once() {
+        let selected = sdk_packages(&manifest(), "10.0.26100.0", "arm64", "x64");
+        assert_eq!(selected.len(), 3);
+        assert!(selected.iter().any(|package| package.id.ends_with("_x64")));
+        assert!(selected
+            .iter()
+            .any(|package| package.id.ends_with("_arm64")));
+        assert_eq!(
+            selected
+                .iter()
+                .filter(|package| package.id.ends_with("_neutral"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn sdk_selectors_require_complete_version_components() {
+        assert_eq!(
+            select_sdk_version(&manifest(), Some("26100")).unwrap(),
+            "10.0.26100.0"
+        );
+        assert!(select_sdk_version(&manifest(), Some("6100")).is_err());
+        assert!(select_sdk_version(&manifest(), Some("10.0.26")).is_err());
     }
 }

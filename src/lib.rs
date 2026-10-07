@@ -84,13 +84,18 @@
 pub mod bundle;
 pub mod config;
 pub mod constants;
+pub mod doctor;
 pub mod downloader;
 pub mod env;
 pub mod error;
+pub mod execution;
 pub mod install_into_vs;
 pub mod installer;
 pub mod query;
 pub mod scripts;
+mod storage;
+pub mod toolchain;
+pub mod toolchain_lock;
 pub mod version;
 pub mod vs_channel;
 
@@ -100,6 +105,7 @@ pub use config::{
     get_config_path, is_portable_mode, load_config, save_config, set_config_path_override,
     MsvcKitConfig, CONFIG_ENV_VAR, CONFIG_FILE_NAME, PORTABLE_ENV_VAR, PORTABLE_MARKER_FILE,
 };
+pub use doctor::{doctor, DoctorCheck, DoctorOptions, DoctorReport, DoctorStatus};
 pub use downloader::{
     download_all, download_msvc, download_sdk, list_available_versions,
     list_available_versions_with_selection, AvailableVersions, BoxedCacheManager,
@@ -117,6 +123,7 @@ pub use scripts::{
     generate_absolute_scripts, generate_portable_scripts, generate_script, save_scripts,
     GeneratedScripts, ScriptContext, ShellType,
 };
+pub use toolchain::{resolve_toolchain, ToolchainRequest};
 pub use version::{Architecture, MsvcVersion, SdkVersion};
 pub use vs_channel::{
     known_channels, parse_channel_selector, VsChannelEntry, VsChannelSelection, VsChannelSpec,

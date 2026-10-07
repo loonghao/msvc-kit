@@ -11,37 +11,39 @@ $env:VCToolsInstallDir = "$BundleRoot\VC\Tools\MSVC\{{ msvc_version }}"
 $env:VCToolsVersion = "{{ msvc_version }}"
 
 # SDK paths
+{% if !sdk_version.is_empty() %}
 $env:WindowsSdkDir = "$BundleRoot\Windows Kits\10"
 $env:WindowsSDKVersion = "{{ sdk_version }}\"
 $env:WindowsSdkBinPath = "$BundleRoot\Windows Kits\10\bin\{{ sdk_version }}"
+{% endif %}
 
 # INCLUDE paths
 $env:INCLUDE = @(
-    "$BundleRoot\VC\Tools\MSVC\{{ msvc_version }}\include",
+    "$BundleRoot\VC\Tools\MSVC\{{ msvc_version }}\include"{% if !sdk_version.is_empty() %},
     "$BundleRoot\Windows Kits\10\Include\{{ sdk_version }}\ucrt",
     "$BundleRoot\Windows Kits\10\Include\{{ sdk_version }}\shared",
     "$BundleRoot\Windows Kits\10\Include\{{ sdk_version }}\um",
     "$BundleRoot\Windows Kits\10\Include\{{ sdk_version }}\winrt",
-    "$BundleRoot\Windows Kits\10\Include\{{ sdk_version }}\cppwinrt"
+    "$BundleRoot\Windows Kits\10\Include\{{ sdk_version }}\cppwinrt"{% endif %}
 ) -join ";"
 
 # LIB paths
 $env:LIB = @(
-    "$BundleRoot\VC\Tools\MSVC\{{ msvc_version }}\lib\{{ arch }}",
+    "$BundleRoot\VC\Tools\MSVC\{{ msvc_version }}\lib\{{ arch }}"{% if !sdk_version.is_empty() %},
     "$BundleRoot\Windows Kits\10\Lib\{{ sdk_version }}\ucrt\{{ arch }}",
-    "$BundleRoot\Windows Kits\10\Lib\{{ sdk_version }}\um\{{ arch }}"
+    "$BundleRoot\Windows Kits\10\Lib\{{ sdk_version }}\um\{{ arch }}"{% endif %}
 ) -join ";"
 
 # PATH additions
 $NewPaths = @(
-    "$BundleRoot\VC\Tools\MSVC\{{ msvc_version }}\bin\{{ host_arch }}\{{ target_arch }}",
-    "$BundleRoot\Windows Kits\10\bin\{{ sdk_version }}\{{ arch }}"
+    "$BundleRoot\VC\Tools\MSVC\{{ msvc_version }}\bin\{{ host_arch }}\{{ target_arch }}"{% if !sdk_version.is_empty() %},
+    "$BundleRoot\Windows Kits\10\bin\{{ sdk_version }}\{{ host_name }}"{% endif %}
 ) -join ";"
 $env:PATH = "$NewPaths;$env:PATH"
 
 # Platform info
 $env:Platform = "{{ arch }}"
-$env:VSCMD_ARG_HOST_ARCH = "{{ arch }}"
+$env:VSCMD_ARG_HOST_ARCH = "{{ host_name }}"
 $env:VSCMD_ARG_TGT_ARCH = "{{ arch }}"
 
 Write-Host "MSVC Toolchain activated (MSVC {{ msvc_version }}, SDK {{ sdk_version }}, {{ arch }})"

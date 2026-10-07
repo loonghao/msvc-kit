@@ -1,7 +1,7 @@
 //! Manifest cache management
 //!
 //! Provides caching utilities for VS manifests using ETag/Last-Modified
-//! and fingerprint-based validation.
+//! and digest validation of cached bytes.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -30,6 +30,9 @@ pub struct ManifestCacheMeta {
     /// Note: size match alone is best-effort, not cryptographically strong
     #[serde(default)]
     pub fingerprint: Option<String>,
+    /// Digest of cached bytes, checked before a conditional request can reuse them.
+    #[serde(default)]
+    pub sha256: Option<String>,
     /// ETag header value for conditional requests
     #[serde(default)]
     pub etag: Option<String>,
@@ -79,7 +82,10 @@ pub async fn write_meta(path: &Path, meta: &ManifestCacheMeta) -> Result<()> {
         tokio::fs::create_dir_all(parent).await?;
     }
     let bytes = serde_json::to_vec_pretty(meta)?;
-    tokio::fs::write(path, bytes).await?;
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || crate::storage::atomic_write(&path, &bytes))
+        .await
+        .map_err(|error| MsvcKitError::Other(error.to_string()))??;
     Ok(())
 }
 
@@ -116,8 +122,7 @@ pub fn url_basename(url: &str) -> String {
 
 /// Fetch bytes from URL with caching support
 ///
-/// Uses ETag/Last-Modified for conditional requests and fingerprint-based
-/// validation as a fast path.
+/// Verifies cached bytes and asks the server using ETag/Last-Modified validators.
 ///
 /// # Arguments
 ///
@@ -140,47 +145,154 @@ pub async fn fetch_bytes_with_cache(
     label: &str,
     fingerprint_name: &str,
 ) -> Result<(Vec<u8>, bool)> {
+    // A channel has no independently supplied digest. Fetch its current body;
+    // local metadata and a server's 304 cannot authenticate cached contents.
+    fetch_verified_bytes_with_cache(
+        client,
+        url,
+        cache_file,
+        spinner,
+        label,
+        fingerprint_name,
+        None,
+    )
+    .await
+}
+
+/// Cache a manifest only when its bytes match a digest from a fresh channel.
+/// Without an external digest, always fetch a full response and never fall back
+/// to cached contents after a transport failure.
+pub async fn fetch_verified_bytes_with_cache(
+    client: &reqwest::Client,
+    url: &str,
+    cache_file: &Path,
+    spinner: &ProgressBar,
+    label: &str,
+    fingerprint_name: &str,
+    expected_sha256: Option<&str>,
+) -> Result<(Vec<u8>, bool)> {
+    fetch_with_integrity(
+        client,
+        url,
+        cache_file,
+        spinner,
+        label,
+        fingerprint_name,
+        ManifestIntegrity {
+            expected_sha256,
+            fresh_channel: None,
+        },
+    )
+    .await
+}
+
+/// Authenticate the catalog by its fresh channel digest or Microsoft's signed
+/// release. Cache validators are usable only after the same authentication.
+pub(super) async fn fetch_catalog_bytes_with_cache(
+    client: &reqwest::Client,
+    url: &str,
+    cache_file: &Path,
+    spinner: &ProgressBar,
+    label: &str,
+    fingerprint_name: &str,
+    source: (&str, &[u8]),
+) -> Result<(Vec<u8>, bool)> {
+    fetch_with_integrity(
+        client,
+        url,
+        cache_file,
+        spinner,
+        label,
+        fingerprint_name,
+        ManifestIntegrity {
+            expected_sha256: Some(source.0),
+            fresh_channel: Some(source.1),
+        },
+    )
+    .await
+}
+
+struct ManifestIntegrity<'a> {
+    expected_sha256: Option<&'a str>,
+    fresh_channel: Option<&'a [u8]>,
+}
+
+impl ManifestIntegrity<'_> {
+    async fn verify(&self, bytes: &[u8], name: &str) -> Result<()> {
+        let Some(expected) = self.expected_sha256 else {
+            return Ok(());
+        };
+        let actual = super::hash::compute_hash(bytes);
+        if actual.eq_ignore_ascii_case(expected) {
+            return Ok(());
+        }
+        if let Some(channel) = self.fresh_channel {
+            let catalog = bytes.to_vec();
+            let channel = channel.to_vec();
+            tokio::task::spawn_blocking(move || {
+                super::manifest_trust::verify_catalog(&catalog, &channel)
+            })
+            .await
+            .map_err(|error| MsvcKitError::Other(error.to_string()))??;
+            tracing::warn!(expected, actual, "Catalog digest differs from channel metadata; authenticated Microsoft signatures and matching release instead");
+            return Ok(());
+        }
+        Err(MsvcKitError::HashMismatch {
+            file: name.into(),
+            expected: expected.into(),
+            actual,
+        })
+    }
+}
+
+async fn fetch_with_integrity(
+    client: &reqwest::Client,
+    url: &str,
+    cache_file: &Path,
+    spinner: &ProgressBar,
+    label: &str,
+    fingerprint_name: &str,
+    integrity: ManifestIntegrity<'_>,
+) -> Result<(Vec<u8>, bool)> {
+    let expected_sha256 = integrity.expected_sha256;
+    if expected_sha256.is_some_and(|digest| {
+        digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }) {
+        return Err(MsvcKitError::Config(
+            "Invalid official manifest SHA256".into(),
+        ));
+    }
     if let Some(parent) = cache_file.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
 
+    let lock_path = cache_file.with_file_name(format!(
+        "{}.lock",
+        cache_file.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    let _cache_lock = tokio::task::spawn_blocking(move || crate::storage::lock_file(&lock_path))
+        .await
+        .map_err(|error| MsvcKitError::Other(error.to_string()))??;
     let meta_path = meta_path_for(cache_file);
-    let cached_bytes = tokio::fs::read(cache_file).await.ok();
+    let mut cached_bytes = tokio::fs::read(cache_file).await.ok();
     let meta = read_meta(&meta_path).await;
 
-    // Fast path: if we already have a cached body, try a cheap HEAD and compare size.
-    // This follows the "file name + size" fingerprint idea (best-effort; not cryptographically strong).
-    if let Some(ref cached) = cached_bytes {
-        let cached_len = cached.len() as u64;
-        if let Ok(head) = client.head(url).send().await {
-            if head.status().is_success() {
-                if let Some(remote_len) = head.content_length() {
-                    if remote_len == cached_len {
-                        let fp = compute_fingerprint(fingerprint_name, remote_len);
-                        // If meta exists and matches, great; if not, we still accept size match and refresh meta.
-                        let ok = meta
-                            .as_ref()
-                            .map(|m| m.url == url && m.fingerprint.as_deref() == Some(fp.as_str()))
-                            .unwrap_or(true);
-                        if ok {
-                            spinner.set_message(format!("{} (cached, size match)", label));
-                            let new_meta = ManifestCacheMeta {
-                                url: url.to_string(),
-                                name: Some(fingerprint_name.to_string()),
-                                size: Some(remote_len),
-                                fingerprint: Some(fp),
-                                etag: meta.as_ref().and_then(|m| m.etag.clone()),
-                                last_modified: meta.as_ref().and_then(|m| m.last_modified.clone()),
-                            };
-                            let _ = write_meta(&meta_path, &new_meta).await;
-                            return Ok((cached.clone(), true));
-                        }
-                    }
-                }
-            }
+    // A size match cannot establish freshness. Validate cached bytes, then ask
+    // the server using its validators; without validators fetch a fresh body.
+    if let Some(cached) = &cached_bytes {
+        let digest = super::hash::compute_hash(cached);
+        let valid = meta.as_ref().is_some_and(|meta| {
+            meta.url == url
+                && meta.name.as_deref() == Some(fingerprint_name)
+                && meta.size == Some(cached.len() as u64)
+                && meta.sha256.as_deref() == Some(digest.as_str())
+                && expected_sha256.is_some()
+                && (meta.etag.is_some() || meta.last_modified.is_some())
+        });
+        if !valid || integrity.verify(cached, fingerprint_name).await.is_err() {
+            cached_bytes = None;
         }
     }
-
     // Conditional request: prefer ETag/Last-Modified if we have it.
     if let (Some(meta), Some(cached)) = (meta, cached_bytes.clone()) {
         if meta.url == url {
@@ -201,14 +313,15 @@ pub async fn fetch_bytes_with_cache(
             if resp.status().is_success() {
                 let headers = resp.headers().clone();
                 let bytes = download_response_bytes_with_progress(resp, spinner, label).await?;
-
-                tokio::fs::write(cache_file, &bytes).await?;
+                integrity.verify(&bytes, fingerprint_name).await?;
+                publish_cached_bytes(cache_file, &bytes).await?;
                 let size = bytes.len() as u64;
                 let meta = ManifestCacheMeta {
                     url: url.to_string(),
                     name: Some(fingerprint_name.to_string()),
                     size: Some(size),
                     fingerprint: Some(compute_fingerprint(fingerprint_name, size)),
+                    sha256: Some(super::hash::compute_hash(&bytes)),
                     etag: headers
                         .get(ETAG)
                         .and_then(|v| v.to_str().ok())
@@ -235,7 +348,8 @@ pub async fn fetch_bytes_with_cache(
 
     let headers = resp.headers().clone();
     let bytes = download_response_bytes_with_progress(resp, spinner, label).await?;
-    tokio::fs::write(cache_file, &bytes).await?;
+    integrity.verify(&bytes, fingerprint_name).await?;
+    publish_cached_bytes(cache_file, &bytes).await?;
 
     let size = bytes.len() as u64;
     let meta = ManifestCacheMeta {
@@ -243,6 +357,7 @@ pub async fn fetch_bytes_with_cache(
         name: Some(fingerprint_name.to_string()),
         size: Some(size),
         fingerprint: Some(compute_fingerprint(fingerprint_name, size)),
+        sha256: Some(super::hash::compute_hash(&bytes)),
         etag: headers
             .get(ETAG)
             .and_then(|v| v.to_str().ok())
@@ -255,6 +370,15 @@ pub async fn fetch_bytes_with_cache(
     let _ = write_meta(&meta_path, &meta).await;
 
     Ok((bytes, false))
+}
+
+async fn publish_cached_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
+    let path = path.to_path_buf();
+    let bytes = bytes.to_vec();
+    tokio::task::spawn_blocking(move || crate::storage::atomic_write(&path, &bytes))
+        .await
+        .map_err(|error| MsvcKitError::Other(error.to_string()))??;
+    Ok(())
 }
 
 /// Build the error for a response msvc-kit cannot use
@@ -322,6 +446,107 @@ pub async fn download_response_bytes_with_progress(
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "requires current Microsoft manifests and online certificate revocation"]
+    async fn signed_catalog_cache_reauthenticates_before_304_and_failed_refresh() {
+        let client = reqwest::Client::new();
+        let channel = client
+            .get("https://aka.ms/vs/17/release/channel")
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let parsed: super::super::manifest::ChannelManifest =
+            serde_json::from_slice(&channel).unwrap();
+        let source = &parsed
+            .channel_items
+            .iter()
+            .find(|item| item.id == "Microsoft.VisualStudio.Manifests.VisualStudio")
+            .unwrap()
+            .payloads[0];
+        let catalog = client
+            .get(&source.url)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        super::super::manifest_trust::verify_catalog(&catalog, &channel).unwrap();
+
+        let mut server = mockito::Server::new_async().await;
+        let full = server
+            .mock("GET", "/catalog")
+            .match_header("if-none-match", mockito::Matcher::Missing)
+            .with_header("ETag", "signed-release")
+            .with_body(&catalog)
+            .expect(2)
+            .create_async()
+            .await;
+        let conditional = server
+            .mock("GET", "/catalog")
+            .match_header("if-none-match", "signed-release")
+            .with_status(304)
+            .expect(1)
+            .create_async()
+            .await;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("VisualStudio.vsman");
+        let url = format!("{}/catalog", server.url());
+        // Force the alternative authentication path even if Microsoft repairs
+        // channel metadata. Neither this digest nor the mock server is trusted.
+        let mismatching = super::super::hash::compute_hash(b"different catalog");
+        let spinner = ProgressBar::hidden();
+        let (_, cached) = fetch_catalog_bytes_with_cache(
+            &client,
+            &url,
+            &path,
+            &spinner,
+            "catalog",
+            "VisualStudio.vsman",
+            (&mismatching, &channel),
+        )
+        .await
+        .unwrap();
+        assert!(!cached);
+        let (body, cached) = fetch_catalog_bytes_with_cache(
+            &client,
+            &url,
+            &path,
+            &spinner,
+            "catalog",
+            "VisualStudio.vsman",
+            (&mismatching, &channel),
+        )
+        .await
+        .unwrap();
+        assert!(cached);
+        assert_eq!(body.as_slice(), catalog.as_ref());
+        let mut invalid_channel = channel.to_vec();
+        invalid_channel[0] = b'[';
+        assert!(fetch_catalog_bytes_with_cache(
+            &client,
+            &url,
+            &path,
+            &spinner,
+            "catalog",
+            "VisualStudio.vsman",
+            (&mismatching, &invalid_channel)
+        )
+        .await
+        .is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), catalog.as_ref());
+        full.assert_async().await;
+        conditional.assert_async().await;
+    }
+
     #[test]
     fn test_url_basename() {
         assert_eq!(
@@ -354,5 +579,89 @@ mod tests {
         let cache_file = PathBuf::from("/cache/manifest.json");
         let meta_path = meta_path_for(&cache_file);
         assert_eq!(meta_path, PathBuf::from("/cache/manifest.json.meta.json"));
+    }
+
+    #[tokio::test]
+    async fn equal_length_manifests_still_check_server_freshness() {
+        let mut server = mockito::Server::new_async().await;
+        let first = server
+            .mock("GET", "/manifest")
+            .match_header("if-none-match", mockito::Matcher::Missing)
+            .with_header("ETag", "version-1")
+            .with_body("AAAA")
+            .expect(1)
+            .create_async()
+            .await;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("manifest.json");
+        let client = reqwest::Client::new();
+        let url = format!("{}/manifest", server.url());
+        let spinner = ProgressBar::hidden();
+        let (first_body, _) =
+            fetch_bytes_with_cache(&client, &url, &path, &spinner, "fixture", "manifest.json")
+                .await
+                .unwrap();
+        first.assert_async().await;
+        first.remove_async().await;
+        let changed = server
+            .mock("GET", "/manifest")
+            .match_header("if-none-match", mockito::Matcher::Missing)
+            .with_header("ETag", "version-2")
+            .with_body("BBBB")
+            .expect(1)
+            .create_async()
+            .await;
+        let head = server
+            .mock("HEAD", "/manifest")
+            .with_header("content-length", "4")
+            .expect(0)
+            .create_async()
+            .await;
+        let (second_body, cached) =
+            fetch_bytes_with_cache(&client, &url, &path, &spinner, "fixture", "manifest.json")
+                .await
+                .unwrap();
+        assert_eq!(first_body, b"AAAA");
+        assert_eq!(second_body, b"BBBB");
+        assert!(!cached);
+        changed.assert_async().await;
+        head.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn altered_manifest_cache_does_not_send_stale_validators() {
+        let mut server = mockito::Server::new_async().await;
+        let full = server
+            .mock("GET", "/manifest")
+            .match_header("if-none-match", mockito::Matcher::Missing)
+            .with_header("ETag", "version-1")
+            .with_body("AAAA")
+            .expect(2)
+            .create_async()
+            .await;
+        let conditional = server
+            .mock("GET", "/manifest")
+            .match_header("if-none-match", "version-1")
+            .with_status(304)
+            .expect(0)
+            .create_async()
+            .await;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("manifest.json");
+        let client = reqwest::Client::new();
+        let url = format!("{}/manifest", server.url());
+        let spinner = ProgressBar::hidden();
+        fetch_bytes_with_cache(&client, &url, &path, &spinner, "fixture", "manifest.json")
+            .await
+            .unwrap();
+        std::fs::write(&path, b"CCCC").unwrap();
+        let (body, cached) =
+            fetch_bytes_with_cache(&client, &url, &path, &spinner, "fixture", "manifest.json")
+                .await
+                .unwrap();
+        assert_eq!(body, b"AAAA");
+        assert!(!cached);
+        full.assert_async().await;
+        conditional.assert_async().await;
     }
 }

@@ -28,19 +28,15 @@ The download index is a [redb](https://github.com/cberner/redb) database that tr
 
 When downloading, files are skipped based on:
 
-1. **`cached`** - File exists in index with matching hash
-2. **`304`** - Server returns Not Modified (ETag/Last-Modified match)
-3. **`size match`** - File size matches expected (best-effort fallback)
+Payload reuse requires the expected source identity. With verification enabled, msvc-kit requires an official SHA256 and rehashes the actual cached file; the index's previous hash is not sufficient. A matching manifest SHA256 takes precedence over inconsistent manifest size metadata. Missing or malformed official digests fail with verification enabled. With verification disabled, file size must match. Downloads use private temporary files and publish only after validation; receipts record actual bytes. Interrupted downloads restart on retry.
 
-::: tip
-Size match is a best-effort optimization. Same size doesn't guarantee same content, but it's a reasonable heuristic for large binary packages.
-:::
+Channels always fetch a full current response. Package manifests normally require the SHA256 declared by that fresh channel before parsing or cache publication. On Windows, a mismatching catalog has one alternative authentication path: both the fresh channel and catalog must pass the signed-manifest checks below. Other platforms reject the mismatch. A neighboring metadata file or equal content length cannot establish trust. Download caches and manifests use process locks; a busy index is never renamed as corrupt.
 
 ## Manifest Cache
 
 VS manifests are cached under the configured cache directory: an explicit `cache_dir` from the TOML file, otherwise `<install_dir>/cache/manifests/` when the installation directory is not the platform default (`MSVC_KIT_DIR` or `config --set-dir`), otherwise the platform default cache root listed above. Run `msvc-kit config` to print the cache directory in use.
 
-Manifests are cached with HTTP conditional requests:
+Authenticated package manifests can use HTTP conditional requests:
 
 ```
 GET /manifest.json
@@ -48,7 +44,13 @@ If-None-Match: "abc123"
 If-Modified-Since: Mon, 01 Jan 2024 00:00:00 GMT
 ```
 
-If the manifest hasn't changed, the server returns `304 Not Modified` and the cached version is used.
+If the manifest hasn't changed, the server returns `304 Not Modified`. Before reusing its cached bytes, msvc-kit authenticates them against the fresh channel again; a previous validation result is not sufficient.
+
+### Windows signed-manifest fallback
+
+When the channel's catalog SHA256 differs from the downloaded bytes, Windows can verify the original SHA256/RSA signatures of **both** documents. Verification requires a currently valid Windows code-signing certificate chain, an explicit Code Signing EKU, Microsoft publisher CN and organization, and successful revocation checks. Expired, untrusted, revoked, or unavailable revocation information fails closed. The chain must terminate at Microsoft Root Certificate Authority 2011, whose DER SHA256 is pinned to `847df6a78497943f27fc72eb93f9a637320a02b561d0a91b09e87a7807ed7c61`; the certificate is published by [Microsoft PKI](https://www.microsoft.com/pki/certs/MicRooCerAut2011_2011_03_22.crt).
+
+The authenticated catalog must also match the fresh signed channel's `buildVersion`, channel item version, `productLine`, and `productSemanticVersion`, with the expected `manifestType` and `manifestName`. Cached fallback manifests repeat these signature, current trust, and release-identity checks before a 304 can reuse them. Verification uses native Windows cryptography and requires no external process or additional DLL. Individual package SHA256 verification remains strict and unchanged.
 
 ## Extraction Markers
 
