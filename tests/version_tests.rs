@@ -1,7 +1,8 @@
 //! Version and Architecture tests
 
 use msvc_kit::version::{
-    is_msvc_installed, is_sdk_installed, Architecture, InstalledVersion, MsvcVersion, SdkVersion,
+    is_msvc_installed, is_sdk_installed, sdk_version_matches, select_installed_version,
+    Architecture, InstalledVersion, MsvcVersion, SdkVersion,
 };
 
 // ============================================================================
@@ -332,4 +333,111 @@ fn test_installed_version_serde() {
     assert!(parsed.msvc.is_some());
     assert!(parsed.sdk.is_none());
     assert_eq!(parsed.arch, Architecture::Arm64);
+}
+
+// ============================================================================
+// Windows SDK selector strictness (4-segment contract)
+//
+// A Windows SDK version has four segments (10.0.19041.0). A partial selector
+// such as "10.0" names a family, not one SDK, and must be rejected rather than
+// silently widened: the build number alone cannot distinguish 10.0.22621.0 from
+// 11.0.22621.0.
+// ============================================================================
+
+#[test]
+fn test_sdk_matches_exact_four_segment_version() {
+    assert!(sdk_version_matches("10.0.19041.0", "10.0.19041.0").unwrap());
+    assert!(!sdk_version_matches("10.0.19041.0", "10.0.22621.0").unwrap());
+    assert!(!sdk_version_matches("11.0.22621.0", "10.0.22621.0").unwrap());
+}
+
+#[test]
+fn test_sdk_bare_build_number_stays_valid_shorthand() {
+    assert!(sdk_version_matches("10.0.19041.0", "19041").unwrap());
+    assert!(!sdk_version_matches("10.0.22621.0", "19041").unwrap());
+    // Build shorthand intentionally spans major versions
+    assert!(sdk_version_matches("11.0.19041.0", "19041").unwrap());
+}
+
+#[test]
+fn test_sdk_rejects_ambiguous_partial_selectors() {
+    // Only dotted partial selectors are ambiguous: "10" has no dot, so it is
+    // a build-number shorthand and stays valid.
+    for ambiguous in ["10.0", "10.0.19041"] {
+        let err = sdk_version_matches("10.0.19041.0", ambiguous).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("ambiguous"),
+            "'{ambiguous}' should be rejected as ambiguous, got: {message}"
+        );
+    }
+}
+
+#[test]
+fn test_sdk_empty_selector_never_matches() {
+    assert!(!sdk_version_matches("10.0.19041.0", "").unwrap());
+}
+
+#[test]
+fn test_sdk_ambiguity_reported_even_when_nothing_matches() {
+    // An ambiguous selector must be an error even with no candidates at all,
+    // not a silent "not found".
+    let versions: Vec<SdkVersion> = vec![];
+    let err = select_installed_version(&versions, Some("10.0")).unwrap_err();
+    assert!(err.to_string().contains("ambiguous"));
+}
+
+#[test]
+fn test_select_installed_sdk_resolves_exact_version() {
+    let versions = vec![
+        SdkVersion::new("10.0.19041.0", "Windows SDK 10.0.19041.0"),
+        SdkVersion::new("10.0.22621.0", "Windows SDK 10.0.22621.0"),
+    ];
+    let selected = select_installed_version(&versions, Some("10.0.19041.0"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected.version, "10.0.19041.0");
+}
+
+#[test]
+fn test_select_installed_sdk_rejects_ambiguous_selector() {
+    let versions = vec![
+        SdkVersion::new("10.0.19041.0", "Windows SDK 10.0.19041.0"),
+        SdkVersion::new("10.0.22621.0", "Windows SDK 10.0.22621.0"),
+    ];
+    let err = select_installed_version(&versions, Some("10.0")).unwrap_err();
+    assert!(err.to_string().contains("ambiguous"));
+}
+
+#[test]
+fn test_select_installed_sdk_uses_numeric_order_for_latest() {
+    let versions = vec![
+        SdkVersion::new("10.0.9.0", "Windows SDK 10.0.9.0"),
+        SdkVersion::new("10.0.22621.0", "Windows SDK 10.0.22621.0"),
+    ];
+    // Numeric ordering: 22621 > 9, which lexicographic sorting gets backwards.
+    let selected = select_installed_version(&versions, None).unwrap().unwrap();
+    assert_eq!(selected.version, "10.0.22621.0");
+}
+
+#[test]
+fn test_select_installed_msvc_keeps_family_prefix_matching() {
+    let versions = vec![
+        MsvcVersion::new("14.43.34808", "MSVC 14.43"),
+        MsvcVersion::new("14.44.35207", "MSVC 14.44"),
+        MsvcVersion::new("14.44.35225", "MSVC 14.44"),
+    ];
+    // Family selector resolves to the newest build in that family
+    let selected = select_installed_version(&versions, Some("14.44"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected.version, "14.44.35225");
+}
+
+#[test]
+fn test_select_installed_msvc_rejects_crossing_segment_boundary() {
+    let versions = vec![MsvcVersion::new("14.44.35207", "MSVC 14.44")];
+    // "14.4" must not match "14.44.35207"
+    assert!(select_installed_version(&versions, Some("14.4")).is_err());
+    assert!(select_installed_version(&versions, Some("14.44")).is_ok());
 }
