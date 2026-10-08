@@ -76,7 +76,7 @@ futures = "0.3"
 # SHA256 verification
 sha2 = "0.11"
 hex = "0.4"
-base64 = "0.22"
+base64 = "0.23"
 tempfile = "3.25"
 
 # Self-update via axoupdater (optional, compatible with cargo-dist releases)
