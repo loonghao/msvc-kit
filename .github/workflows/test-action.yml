@@ -30,7 +30,7 @@ jobs:
           - {arch: x64, components: sdk}
     steps:
       - uses: actions/checkout@v7
-      - uses: loonghao/vx@v0.9.34
+      - uses: loonghao/vx@v0.9.35
         with:
           version: '0.9.34'
           cache: false
