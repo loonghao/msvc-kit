@@ -113,6 +113,38 @@ pub fn version_matches(version: &str, requested: &str) -> bool {
             && version.split('.').nth(2) == Some(requested))
 }
 
+/// Match a Windows SDK version against a selector, rejecting ambiguous forms.
+///
+/// Windows SDK versions are four segments (`10.0.19041.0`). A partial selector
+/// such as `10.0` or `10.0.19041` names a family rather than one SDK, and is
+/// rejected instead of being widened: a build number alone cannot tell
+/// `10.0.22621.0` from `11.0.22621.0`, so silently accepting `10.0` can hand a
+/// build a different SDK than the one it asked for.
+///
+/// Accepted selectors are the full four-segment version, or a bare build number
+/// (`19041`), which is retained because it is long-standing shorthand.
+pub fn sdk_version_matches(version: &str, requested: &str) -> Result<bool> {
+    if requested.is_empty() {
+        return Ok(false);
+    }
+    if version == requested {
+        return Ok(true);
+    }
+    // A bare build number stays a valid shorthand: "19041" matches any SDK
+    // carrying that build, across major versions.
+    if !requested.contains('.') {
+        return Ok(version.split('.').nth(2) == Some(requested));
+    }
+    // A dotted selector with fewer than four segments is ambiguous.
+    if requested.split('.').count() < 4 {
+        return Err(MsvcKitError::VersionNotFound(format!(
+            "Windows SDK version '{requested}' is ambiguous; \
+             use the full 4-segment form (e.g. 10.0.19041.0) or a bare build number (e.g. 19041)"
+        )));
+    }
+    Ok(false)
+}
+
 /// Compare dotted versions numerically, then deterministically by spelling.
 pub fn compare_versions(left: &str, right: &str) -> std::cmp::Ordering {
     let numbers = |version: &str| {
@@ -136,12 +168,51 @@ pub fn select_installed_version<'a, T: VersionType>(
             return Ok(Some(exact));
         }
     }
-    let selected = versions
-        .iter()
-        .filter(|version| {
-            requested.is_none_or(|request| version_matches(&version.version, request))
-        })
-        .max_by(|left, right| compare_versions(&left.version, &right.version));
+    // Windows SDK selectors additionally reject ambiguous partial versions such
+    // as "10.0", which would otherwise widen to "any 10.0 SDK".
+    if T::component_name() == Sdk::component_name() {
+        if let Some(request) = requested {
+            // Validate once so an ambiguous selector is reported even when no
+            // installed version would have matched anyway.
+            sdk_version_matches("", request)?;
+        }
+        return select_by(versions, requested, |version, request| {
+            sdk_version_matches(version, request)
+        });
+    }
+
+    select_by(versions, requested, |version, request| {
+        Ok(version_matches(version, request))
+    })
+}
+
+/// Pick the highest version matching `request`, or the highest overall
+fn select_by<'a, T: VersionType, F>(
+    versions: &'a [Version<T>],
+    requested: Option<&str>,
+    matches: F,
+) -> Result<Option<&'a Version<T>>>
+where
+    F: Fn(&str, &str) -> Result<bool>,
+{
+    let mut selected: Option<&'a Version<T>> = None;
+    for version in versions {
+        let matched = match requested {
+            Some(request) => matches(&version.version, request)?,
+            None => true,
+        };
+        if !matched {
+            continue;
+        }
+        let better = match selected {
+            None => true,
+            Some(current) => compare_versions(&version.version, &current.version).is_gt(),
+        };
+        if better {
+            selected = Some(version);
+        }
+    }
+
     if selected.is_none() {
         if let Some(request) = requested {
             return Err(MsvcKitError::VersionNotFound(format!(
