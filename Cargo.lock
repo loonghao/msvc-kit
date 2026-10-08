@@ -1486,13 +1486,13 @@ dependencies = [
 
 [[package]]
 name = "msvc-kit"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "anyhow",
  "askama",
  "async-trait",
  "axoupdater",
- "base64 0.23.1",
+ "base64 0.22.1",
  "bincode",
  "cab",
  "chrono",

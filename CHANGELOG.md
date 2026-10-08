@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.2.18](https://github.com/loonghao/msvc-kit/compare/v0.2.17...v0.2.18) (2026-10-08)
+
+
+### Features
+
+* add selected toolchain contracts and diagnostics ([2736536](https://github.com/loonghao/msvc-kit/commit/2736536755659e5f18c064c5d2d5bcc46c3c3e19))
+* add selected toolchain contracts and diagnostics ([#176](https://github.com/loonghao/msvc-kit/issues/176)) ([d94cb66](https://github.com/loonghao/msvc-kit/commit/d94cb666aef5bb1e8dc53e258097e640d82b6141))
+
+
+### Bug Fixes
+
+* authenticate manifests and fail closed on unverified inputs ([5dd2d2c](https://github.com/loonghao/msvc-kit/commit/5dd2d2ccd7329cbcd001ef2084f723b1fbe79389))
+* authenticate signed Microsoft catalogs ([938e2e9](https://github.com/loonghao/msvc-kit/commit/938e2e90a22bad6675ab79258ce96f418e0f9e4a))
+* **ci:** collapse duplicate WinGet installer entries after komac ([eac8e2f](https://github.com/loonghao/msvc-kit/commit/eac8e2fcff2d5d25bd18c5db765a23901b5aa89a))
+* **ci:** install cargo-llvm-cov with cargo instead of the vx bridge ([71ce577](https://github.com/loonghao/msvc-kit/commit/71ce57705f75e36802af8f8d551320840e2ace72))
+* **ci:** pin CI vx to 0.9.33 so the refreshed vx.lock is actually read ([dc78003](https://github.com/loonghao/msvc-kit/commit/dc780036d63884363182b8a42516136175304985))
+* fail bundle validation on toolchain errors ([928a75e](https://github.com/loonghao/msvc-kit/commit/928a75e2a3add7fa61bed2ebbe801ed626365404))
+* fail on invalid explicit toolchain configuration ([8fefb7f](https://github.com/loonghao/msvc-kit/commit/8fefb7ffb21a624895fec6381d0f525f7fb9a335))
+* **lock:** require verified archives for source receipts ([25bf17c](https://github.com/loonghao/msvc-kit/commit/25bf17cd0a21aa46b4d26d36096a19a800885cdc))
+* resolve first activated bundle compiler ([2d727c7](https://github.com/loonghao/msvc-kit/commit/2d727c7a3fd4aac585dfc001bc7586cb35106b81))
+* **setup:** honour the --portable-root value and align the English DCC nav ([#166](https://github.com/loonghao/msvc-kit/issues/166)) ([d2ced83](https://github.com/loonghao/msvc-kit/commit/d2ced83d04da7409dc7ca759eabd6c93f9bbe3d7))
+* validate VSIX bytes against authoritative manifest digests ([bfae7fd](https://github.com/loonghao/msvc-kit/commit/bfae7fde457857288aa79b0f935a1d7af406ea5b))
+* **vs-channel:** cache unpublished channels and stop masking transport errors ([#163](https://github.com/loonghao/msvc-kit/issues/163)) ([0d5aaef](https://github.com/loonghao/msvc-kit/commit/0d5aaefceed4e7b2216815cda0bea94a7c7f2833))
+
+
+### Dependencies
+
+* update loonghao/vx action to v0.9.34 ([e876b44](https://github.com/loonghao/msvc-kit/commit/e876b446b640a0cdfbe0f2dcfd4955fb9385b08f))
+* update Rust crate base64 to 0.23 ([17e2ebc](https://github.com/loonghao/msvc-kit/commit/17e2ebc9c8aff8f53ab0958b1f8a6692a146a356))
+* update Rust crate redb to v4.3.0 ([650f15a](https://github.com/loonghao/msvc-kit/commit/650f15ab44e1e8c9564bd2ce785cb66a379e0301))
+* update Rust crate reqwest to v0.13.5 ([9321a03](https://github.com/loonghao/msvc-kit/commit/9321a037c43e977f745b0c1a7778db72a717359d))
+* update Rust crate rstest to 0.27 ([a7dca38](https://github.com/loonghao/msvc-kit/commit/a7dca3862d05a3695597d3547172464031a55165))
+* update Rust crate serde to v1.0.229 ([3c25ba4](https://github.com/loonghao/msvc-kit/commit/3c25ba4baadfe07cf5d253f1a929185891c1dfb4))
+* update Rust crate serde_json to v1.0.151 ([397e618](https://github.com/loonghao/msvc-kit/commit/397e6184414767b75cda1890c67394c940dcec67))
+* update Rust crate simd-json to 0.18 ([3f138a7](https://github.com/loonghao/msvc-kit/commit/3f138a788180d706b4ebdffe789759f0c69ccfb5))
+* update Rust crate thiserror to v2.0.20 ([30f8ffe](https://github.com/loonghao/msvc-kit/commit/30f8ffec06bab84df4ce999f55bb487bf4ff8ca6))
+* update Rust crate thiserror to v2.0.21 ([0358221](https://github.com/loonghao/msvc-kit/commit/0358221f6281c14ece85d108740023455a06413d))
+* update Rust crate tokio to v1.53.2 ([4876a62](https://github.com/loonghao/msvc-kit/commit/4876a626edb09aca313a9ccf628f6a9a378fa7d2))
+* update Rust crate toml to v1.1.7 ([6419eab](https://github.com/loonghao/msvc-kit/commit/6419eab7c7c5ce8bcb166e665b435b6ce215d047))
+
+
+### Documentation
+
+* align documentation with the implemented contract ([467fee4](https://github.com/loonghao/msvc-kit/commit/467fee428b225c51060eed2fa27f5ec761e9f3d0))
+* record integrity review and official manifest blocker ([d73ac93](https://github.com/loonghao/msvc-kit/commit/d73ac932a08c70e629eb163ea34083a4e0c8a191))
+* record local integrity and toolchain validation ([4f6ff42](https://github.com/loonghao/msvc-kit/commit/4f6ff42cdc714f9831821711aeba1c2ae9a43f43))
+
+
+### Miscellaneous
+
+* drop default [settings] and refresh vx.lock ([e9c88e0](https://github.com/loonghao/msvc-kit/commit/e9c88e003c3dfda94d3fdfbd519e46b76fe7a303))
+* drop the [scripts] mirror from vx.toml ([4ef726a](https://github.com/loonghao/msvc-kit/commit/4ef726a83b47d69df7e963a2348e7e327e0af48d))
+* refresh vx.lock after rebase ([f09dfc7](https://github.com/loonghao/msvc-kit/commit/f09dfc7878e104676355e54067259287c0ecd004))
+
 ## [0.2.17](https://github.com/loonghao/msvc-kit/compare/v0.2.16...v0.2.17) (2026-09-21)
 
 
