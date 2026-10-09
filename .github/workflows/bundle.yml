@@ -49,7 +49,7 @@ jobs:
         run: ./tests/bundle-contract-tests.ps1
 
       - name: Setup vx
-        uses: loonghao/vx@v0.9.36
+        uses: loonghao/vx@v0.9.37
         with:
           version: '0.9.34'
           # Must stay >= `vx_version` in vx.lock: an older vx cannot parse the
