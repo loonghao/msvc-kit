@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: loonghao/vx@v0.9.37
         with:
-          version: '0.9.34'
+          version: '0.9.37'
           cache: false
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: ilammy/msvc-dev-cmd@v1
