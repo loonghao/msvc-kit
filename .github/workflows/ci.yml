@@ -141,6 +141,11 @@ jobs:
           cache: false
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Setup tools (vx)
+        # `vx check` reports every tool in vx.toml as an error when it is not
+        # installed yet, which would mask the pin result behind unrelated noise.
+        run: vx setup
+
       - name: Report the vx version under test
         # Recorded as the run's proof of which vx produced the result below: the
         # drift warning only exists from 0.9.36 on, so a green run is only
