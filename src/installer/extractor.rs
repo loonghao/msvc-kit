@@ -176,7 +176,7 @@ fn extract_vsix_sync(vsix_path: &Path, target_dir: &Path, show_progress: bool) -
         let mut total = 0u64;
         for i in 0..archive.len() {
             let file = archive.by_index(i)?;
-            let name = file.name();
+            let name = file.name()?;
             if name.starts_with('[') || name == "extension.vsixmanifest" || file.is_dir() {
                 continue;
             }
@@ -205,7 +205,7 @@ fn extract_vsix_sync(vsix_path: &Path, target_dir: &Path, show_progress: bool) -
 
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
-        let name = file.name().to_string();
+        let name = file.name()?.to_string();
 
         // Skip metadata files
         if name.starts_with('[') || name == "extension.vsixmanifest" {
