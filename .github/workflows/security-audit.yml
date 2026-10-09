@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Setup vx
-        uses: loonghao/vx@v0.9.35
+        uses: loonghao/vx@v0.9.36
         with:
           version: '0.9.34'
           # Must stay >= `vx_version` in vx.lock: an older vx cannot parse the
