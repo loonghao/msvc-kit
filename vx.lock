@@ -4,7 +4,7 @@
 version = 2
 
 [metadata]
-generated_at = "2026-09-28T08:16:52Z"
+generated_at = "2026-10-09T08:57:03Z"
 vx_version = "0.9.33"
 platform = "x86_64-pc-windows-msvc"
 
@@ -42,9 +42,9 @@ windows-x64 = "https://nodejs.org/dist/v22.23.3/node-v22.23.3-win-x64.zip"
 lts = "true"
 
 [tools.rust]
-version = "1.93.1"
+version = "rustup-managed"
 source = "provider"
-resolved_from = "1.93.1"
+resolved_from = "rustup-managed"
 ecosystem = "generic"
 download_url = "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe"
 
