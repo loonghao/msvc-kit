@@ -24,7 +24,7 @@ jobs:
       - name: Setup vx
         uses: loonghao/vx@v0.9.37
         with:
-          version: '0.9.34'
+          version: '0.9.37'
           # Must stay >= `vx_version` in vx.lock: an older vx cannot parse the
           # lock, warns, and silently falls back to vx.toml. The action's cache
           # is restored from a shared prefix, so it would put a stale vx binary

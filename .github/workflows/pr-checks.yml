@@ -42,7 +42,7 @@ jobs:
       - name: Setup vx
         uses: loonghao/vx@v0.9.37
         with:
-          version: '0.9.34'
+          version: '0.9.37'
           # Must stay >= `vx_version` in vx.lock: an older vx cannot parse the
           # lock, warns, and silently falls back to vx.toml. The action's cache
           # is restored from a shared prefix, so it would put a stale vx binary
@@ -92,7 +92,7 @@ jobs:
       - name: Setup vx
         uses: loonghao/vx@v0.9.37
         with:
-          version: '0.9.34'
+          version: '0.9.37'
           # Must stay >= `vx_version` in vx.lock: an older vx cannot parse the
           # lock, warns, and silently falls back to vx.toml. The action's cache
           # is restored from a shared prefix, so it would put a stale vx binary
@@ -134,7 +134,7 @@ jobs:
       - name: Setup vx
         uses: loonghao/vx@v0.9.37
         with:
-          version: '0.9.34'
+          version: '0.9.37'
           # Must stay >= `vx_version` in vx.lock: an older vx cannot parse the
           # lock, warns, and silently falls back to vx.toml. The action's cache
           # is restored from a shared prefix, so it would put a stale vx binary
@@ -174,7 +174,7 @@ jobs:
       - name: Setup vx
         uses: loonghao/vx@v0.9.37
         with:
-          version: '0.9.34'
+          version: '0.9.37'
           # Must stay >= `vx_version` in vx.lock: an older vx cannot parse the
           # lock, warns, and silently falls back to vx.toml. The action's cache
           # is restored from a shared prefix, so it would put a stale vx binary
@@ -228,7 +228,7 @@ jobs:
       - name: Setup vx
         uses: loonghao/vx@v0.9.37
         with:
-          version: '0.9.34'
+          version: '0.9.37'
           # Must stay >= `vx_version` in vx.lock: an older vx cannot parse the
           # lock, warns, and silently falls back to vx.toml. The action's cache
           # is restored from a shared prefix, so it would put a stale vx binary
@@ -246,11 +246,109 @@ jobs:
         run: vx just docs-build
 
 
+  # Rust toolchain pin drift check
+  #
+  # `vx check` compares the toolchain vx.toml declares against the one that will
+  # actually run. Before vx 0.9.36 the comparison had nothing to match on when
+  # no toolchain file named a channel, so a numeric `rust` pin was silently
+  # ignored and a later drift stayed invisible. Two things have to hold for this
+  # job to be meaningful, and both are asserted below rather than assumed:
+  #
+  #   1. vx must be >= 0.9.36, the release that resolves the effective toolchain
+  #      from `rustc --version`. On older vx this check cannot fail, so a green
+  #      run there proves nothing.
+  #   2. A pin mismatch must be loud enough to see. It is reported as a warning
+  #      by default, which exits 0, so the run is scanned for the message and
+  #      failed explicitly.
+  vx-check:
+    name: Vx Check (toolchain pins)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup vx
+        uses: loonghao/vx@v0.9.37
+        with:
+          version: '0.9.37'
+          # Must stay >= `vx_version` in vx.lock: an older vx cannot parse the
+          # lock, warns, and silently falls back to vx.toml. The action's cache
+          # is restored from a shared prefix, so it would put a stale vx binary
+          # back in place of the pinned one (install.sh skips an existing file).
+          cache: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup tools (vx)
+        # `vx check` reports every tool in vx.toml as an error when it is not
+        # installed yet, which would mask the pin result behind unrelated noise.
+        run: vx setup
+
+      - name: Report the vx version under test
+        # Recorded as the run's proof of which vx produced the result below: the
+        # drift warning only exists from 0.9.36 on, so a green run is only
+        # meaningful next to a version that could have failed.
+        run: vx --version
+
+      - name: Verify the vx version can detect pin drift
+        # Guards the guard. Bumping the action ref without the `version` input
+        # silently keeps the old binary, and an older vx would report success
+        # here for the wrong reason.
+        run: |
+          set -euo pipefail
+
+          vx_version="$(vx --version | awk '{print $NF}')"
+          echo "vx reports version ${vx_version}"
+
+          if [ "$(printf '%s\n%s\n' '0.9.36' "$vx_version" | sort -V | head -1)" != '0.9.36' ]; then
+            echo "::error::vx ${vx_version} is too old to check toolchain pins; need >= 0.9.36"
+            exit 1
+          fi
+
+      - name: Check toolchain pins
+        id: vx_check
+        run: |
+          set -euo pipefail
+
+          # Tee'd so the report stays in the log while the mismatch scan below
+          # reads the same text; `set -o pipefail` alone would lose vx's exit
+          # status behind grep.
+          set +e
+          vx check 2>&1 | tee vx-check.log
+          vx_status="${PIPESTATUS[0]}"
+          set -e
+
+          if [ "$vx_status" -ne 0 ]; then
+            echo "::error::vx check exited ${vx_status}"
+            exit "$vx_status"
+          fi
+
+          # A mismatch is a warning by default, so a drifting pin still exits 0.
+          # Fail explicitly rather than let the drift pass as a green build.
+          if grep -qi "is pinned to .* in vx.toml but" vx-check.log; then
+            echo "::error::vx check reported a toolchain pin mismatch:"
+            grep -i "is pinned to .* in vx.toml but" vx-check.log
+            exit 1
+          fi
+
+          echo "No toolchain pin mismatch reported"
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "### vx check"
+            echo ""
+            echo '```'
+            cat vx-check.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+
   # Final gate
   pr-ready:
     name: PR Ready
     runs-on: ubuntu-latest
-    needs: [pre-build, quick-checks, clippy, rust-tests, python-tests, docs-build]
+    needs: [pre-build, quick-checks, clippy, rust-tests, python-tests, docs-build, vx-check]
     if: always()
     steps:
       - name: Check results
@@ -261,6 +359,7 @@ jobs:
           RUST_TESTS_RESULT: ${{ needs.rust-tests.result }}
           PYTHON_TESTS_RESULT: ${{ needs.python-tests.result }}
           DOCS_BUILD_RESULT: ${{ needs.docs-build.result }}
+          VX_CHECK_RESULT: ${{ needs.vx-check.result }}
         run: |
           echo "## PR Check Results" >> "$GITHUB_STEP_SUMMARY"
 
@@ -285,6 +384,7 @@ jobs:
           check_result "rust-tests" "$RUST_TESTS_RESULT"
           check_result "python-tests" "$PYTHON_TESTS_RESULT"
           check_result "docs-build" "$DOCS_BUILD_RESULT"
+          check_result "vx-check" "$VX_CHECK_RESULT"
 
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
