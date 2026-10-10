@@ -56,6 +56,7 @@ import urllib.parse
 import urllib.request
 
 API_ROOT = "https://api.github.com"
+GITHUB_ROOT = "https://github.com/"
 VCREDIST_PREFIX = "Microsoft.VCRedist."
 UNRESOLVABLE_REFS = ("HEAD",)
 
@@ -129,11 +130,14 @@ def installers_key(installer: dict) -> tuple:
 
 
 def split_blob_ref(url: str) -> tuple[str, str, str] | None:
-    """Split a ``blob/<ref>/<path>`` GitHub URL into ``(root, ref, path)``.
+    """Split a github.com ``blob/<ref>/<path>`` URL into ``(root, ref, path)``.
 
-    Returns ``None`` for anything that is not a GitHub ``blob/`` URL, so callers
-    leave URLs they do not understand alone instead of mangling them.
+    Returns ``None`` for anything else - a non-github.com host, a plain http
+    URL, or a URL without a ``blob/`` segment - so callers leave URLs they do
+    not understand alone instead of mangling them.
     """
+    if not url.startswith(GITHUB_ROOT):
+        return None
     prefix, separator, rest = url.partition("/blob/")
     if not separator:
         return None
@@ -184,11 +188,17 @@ def ref_exists(gh: GitHub, repo: str, ref: str) -> bool:
     the resulting URL would 404, which is no better than the ``HEAD`` it
     replaced. Unreadable repositories are reported as missing so the caller
     falls back to a ref it can verify.
+
+    A 404 (the ref genuinely is not there yet) is not worth reporting, but any
+    other failure is: silently degrading to the default branch would pin the
+    license to the wrong ref with no trace in the log.
     """
     quoted = urllib.parse.quote(ref, safe="")
     try:
         gh.get(f"{API_ROOT}/repos/{repo}/commits/{quoted}")
-    except urllib.error.HTTPError:
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            print(f"::warning::Could not verify ref {ref} on {repo}: {error}")
         return False
     except urllib.error.URLError as error:
         print(f"::warning::Could not verify ref {ref} on {repo}: {error}")
@@ -421,9 +431,18 @@ def main() -> int:
     try:
         locale_sha, locale_content = gh.file(target_repo, locale_path, branch)
     except urllib.error.HTTPError as error:
-        # The locale manifest is optional; a package without one carries no
-        # LicenseUrl to fix.
-        print(f"No default locale manifest at {locale_path} ({error}); skipping")
+        # Only a missing file means "this package has no default locale
+        # manifest". Any other status - an expired token (401) or rate limiting
+        # (403) - means the LicenseUrl was never checked, so skipping here would
+        # publish ``blob/HEAD/LICENSE`` behind a green release. Fail loudly
+        # instead: the winget job is the last step of the release, so a failure
+        # here cannot undo the published GitHub Release.
+        if error.code != 404:
+            print(
+                f"::error::Could not read {locale_path} on {target_repo}@{branch}: {error}"
+            )
+            return 1
+        print(f"No default locale manifest at {locale_path}; skipping")
         locale_sha = locale_content = None
 
     if locale_content is not None:
@@ -433,7 +452,7 @@ def main() -> int:
         if license_url:
             parts = split_blob_ref(license_url)
             refs = (
-                license_refs(gh, parts[0].removeprefix("https://github.com/"), args.version)
+                license_refs(gh, parts[0].removeprefix(GITHUB_ROOT), args.version)
                 if parts
                 else []
             )

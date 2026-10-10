@@ -12,9 +12,15 @@ Run from the repository root, no third-party packages required::
 
 from __future__ import annotations
 
+import base64
+import contextlib
 import importlib.util
+import io
+import os
 import pathlib
+import sys
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.parse
 
@@ -299,6 +305,21 @@ class SplitBlobRefTest(unittest.TestCase):
     def test_rejects_a_url_with_an_empty_ref(self):
         self.assertIsNone(normalize.split_blob_ref("https://github.com/o/r/blob//LICENSE"))
 
+    def test_rejects_a_non_github_host(self):
+        self.assertIsNone(
+            normalize.split_blob_ref("https://gitlab.com/o/r/blob/HEAD/LICENSE")
+        )
+
+    def test_rejects_plain_http(self):
+        self.assertIsNone(
+            normalize.split_blob_ref("http://github.com/o/r/blob/HEAD/LICENSE")
+        )
+
+    def test_rejects_a_github_lookalike_host(self):
+        self.assertIsNone(
+            normalize.split_blob_ref("https://github.com.evil.test/o/r/blob/HEAD/LICENSE")
+        )
+
 
 class NormalizeLicenseUrlTest(unittest.TestCase):
     """komac writes ``blob/HEAD/LICENSE``; ``HEAD`` is not a resolvable ref."""
@@ -355,6 +376,14 @@ class NormalizeLicenseUrlTest(unittest.TestCase):
         url = "https://example.com/license.html"
         self.assertEqual(url, normalize.normalize_license_url(url, self.REFS))
 
+    def test_a_non_github_blob_url_is_left_alone(self):
+        url = "https://gitlab.com/o/r/blob/HEAD/LICENSE"
+        self.assertEqual(url, normalize.normalize_license_url(url, self.REFS))
+
+    def test_a_plain_http_github_url_is_left_alone(self):
+        url = "http://github.com/o/r/blob/HEAD/LICENSE"
+        self.assertEqual(url, normalize.normalize_license_url(url, self.REFS))
+
     def test_an_empty_url_is_left_alone(self):
         self.assertEqual("", normalize.normalize_license_url("", self.REFS))
 
@@ -385,6 +414,80 @@ class NormalizeLicenseUrlTest(unittest.TestCase):
             "https://github.com/loonghao/msvc-kit/blob/HEAD/LICENSE", self.REFS
         )
         self.assertEqual(once, normalize.normalize_license_url(once, self.REFS))
+
+
+class RefExistsTest(unittest.TestCase):
+    """A silent degradation to the default branch must not go unnoticed."""
+
+    def captured(self, fn):
+        import contextlib
+        import io
+
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            result = fn()
+        return result, buffer.getvalue()
+
+    def http_error(self, code):
+        def get(url):
+            raise urllib.error.HTTPError(url, code, "err", {}, None)
+
+        return get
+
+    class FakeGitHub:
+        def __init__(self, get):
+            self._get = get
+
+        def get(self, url):
+            return self._get(url)
+
+    def test_a_missing_ref_is_reported_without_a_warning(self):
+        # A tag that is not pushed yet is the expected case, not a problem.
+        result, output = self.captured(
+            lambda: normalize.ref_exists(self.FakeGitHub(self.http_error(404)), "o/r", "v1")
+        )
+        self.assertFalse(result)
+        self.assertNotIn("::warning::", output)
+
+    def test_rate_limiting_is_reported(self):
+        result, output = self.captured(
+            lambda: normalize.ref_exists(self.FakeGitHub(self.http_error(403)), "o/r", "v1")
+        )
+        self.assertFalse(result)
+        self.assertIn("::warning::", output)
+        self.assertIn("v1", output)
+
+    def test_an_expired_token_is_reported(self):
+        result, output = self.captured(
+            lambda: normalize.ref_exists(self.FakeGitHub(self.http_error(401)), "o/r", "v1")
+        )
+        self.assertFalse(result)
+        self.assertIn("::warning::", output)
+
+    def test_a_resolvable_ref_is_accepted(self):
+        self.assertTrue(
+            normalize.ref_exists(self.FakeGitHub(lambda url: {"sha": "0" * 40}), "o/r", "v1")
+        )
+
+    def test_a_transport_failure_is_reported(self):
+        def get(url):
+            raise urllib.error.URLError("offline")
+
+        result, output = self.captured(
+            lambda: normalize.ref_exists(self.FakeGitHub(get), "o/r", "v1")
+        )
+        self.assertFalse(result)
+        self.assertIn("::warning::", output)
+
+    def test_a_ref_requiring_escaping_is_quoted(self):
+        seen = {}
+
+        def get(url):
+            seen["url"] = url
+            return {"sha": "0" * 40}
+
+        self.assertTrue(normalize.ref_exists(self.FakeGitHub(get), "o/r", "v1 beta"))
+        self.assertNotIn(" ", seen["url"].rsplit("/commits/", 1)[1])
 
 
 class LicenseRefsTest(unittest.TestCase):
@@ -455,6 +558,202 @@ class LicenseRefsTest(unittest.TestCase):
             "https://github.com/loonghao/msvc-kit/blob/HEAD/LICENSE", refs
         )
         self.assertIn(url.split("/blob/")[1].split("/")[0], refs)
+
+
+class MainLocaleReadTest(unittest.TestCase):
+    """Drive ``main()`` end to end with a fake GitHub API.
+
+    The unit tests above only cover pure functions, which left the locale read
+    path - including its error handling - unverified. These tests run the real
+    entry point so a status code the script mishandles fails here.
+    """
+
+    IDENTIFIER = "loonghao.msvc-kit"
+    VERSION = "0.2.19"
+    BRANCH = "loonghao.msvc-kit-0.2.19-ABC"
+    INSTALLER_PATH = (
+        "manifests/l/loonghao/msvc-kit/0.2.19/loonghao.msvc-kit.installer.yaml"
+    )
+    LOCALE_PATH = (
+        "manifests/l/loonghao/msvc-kit/0.2.19/loonghao.msvc-kit.locale.en-US.yaml"
+    )
+
+    INSTALLER_YAML = (
+        "# yaml-language-server: $schema=https://aka.ms/winget-manifest\n"
+        "PackageIdentifier: loonghao.msvc-kit\n"
+        "PackageVersion: 0.2.19\n"
+        "Installers:\n"
+        "- Architecture: x64\n"
+        "  InstallerUrl: https://example.invalid/msvc-kit.exe\n"
+        "  InstallerSha256: " + "A" * 64 + "\n"
+        "ManifestType: installer\n"
+        "ManifestVersion: 1.12.0\n"
+    )
+    LOCALE_YAML = (
+        "# yaml-language-server: $schema=https://aka.ms/winget-manifest\n"
+        "PackageIdentifier: loonghao.msvc-kit\n"
+        "PackageVersion: 0.2.19\n"
+        "License: MIT\n"
+        "LicenseUrl: https://github.com/loonghao/msvc-kit/blob/HEAD/LICENSE\n"
+        "ManifestType: defaultLocale\n"
+        "ManifestVersion: 1.12.0\n"
+    )
+
+    def encode(self, text):
+        return base64.b64encode(text.encode("utf-8")).decode()
+
+    class FakeGitHub:
+        """Serves one PR plus per-path responses keyed by status code."""
+
+        def __init__(self, statuses):
+            self.statuses = statuses  # {path: (status, body) or None}
+            self.written: list[dict] = []
+
+        def get(self, url):
+            if "/search/issues" in url:
+                return {"items": [{"number": 42, "title": "New version: x 0.2.19"}]}
+            if url.endswith("/pulls/42"):
+                return {
+                    "number": 42,
+                    "head": {
+                        "ref": MainLocaleReadTest.BRANCH,
+                        "repo": {"full_name": "loonghao/winget-pkgs"},
+                    },
+                }
+            if url.endswith("/repos/loonghao/msvc-kit"):
+                return {"default_branch": "main"}
+            if "/commits/" in url:
+                ref = urllib.parse.unquote(url.rsplit("/commits/", 1)[1])
+                if ref == "v0.2.19":
+                    return {"sha": "0" * 40}
+                raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+            for path, outcome in self.statuses.items():
+                if f"/contents/{path}?" in url:
+                    if outcome is None:
+                        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+                    status, body = outcome
+                    if status != 200:
+                        raise urllib.error.HTTPError(url, status, "err", {}, None)
+                    return {"sha": "blob1", "content": body}
+            raise AssertionError(f"unexpected GET: {url}")
+
+        def put(self, url, payload):
+            self.written.append(payload)
+            return {}
+
+        def file(self, repo, path, ref):
+            result = self.get(
+                f"https://api.github.com/repos/{repo}/contents/{path}?ref={ref}"
+            )
+            return result["sha"], base64.b64decode(result["content"]).decode("utf-8")
+
+    def run_main(self, locale_status):
+        import contextlib
+        import io
+
+        try:
+            import yaml
+        except ImportError:
+            self.skipTest("PyYAML is not installed")
+
+        locale_outcome = (
+            None
+            if locale_status == 404
+            else (locale_status, self.encode(self.LOCALE_YAML))
+        )
+        fake = self.FakeGitHub(
+            {
+                self.INSTALLER_PATH: (200, self.encode(self.INSTALLER_YAML)),
+                self.LOCALE_PATH: locale_outcome,
+            }
+        )
+        argv = [
+            "normalize-winget-manifest.py",
+            "--fork",
+            "loonghao/winget-pkgs",
+            "--identifier",
+            self.IDENTIFIER,
+            "--version",
+            self.VERSION,
+        ]
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            with unittest.mock.patch.object(normalize, "GitHub", lambda token: fake):
+                with unittest.mock.patch.object(sys, "argv", argv):
+                    with unittest.mock.patch.dict(os.environ, {"GH_TOKEN": "t"}):
+                        code = normalize.main()
+        return code, buffer.getvalue(), fake
+
+    def test_a_missing_locale_manifest_is_skipped(self):
+        code, output, fake = self.run_main(404)
+        self.assertEqual(0, code)
+        self.assertIn("No default locale manifest", output)
+        self.assertEqual([], fake.written)
+
+    def test_rate_limited_locale_read_fails_the_run(self):
+        # A 403 means the LicenseUrl was never checked; skipping would publish
+        # blob/HEAD/LICENSE behind a green release.
+        code, output, fake = self.run_main(403)
+        self.assertEqual(1, code)
+        self.assertIn("::error::", output)
+        self.assertNotIn("No default locale manifest", output)
+        self.assertEqual([], fake.written)
+
+    def test_an_expired_token_fails_the_run(self):
+        code, output, fake = self.run_main(401)
+        self.assertEqual(1, code)
+        self.assertIn("::error::", output)
+
+    def test_a_server_error_fails_the_run(self):
+        code, output, fake = self.run_main(500)
+        self.assertEqual(1, code)
+        self.assertIn("::error::", output)
+
+    def test_a_readable_locale_manifest_is_rewritten(self):
+        code, output, fake = self.run_main(200)
+        self.assertEqual(0, code)
+        self.assertIn("blob/HEAD/LICENSE", output)
+        self.assertIn("blob/v0.2.19/LICENSE", output)
+        # Without --apply nothing may be written.
+        self.assertEqual([], fake.written)
+
+    def test_apply_pushes_the_rewritten_locale_manifest(self):
+        import contextlib
+        import io
+
+        fake = self.FakeGitHub(
+            {
+                self.INSTALLER_PATH: (200, self.encode(self.INSTALLER_YAML)),
+                self.LOCALE_PATH: (200, self.encode(self.LOCALE_YAML)),
+            }
+        )
+        argv = [
+            "normalize-winget-manifest.py",
+            "--fork",
+            "loonghao/winget-pkgs",
+            "--identifier",
+            self.IDENTIFIER,
+            "--version",
+            self.VERSION,
+            "--apply",
+        ]
+        with contextlib.redirect_stdout(io.StringIO()):
+            with unittest.mock.patch.object(normalize, "GitHub", lambda token: fake):
+                with unittest.mock.patch.object(sys, "argv", argv):
+                    with unittest.mock.patch.dict(os.environ, {"GH_TOKEN": "t"}):
+                        code = normalize.main()
+        self.assertEqual(0, code)
+        self.assertEqual(1, len(fake.written))
+        pushed = base64.b64decode(fake.written[0]["content"]).decode()
+        self.assertNotIn("blob/HEAD", pushed)
+        self.assertIn("blob/v0.2.19/LICENSE", pushed)
+
+    def test_a_missing_locale_manifest_still_normalizes_installers(self):
+        # The locale manifest is optional; its absence must not block the
+        # installer collapse.
+        code, output, _ = self.run_main(404)
+        self.assertEqual(0, code)
+        self.assertIn("installer", output)
 
 
 class ForkTest(unittest.TestCase):

@@ -213,15 +213,28 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # PyYAML is only preinstalled by courtesy of the runner image. Installing
+      # it explicitly keeps the suite honest: without it the YAML-backed tests
+      # call skipTest and go green without testing anything.
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet pyyaml
+
       - name: Run script tests
         run: python3 -m unittest discover -s scripts -p "test_*.py" -v
 
       # The unit tests assert the *shape* of the rewritten LicenseUrl. This step
       # separately asserts that the shape points somewhere real: komac's
-      # blob/HEAD/ form is what github.com refused to resolve. Kept tolerant of
-      # GitHub outages - a 5xx here is flaky infrastructure, not a bad URL, so
-      # it is retried once and then skipped rather than failing the build.
-      - name: Check the normalized LicenseUrl resolves
+      # blob/HEAD/ form is what github.com refused to resolve.
+      #
+      # This is a canary for the ref the script pins, not a regression test of
+      # the script - it hardcodes the URL, so it still passes if
+      # normalize_license_url is changed to emit blob/HEAD/ again. The shape is
+      # covered by the unit tests above.
+      #
+      # Kept tolerant of GitHub outages and throttling - 000 (transport), 5xx,
+      # 429 and 403 (rate limiting) are flaky infrastructure, not a bad URL, so
+      # they are retried once and then skipped rather than failing the build.
+      - name: Check the pinned LicenseUrl still resolves
         run: |
           set -u
           url="https://github.com/loonghao/msvc-kit/blob/v0.2.19/LICENSE"
@@ -235,7 +248,7 @@ jobs:
             echo "attempt ${attempt}: ${code}"
             case "$code" in
               2??|3??) echo "LicenseUrl resolves: ${url}"; exit 0 ;;
-              000|5??) echo "GitHub is unreachable or erroring; retrying" ;;
+              000|5??|429|403) echo "GitHub is unreachable, erroring or throttling; retrying" ;;
               *) echo "::error::LicenseUrl returned ${code}: ${url}"; exit 1 ;;
             esac
             sleep 5
