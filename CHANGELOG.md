@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.2.19](https://github.com/loonghao/msvc-kit/compare/v0.2.18...v0.2.19) (2026-10-10)
+
+
+### Bug Fixes
+
+* **version:** reject ambiguous Windows SDK version selectors ([75f43f3](https://github.com/loonghao/msvc-kit/commit/75f43f35a038accda5e79ec79e39c2f076998523))
+
+
+### Dependencies
+
+* update loonghao/vx action to v0.9.35 ([d0a4af9](https://github.com/loonghao/msvc-kit/commit/d0a4af9c4ffde37c492d4ef7f4c92c03622ae299))
+* update loonghao/vx action to v0.9.36 ([05cb778](https://github.com/loonghao/msvc-kit/commit/05cb77850192dbf2725de686b06317080e1abc8e))
+* update loonghao/vx action to v0.9.37 ([a974929](https://github.com/loonghao/msvc-kit/commit/a974929d07b05763a09df9493516a10bf4474819))
+* update Rust crate base64 to 0.23 ([19a8b81](https://github.com/loonghao/msvc-kit/commit/19a8b812c4d2ff8f1333dc307f16c789c97929af))
+* update Rust crate zip to v9 ([dd4b09c](https://github.com/loonghao/msvc-kit/commit/dd4b09c246778a96b4becd563801f731fa1ab1c9))
+* update Rust crate zip to v9.0.1 ([c98abad](https://github.com/loonghao/msvc-kit/commit/c98abaddc104c55beb92079b8d61cff8dac1c93b))
+
+
+### Miscellaneous
+
+* record rust as rustup-managed instead of an ineffective vx pin ([#184](https://github.com/loonghao/msvc-kit/issues/184)) ([0678002](https://github.com/loonghao/msvc-kit/commit/0678002c2d9aafe29ff0947bafc010ff66f5c78d))
+
 ## [0.2.18](https://github.com/loonghao/msvc-kit/compare/v0.2.17...v0.2.18) (2026-10-08)
 
 
