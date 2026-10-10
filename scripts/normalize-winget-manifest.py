@@ -17,6 +17,11 @@ which winget rejects with::
 ``installers-regex`` cannot prevent this: it filters the *assets* of the new
 release, not the pairing against the previous manifest.
 
+komac also derives ``LicenseUrl`` as ``https://github.com/<owner>/<repo>/blob/
+HEAD/<file>`` (``license_url`` in ``src/github/client.rs``). ``HEAD`` is a
+symbolic ref, not a real one, so github.com does not resolve it reliably and
+winget validation fails the manifest with ``URL-Validation-Error``.
+
 What this script does
 ---------------------
 It locates the open winget-pkgs pull request for ``<identifier>`` at
@@ -26,6 +31,11 @@ duplicated installer entries down to one per
 package dependency
 matches the installer architecture, and pushes the result back to the PR branch
 when it changed.
+
+It does the same for the ``LicenseUrl`` of the default locale manifest, which
+komac writes with the unresolvable ``blob/HEAD/`` prefix. The ref is rewritten
+to the release tag when one exists, falling back to the repository default
+branch.
 
 It never creates a pull request and never touches any branch other than the one
 the pull request already points at: the pull request head must live in
@@ -46,7 +56,13 @@ import urllib.parse
 import urllib.request
 
 API_ROOT = "https://api.github.com"
+GITHUB_ROOT = "https://github.com/"
 VCREDIST_PREFIX = "Microsoft.VCRedist."
+UNRESOLVABLE_REFS = ("HEAD",)
+
+
+class LicenseUrlError(Exception):
+    """Raised when a ``LicenseUrl`` cannot be rewritten to a resolvable ref."""
 
 
 class GitHub:
@@ -111,6 +127,114 @@ def installers_key(installer: dict) -> tuple:
         installer.get("InstallerUrl"),
         installer.get("InstallerSha256"),
     )
+
+
+def split_blob_ref(url: str) -> tuple[str, str, str] | None:
+    """Split a github.com ``blob/<ref>/<path>`` URL into ``(root, ref, path)``.
+
+    Returns ``None`` for anything else - a non-github.com host, a plain http
+    URL, or a URL without a ``blob/`` segment - so callers leave URLs they do
+    not understand alone instead of mangling them.
+    """
+    if not url.startswith(GITHUB_ROOT):
+        return None
+    prefix, separator, rest = url.partition("/blob/")
+    if not separator:
+        return None
+    ref, slash, path = rest.partition("/")
+    if not slash or not ref or not path:
+        return None
+    return prefix, ref, path
+
+
+def normalize_license_url(url: str, refs: list[str]) -> str:
+    """Rewrite ``blob/HEAD/...`` to the first resolvable ref in ``refs``.
+
+    ``HEAD`` is a symbolic ref: github.com does not resolve it as part of a
+    ``blob/`` path, so winget's URL validation fails the manifest. The rewrite
+    pins the URL to a real ref - the release tag when it exists, otherwise the
+    repository default branch.
+
+    URLs that are not GitHub ``blob/`` URLs, or that already name a real ref,
+    are returned unchanged: the script must never rewrite what it cannot prove
+    is broken.
+    """
+    if not url:
+        return url
+
+    parts = split_blob_ref(url)
+    if parts is None:
+        return url
+
+    prefix, ref, path = parts
+    if ref.upper() not in {candidate.upper() for candidate in UNRESOLVABLE_REFS}:
+        return url
+
+    for candidate in refs:
+        if candidate and candidate.upper() not in {
+            broken.upper() for broken in UNRESOLVABLE_REFS
+        }:
+            return f"{prefix}/blob/{candidate}/{path}"
+
+    raise LicenseUrlError(
+        f"{url} uses an unresolvable ref and no replacement ref is available"
+    )
+
+
+def ref_exists(gh: GitHub, repo: str, ref: str) -> bool:
+    """Return whether ``ref`` resolves in ``repo``.
+
+    A tag that has not been pushed yet must not be written into the manifest:
+    the resulting URL would 404, which is no better than the ``HEAD`` it
+    replaced. Unreadable repositories are reported as missing so the caller
+    falls back to a ref it can verify.
+
+    A 404 (the ref genuinely is not there yet) is not worth reporting, but any
+    other failure is: silently degrading to the default branch would pin the
+    license to the wrong ref with no trace in the log.
+    """
+    quoted = urllib.parse.quote(ref, safe="")
+    try:
+        gh.get(f"{API_ROOT}/repos/{repo}/commits/{quoted}")
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            print(f"::warning::Could not verify ref {ref} on {repo}: {error}")
+        return False
+    except urllib.error.URLError as error:
+        print(f"::warning::Could not verify ref {ref} on {repo}: {error}")
+        return False
+    return True
+
+
+def default_branch(gh: GitHub, repo: str) -> str | None:
+    """Return the default branch of ``repo``, or ``None`` if it cannot be read."""
+    try:
+        return gh.get(f"{API_ROOT}/repos/{repo}").get("default_branch")
+    except (urllib.error.HTTPError, urllib.error.URLError) as error:
+        print(f"::warning::Could not read the default branch of {repo}: {error}")
+        return None
+
+
+def license_refs(gh: GitHub, repo: str, version: str) -> list[str]:
+    """Return the refs a ``blob/HEAD/`` URL should be rewritten to, best first.
+
+    The release tag is preferred because the license of the shipped version is
+    what the manifest documents; the default branch is the fallback for a tag
+    that has not been pushed yet. Both are verified to resolve before being
+    offered - offering a ref that does not exist would trade one 404 for
+    another.
+    """
+    candidate_tags = [f"v{version}", version]
+    verified = [tag for tag in candidate_tags if ref_exists(gh, repo, tag)]
+
+    branch = default_branch(gh, repo) or ""
+    if branch and branch not in verified:
+        verified.append(branch)
+
+    # With nothing verifiable, fall back to the tag anyway: an unverified tag is
+    # still a better manifest than an unresolvable ``HEAD``, and release.yml
+    # only runs this after the release tag exists.
+    return verified or candidate_tags
 
 
 def head_repo(pr: dict) -> str:
@@ -253,61 +377,134 @@ def main() -> int:
 
     partition = args.identifier[0].lower()
     folder = "/".join(args.identifier.split("."))
-    path = (
-        f"manifests/{partition}/{folder}/{args.version}/"
-        f"{args.identifier}.installer.yaml"
-    )
+    directory = f"manifests/{partition}/{folder}/{args.version}"
+    manifest_root = f"{directory}/{args.identifier}"
 
+    edits: list[tuple[str, str, str]] = []  # (path, blob_sha, new content)
+
+    installer_path = f"{manifest_root}.installer.yaml"
     try:
-        blob_sha, content = gh.file(target_repo, path, branch)
+        blob_sha, content = gh.file(target_repo, installer_path, branch)
     except urllib.error.HTTPError as error:
-        print(f"::error::Could not read {path} on {target_repo}@{branch}: {error}")
+        print(
+            f"::error::Could not read {installer_path} on {target_repo}@{branch}: {error}"
+        )
         return 1
 
     header, body = split_header(content)
     manifest = yaml.safe_load(body)
     installers = manifest.get("Installers") or []
-    normalized, changed = collapse(installers)
+    normalized, installer_changed = collapse(installers)
 
     error = normalization_error(installers, normalized)
     if error is not None:
-        print(f"::error::{error}; leaving {path} untouched")
+        print(f"::error::{error}; leaving {installer_path} untouched")
         return 1
 
-    if not changed:
-        print(f"{path} has no duplicate installer entries")
-        return 0
-
-    removed = len(installers) - len(normalized)
-    print(f"Collapsing {removed} duplicate installer entr{'y' if removed == 1 else 'ies'} in {path}")
-    for installer in normalized:
+    if installer_changed:
+        removed = len(installers) - len(normalized)
         print(
-            f"  keeping {installer.get('Architecture')} "
-            f"{installer.get('InstallerSha256', '')[:12]} "
-            f"deps={sorted(dependency_architectures(installer)) or '-'}"
+            f"Collapsing {removed} duplicate installer "
+            f"entr{'y' if removed == 1 else 'ies'} in {installer_path}"
         )
+        for installer in normalized:
+            print(
+                f"  keeping {installer.get('Architecture')} "
+                f"{installer.get('InstallerSha256', '')[:12]} "
+                f"deps={sorted(dependency_architectures(installer)) or '-'}"
+            )
+        manifest["Installers"] = normalized
+        edits.append(
+            (
+                installer_path,
+                blob_sha,
+                header
+                + yaml.safe_dump(
+                    manifest, sort_keys=False, default_flow_style=False, allow_unicode=True
+                ),
+            )
+        )
+    else:
+        print(f"{installer_path} has no duplicate installer entries")
 
-    manifest["Installers"] = normalized
-    rendered = header + yaml.safe_dump(
-        manifest, sort_keys=False, default_flow_style=False, allow_unicode=True
-    )
+    locale_path = f"{manifest_root}.locale.en-US.yaml"
+    try:
+        locale_sha, locale_content = gh.file(target_repo, locale_path, branch)
+    except urllib.error.HTTPError as error:
+        # Only a missing file means "this package has no default locale
+        # manifest". Any other status - an expired token (401) or rate limiting
+        # (403) - means the LicenseUrl was never checked, so skipping here would
+        # publish ``blob/HEAD/LICENSE`` behind a green release. Fail loudly
+        # instead: the winget job is the last step of the release, so a failure
+        # here cannot undo the published GitHub Release.
+        if error.code != 404:
+            print(
+                f"::error::Could not read {locale_path} on {target_repo}@{branch}: {error}"
+            )
+            return 1
+        print(f"No default locale manifest at {locale_path}; skipping")
+        locale_sha = locale_content = None
+
+    if locale_content is not None:
+        locale_header, locale_body = split_header(locale_content)
+        locale = yaml.safe_load(locale_body) or {}
+        license_url = str(locale.get("LicenseUrl") or "")
+        if license_url:
+            parts = split_blob_ref(license_url)
+            refs = (
+                license_refs(gh, parts[0].removeprefix(GITHUB_ROOT), args.version)
+                if parts
+                else []
+            )
+            try:
+                rewritten = normalize_license_url(license_url, refs)
+            except LicenseUrlError as failure:
+                print(f"::error::{failure}; leaving {locale_path} untouched")
+                return 1
+
+            if rewritten != license_url:
+                print(f"Rewriting LicenseUrl in {locale_path}")
+                print(f"  before: {license_url}")
+                print(f"  after:  {rewritten}")
+                locale["LicenseUrl"] = rewritten
+                edits.append(
+                    (
+                        locale_path,
+                        locale_sha,
+                        locale_header
+                        + yaml.safe_dump(
+                            locale,
+                            sort_keys=False,
+                            default_flow_style=False,
+                            allow_unicode=True,
+                        ),
+                    )
+                )
+            else:
+                print(f"{locale_path} LicenseUrl already uses a resolvable ref")
+
+    if not edits:
+        print(f"{directory} is already normalized")
+        return 0
 
     if not args.apply:
         print("--apply not set; leaving the branch untouched")
         return 0
 
-    gh.put(
-        f"{API_ROOT}/repos/{target_repo}/contents/{path}",
-        {
-            "message": f"New version: {args.identifier} version {args.version}\n\n"
-            "Collapse duplicate installer entries so the release ships a single "
-            "installer per architecture.",
-            "content": base64.b64encode(rendered.encode("utf-8")).decode(),
-            "sha": blob_sha,
-            "branch": branch,
-        },
-    )
-    print(f"Pushed normalized manifest to {target_repo}@{branch} (PR #{pr['number']})")
+    for path, blob_sha, rendered in edits:
+        gh.put(
+            f"{API_ROOT}/repos/{target_repo}/contents/{path}",
+            {
+                "message": f"New version: {args.identifier} version {args.version}\n\n"
+                "Normalize the generated manifest so the release ships a single "
+                "installer per architecture and a LicenseUrl that resolves.",
+                "content": base64.b64encode(rendered.encode("utf-8")).decode(),
+                "sha": blob_sha,
+                "branch": branch,
+            },
+        )
+        print(f"Pushed normalized manifest to {path}")
+    print(f"Pushed normalized manifests to {target_repo}@{branch} (PR #{pr['number']})")
     return 0
 
 

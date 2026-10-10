@@ -213,8 +213,47 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # PyYAML is only preinstalled by courtesy of the runner image. Installing
+      # it explicitly keeps the suite honest: without it the YAML-backed tests
+      # call skipTest and go green without testing anything.
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet pyyaml
+
       - name: Run script tests
         run: python3 -m unittest discover -s scripts -p "test_*.py" -v
+
+      # The unit tests assert the *shape* of the rewritten LicenseUrl. This step
+      # separately asserts that the shape points somewhere real: komac's
+      # blob/HEAD/ form is what github.com refused to resolve.
+      #
+      # This is a canary for the ref the script pins, not a regression test of
+      # the script - it hardcodes the URL, so it still passes if
+      # normalize_license_url is changed to emit blob/HEAD/ again. The shape is
+      # covered by the unit tests above.
+      #
+      # Kept tolerant of GitHub outages and throttling - 000 (transport), 5xx,
+      # 429 and 403 (rate limiting) are flaky infrastructure, not a bad URL, so
+      # they are retried once and then skipped rather than failing the build.
+      - name: Check the pinned LicenseUrl still resolves
+        run: |
+          set -u
+          url="https://github.com/loonghao/msvc-kit/blob/v0.2.19/LICENSE"
+          for attempt in 1 2; do
+            # -f is deliberately omitted: it suppresses the status code this
+            # check branches on. A transport failure yields 000 instead, and
+            # curl's own stdout is discarded so the fallback does not append to
+            # a partial code.
+            code=$(curl -s -o /dev/null -w '%{http_code}' -SI -L --max-time 30 "$url" 2>/dev/null) || code=000
+            code=${code:-000}
+            echo "attempt ${attempt}: ${code}"
+            case "$code" in
+              2??|3??) echo "LicenseUrl resolves: ${url}"; exit 0 ;;
+              000|5??|429|403) echo "GitHub is unreachable, erroring or throttling; retrying" ;;
+              *) echo "::error::LicenseUrl returned ${code}: ${url}"; exit 1 ;;
+            esac
+            sleep 5
+          done
+          echo "::warning::Skipping the LicenseUrl reachability check: github.com returned ${code}"
 
 
   # Documentation build test
