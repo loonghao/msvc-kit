@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.20](https://github.com/loonghao/msvc-kit/compare/v0.2.19...v0.2.20) (2026-10-10)
+
+
+### Bug Fixes
+
+* **winget:** fail when GH_TOKEN is missing, and test the installer collapse for real ([6cf7fce](https://github.com/loonghao/msvc-kit/commit/6cf7fce1789b6ecb9f9da1f661aae5698eccf2e7))
+* **winget:** rewrite unresolvable blob/HEAD LicenseUrl in generated manifest ([#191](https://github.com/loonghao/msvc-kit/issues/191)) ([c78b878](https://github.com/loonghao/msvc-kit/commit/c78b878bd78f0dc133ce94a9c3f20d8decbd6630))
+
 ## [0.2.19](https://github.com/loonghao/msvc-kit/compare/v0.2.18...v0.2.19) (2026-10-10)
 
 
