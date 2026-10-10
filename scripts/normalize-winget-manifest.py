@@ -351,8 +351,12 @@ def main() -> int:
 
     token = os.environ.get("GH_TOKEN")
     if not token:
-        print("::error::GH_TOKEN is not set; skipping manifest normalization")
-        return 0
+        # Exit non-zero: without a token the LicenseUrl is never inspected, and
+        # a green run here would publish blob/HEAD/LICENSE just as surely as the
+        # failures handled below. The winget job runs after the GitHub Release
+        # is published, so failing cannot undo it.
+        print("::error::GH_TOKEN is not set; cannot normalize the manifest")
+        return 1
 
     try:
         import yaml
@@ -491,6 +495,12 @@ def main() -> int:
         print("--apply not set; leaving the branch untouched")
         return 0
 
+    # One Contents API write per file, so N edits become N commits. That is
+    # deliberate: the branch is only the source of a winget-pkgs pull request
+    # that upstream squash-merges, each edit targets a different file with a
+    # blob sha unaffected by the others, and collapsing them into a single
+    # commit would mean driving the Git Data API (tree, commit, ref update) -
+    # a much larger failure surface on the last step of a release.
     for path, blob_sha, rendered in edits:
         gh.put(
             f"{API_ROOT}/repos/{target_repo}/contents/{path}",

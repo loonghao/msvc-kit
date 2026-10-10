@@ -589,6 +589,35 @@ class MainLocaleReadTest(unittest.TestCase):
         "ManifestType: installer\n"
         "ManifestVersion: 1.12.0\n"
     )
+
+    DUPLICATE_INSTALLER_YAML = (
+        "# yaml-language-server: $schema=https://aka.ms/winget-manifest\n"
+        "PackageIdentifier: loonghao.msvc-kit\n"
+        "PackageVersion: 0.2.19\n"
+        "Installers:\n"
+        # Three entries sharing one asset and differing only by their inherited
+        # VCRedist dependency - the shape komac produces and winget rejects.
+        "- Architecture: x64\n"
+        "  InstallerUrl: https://example.invalid/msvc-kit.exe\n"
+        "  InstallerSha256: " + "A" * 64 + "\n"
+        "  Dependencies:\n"
+        "    PackageDependencies:\n"
+        "    - PackageIdentifier: Microsoft.VCRedist.2015+.x86\n"
+        "- Architecture: x64\n"
+        "  InstallerUrl: https://example.invalid/msvc-kit.exe\n"
+        "  InstallerSha256: " + "A" * 64 + "\n"
+        "  Dependencies:\n"
+        "    PackageDependencies:\n"
+        "    - PackageIdentifier: Microsoft.VCRedist.2015+.arm64\n"
+        "- Architecture: x64\n"
+        "  InstallerUrl: https://example.invalid/msvc-kit.exe\n"
+        "  InstallerSha256: " + "A" * 64 + "\n"
+        "  Dependencies:\n"
+        "    PackageDependencies:\n"
+        "    - PackageIdentifier: Microsoft.VCRedist.2015+.x64\n"
+        "ManifestType: installer\n"
+        "ManifestVersion: 1.12.0\n"
+    )
     LOCALE_YAML = (
         "# yaml-language-server: $schema=https://aka.ms/winget-manifest\n"
         "PackageIdentifier: loonghao.msvc-kit\n"
@@ -647,7 +676,7 @@ class MainLocaleReadTest(unittest.TestCase):
             )
             return result["sha"], base64.b64decode(result["content"]).decode("utf-8")
 
-    def run_main(self, locale_status):
+    def run_main(self, locale_status, installer_yaml=None, apply=False):
         import contextlib
         import io
 
@@ -663,7 +692,14 @@ class MainLocaleReadTest(unittest.TestCase):
         )
         fake = self.FakeGitHub(
             {
-                self.INSTALLER_PATH: (200, self.encode(self.INSTALLER_YAML)),
+                self.INSTALLER_PATH: (
+                    200,
+                    self.encode(
+                        self.INSTALLER_YAML
+                        if installer_yaml is None
+                        else installer_yaml
+                    ),
+                ),
                 self.LOCALE_PATH: locale_outcome,
             }
         )
@@ -676,6 +712,8 @@ class MainLocaleReadTest(unittest.TestCase):
             "--version",
             self.VERSION,
         ]
+        if apply:
+            argv.append("--apply")
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
             with unittest.mock.patch.object(normalize, "GitHub", lambda token: fake):
@@ -683,6 +721,44 @@ class MainLocaleReadTest(unittest.TestCase):
                     with unittest.mock.patch.dict(os.environ, {"GH_TOKEN": "t"}):
                         code = normalize.main()
         return code, buffer.getvalue(), fake
+
+    def test_a_missing_token_fails_the_run(self):
+        # A missing token means the LicenseUrl is never inspected; exiting 0
+        # would publish blob/HEAD/LICENSE behind a green release.
+        argv = [
+            "normalize-winget-manifest.py",
+            "--fork",
+            "loonghao/winget-pkgs",
+            "--identifier",
+            self.IDENTIFIER,
+            "--version",
+            self.VERSION,
+        ]
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            with unittest.mock.patch.object(sys, "argv", argv):
+                with unittest.mock.patch.dict(os.environ, {}, clear=True):
+                    code = normalize.main()
+        self.assertEqual(1, code)
+        self.assertIn("::error::", buffer.getvalue())
+        self.assertIn("GH_TOKEN", buffer.getvalue())
+
+    def test_an_empty_token_fails_the_run(self):
+        argv = [
+            "normalize-winget-manifest.py",
+            "--fork",
+            "loonghao/winget-pkgs",
+            "--identifier",
+            self.IDENTIFIER,
+            "--version",
+            self.VERSION,
+        ]
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            with unittest.mock.patch.object(sys, "argv", argv):
+                with unittest.mock.patch.dict(os.environ, {"GH_TOKEN": ""}):
+                    code = normalize.main()
+        self.assertEqual(1, code)
 
     def test_a_missing_locale_manifest_is_skipped(self):
         code, output, fake = self.run_main(404)
@@ -750,10 +826,36 @@ class MainLocaleReadTest(unittest.TestCase):
 
     def test_a_missing_locale_manifest_still_normalizes_installers(self):
         # The locale manifest is optional; its absence must not block the
-        # installer collapse.
-        code, output, _ = self.run_main(404)
+        # installer collapse. This asserts on the pushed content rather than on
+        # the log: the no-op branch also prints a line containing "installer",
+        # so a log assertion would pass even with the collapse disabled.
+        code, output, fake = self.run_main(
+            404, installer_yaml=self.DUPLICATE_INSTALLER_YAML, apply=True
+        )
         self.assertEqual(0, code)
-        self.assertIn("installer", output)
+        self.assertIn("Collapsing 2 duplicate installer entries", output)
+        pushed = base64.b64decode(fake.written[0]["content"]).decode()
+        self.assertEqual(1, pushed.count("- Architecture: x64"))
+        # The surviving entry is the one whose VCRedist matches x64.
+        self.assertIn("Microsoft.VCRedist.2015+.x64", pushed)
+        self.assertNotIn("Microsoft.VCRedist.2015+.x86", pushed)
+        self.assertNotIn("Microsoft.VCRedist.2015+.arm64", pushed)
+
+    def test_duplicate_installers_and_bad_license_url_are_both_fixed(self):
+        # Both edits in one run: the installer collapse and the LicenseUrl
+        # rewrite must each land, as two separate commits.
+        code, output, fake = self.run_main(
+            200, installer_yaml=self.DUPLICATE_INSTALLER_YAML, apply=True
+        )
+        self.assertEqual(0, code)
+        self.assertIn("Collapsing 2 duplicate installer entries", output)
+        self.assertIn("blob/v0.2.19/LICENSE", output)
+        self.assertEqual(2, len(fake.written))
+        installer_push = base64.b64decode(fake.written[0]["content"]).decode()
+        locale_push = base64.b64decode(fake.written[1]["content"]).decode()
+        self.assertEqual(1, installer_push.count("- Architecture: x64"))
+        self.assertNotIn("blob/HEAD", locale_push)
+        self.assertIn("blob/v0.2.19/LICENSE", locale_push)
 
 
 class ForkTest(unittest.TestCase):
