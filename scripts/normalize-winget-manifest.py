@@ -59,6 +59,9 @@ API_ROOT = "https://api.github.com"
 GITHUB_ROOT = "https://github.com/"
 VCREDIST_PREFIX = "Microsoft.VCRedist."
 UNRESOLVABLE_REFS = ("HEAD",)
+# Bounds the open-pulls walk in :func:`head_pr_numbers`. Ten pages of 100 is far
+# more than a release PR can sit behind; it exists only to stop a runaway loop.
+MAX_PR_PAGES = 10
 
 
 class LicenseUrlError(Exception):
@@ -93,14 +96,64 @@ class GitHub:
         return result["sha"], base64.b64decode(result["content"]).decode("utf-8")
 
 
+def head_pr_numbers(gh: GitHub, upstream: str, fork_owner: str, version: str) -> list[int]:
+    """Return open PR numbers whose head branch belongs to ``fork_owner``.
+
+    Uses the pulls API rather than the search API: search is eventually
+    consistent, so a PR created seconds earlier is invisible to it. Listing the
+    repository's open pulls is strongly consistent and returns head ref details
+    directly, which also removes the per-candidate fetch the search path needed.
+    """
+    numbers = []
+    page = 1
+    # Cap the walk: the release PR is always on a recent page, and a bounded
+    # loop cannot spin forever if the API keeps returning results.
+    while page <= MAX_PR_PAGES:
+        pulls = gh.get(
+            f"{API_ROOT}/repos/{upstream}/pulls?state=open&per_page=100&page={page}"
+        )
+        if not pulls:
+            break
+        for pull in pulls:
+            head = pull.get("head") or {}
+            repo = head.get("repo") or {}
+            owner = (repo.get("owner") or {}).get("login") or ""
+            branch = head.get("ref") or ""
+            if owner.lower() == fork_owner.lower() and version in branch:
+                numbers.append(pull["number"])
+        page += 1
+    return numbers
+
+
 def find_pull_request(gh: GitHub, upstream: str, identifier: str, version: str):
-    """Find the open PR created for ``identifier`` at ``version``."""
-    search = urllib.parse.quote(f"{identifier} in:title type:pr state:open repo:{upstream}")
-    for pr in gh.get(f"{API_ROOT}/search/issues?q={search}&per_page=100").get("items", []):
-        title = pr.get("title") or ""
-        if version in title:
-            # The search API does not expose head ref details; fetch the full PR.
-            return gh.get(f"{API_ROOT}/repos/{upstream}/pulls/{pr['number']}")
+    """Find the open PR created for ``identifier`` at ``version``.
+
+    Prefer :func:`find_pull_request_in` with a fork: matching on the identifier
+    alone requires the search API, whose index lags behind a PR created moments
+    earlier. Let the caller fail loudly when no fork is supplied rather than
+    risking a silent skip that ships an unnormalized manifest.
+    """
+    return find_pull_request_in(gh, upstream, identifier, version, None)
+
+
+def find_pull_request_in(
+    gh: GitHub,
+    upstream: str,
+    identifier: str,
+    version: str,
+    fork: str | None,
+):
+    """Find the open PR for this release, narrowed by ``fork`` owner.
+
+    Uses the pulls API, which is strongly consistent, instead of the search API.
+    Search is eventually consistent: in v0.2.20 the lookup ran ~3s after the
+    releaser created the PR, found nothing, and the caller treated that as success, so the manifest shipped with ``blob/HEAD/LICENSE`` on a green run.
+    Without a fork owner there is no way to identify the PR safely, so this
+    returns ``None`` and the caller must fail.
+    """
+    if fork:
+        for number in head_pr_numbers(gh, upstream, fork.split("/")[0], version):
+            return gh.get(f"{API_ROOT}/repos/{upstream}/pulls/{number}")
     return None
 
 
@@ -224,6 +277,9 @@ def license_refs(gh: GitHub, repo: str, version: str) -> list[str]:
     offered - offering a ref that does not exist would trade one 404 for
     another.
     """
+    # Prefer the release tag because the license of the shipped version is what
+    # the manifest documents. Probe every candidate form, since repos differ on
+    # whether they prefix tags with ``v``.
     candidate_tags = [f"v{version}", version]
     verified = [tag for tag in candidate_tags if ref_exists(gh, repo, tag)]
 
@@ -231,9 +287,10 @@ def license_refs(gh: GitHub, repo: str, version: str) -> list[str]:
     if branch and branch not in verified:
         verified.append(branch)
 
-    # With nothing verifiable, fall back to the tag anyway: an unverified tag is
-    # still a better manifest than an unresolvable ``HEAD``, and release.yml
-    # only runs this after the release tag exists.
+    # Nothing resolved: fall back to the tags anyway. An unverified tag is still
+    # a better manifest than an unresolvable ``HEAD`` - the releaser only runs
+    # this after the release tag exists, so a failed probe is usually the API
+    # lagging rather than a genuinely missing tag.
     return verified or candidate_tags
 
 
@@ -365,12 +422,20 @@ def main() -> int:
         return 1
 
     gh = GitHub(token)
-    pr = find_pull_request(gh, args.upstream, args.identifier, args.version)
+    pr = find_pull_request_in(
+        gh, args.upstream, args.identifier, args.version, args.fork
+    )
     if pr is None:
+        # Fail loudly. A silent ``return 0`` here is exactly how a bad
+        # LicenseUrl shipped on a green release in v0.2.20: the lookup raced the
+        # search index, found nothing, and reported success while the manifest
+        # kept blob/HEAD/LICENSE.
         print(
-            f"No open pull request found for {args.identifier} {args.version}; nothing to normalize"
+            f"::error::No open pull request found for {args.identifier} "
+            f"{args.version} in {args.upstream} from {args.fork}; the manifest was "
+            "not normalized"
         )
-        return 0
+        return 1
 
     branch = pr["head"]["ref"]
     target_repo = head_repo(pr)
