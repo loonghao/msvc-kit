@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.21](https://github.com/loonghao/msvc-kit/compare/v0.2.20...v0.2.21) (2026-10-11)
+
+
+### Bug Fixes
+
+* **winget:** look up the release PR deterministically and fail loudly ([a6d5a3e](https://github.com/loonghao/msvc-kit/commit/a6d5a3e490e36119aa1cc7303d5c0258156bd0a5))
+
 ## [0.2.20](https://github.com/loonghao/msvc-kit/compare/v0.2.19...v0.2.20) (2026-10-11)
 
 
