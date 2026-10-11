@@ -639,8 +639,24 @@ class MainLocaleReadTest(unittest.TestCase):
             self.written: list[dict] = []
 
         def get(self, url):
-            if "/search/issues" in url:
-                return {"items": [{"number": 42, "title": "New version: x 0.2.19"}]}
+            # The lookup lists open pulls rather than searching: search is
+            # eventually consistent and missed the freshly created release PR.
+            if "/pulls?state=open" in url:
+                query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+                if int(query["page"][0]) > 1:
+                    return []
+                return [
+                    {
+                        "number": 42,
+                        "head": {
+                            "ref": MainLocaleReadTest.BRANCH,
+                            "repo": {
+                                "full_name": "loonghao/winget-pkgs",
+                                "owner": {"login": "loonghao"},
+                            },
+                        },
+                    }
+                ]
             if url.endswith("/pulls/42"):
                 return {
                     "number": 42,
@@ -856,6 +872,160 @@ class MainLocaleReadTest(unittest.TestCase):
         self.assertEqual(1, installer_push.count("- Architecture: x64"))
         self.assertNotIn("blob/HEAD", locale_push)
         self.assertIn("blob/v0.2.19/LICENSE", locale_push)
+
+
+class HeadPrNumbersTest(unittest.TestCase):
+    """The PR lookup must be strongly consistent, so it uses the pulls API."""
+
+    def gh_returning(self, pages):
+        class FakeGitHub:
+            def __init__(self):
+                self.calls = []
+
+            def get(self, url):
+                self.calls.append(url)
+                query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+                page = int(query["page"][0])
+                return pages[page - 1] if page <= len(pages) else [] if pages else []
+        return FakeGitHub()
+
+    def pull(self, number, owner, branch):
+        return {
+            "number": number,
+            "head": {"ref": branch, "repo": {"owner": {"login": owner}}},
+        }
+
+    def test_matches_the_fork_owner_and_version(self):
+        gh = self.gh_returning(
+            [[self.pull(450384, "loonghao", "release-0.2.20")]]
+        )
+        self.assertEqual(
+            [450384],
+            normalize.head_pr_numbers(gh, "microsoft/winget-pkgs", "loonghao", "0.2.20"),
+        )
+        self.assertIn("/repos/microsoft/winget-pkgs/pulls?state=open", gh.calls[0])
+        self.assertNotIn("/search/issues", gh.calls[0])
+
+    def test_ignores_pulls_from_another_owner(self):
+        gh = self.gh_returning(
+            [[self.pull(1, "someone-else", "release-please--main")]]
+        )
+        self.assertEqual(
+            [], normalize.head_pr_numbers(gh, "microsoft/winget-pkgs", "loonghao", "0.2.20")
+        )
+
+    def test_paginates_until_exhausted(self):
+        gh = self.gh_returning(
+            [
+                [self.pull(11, "loonghao", "old-branch")],
+                [self.pull(22, "loonghao", "release-0.2.20")],
+            ]
+        )
+        self.assertEqual(
+            [22], normalize.head_pr_numbers(gh, "microsoft/winget-pkgs", "loonghao", "0.2.20")
+        )
+
+    def test_empty_first_page_stops(self):
+        gh = self.gh_returning([[]])
+        self.assertEqual(
+            [], normalize.head_pr_numbers(gh, "microsoft/winget-pkgs", "loonghao", "0.2.20")
+        )
+        self.assertEqual(1, len(gh.calls))
+
+    def test_bounded_by_the_page_cap(self):
+        # A misbehaving API must not hang the release: the walk stops at the cap.
+        class EndlessGitHub:
+            def __init__(self):
+                self.calls = []
+
+            def get(self, url):
+                self.calls.append(url)
+                return [normalize_head_pull()]
+
+        gh = EndlessGitHub()
+        normalize.head_pr_numbers(gh, "microsoft/winget-pkgs", "loonghao", "0.2.20")
+        self.assertEqual(normalize.MAX_PR_PAGES, len(gh.calls))
+
+
+class FindPullRequestTest(unittest.TestCase):
+    """A missing PR must never be reported as success."""
+
+    def test_lookup_never_uses_the_search_api(self):
+        # The v0.2.20 regression: search returned nothing for a PR created seconds earlier.
+        calls = []
+
+        class FakeGitHub:
+            def get(self, url):
+                calls.append(url)
+                if "/pulls?state=open" in url:
+                    return [
+                        {
+                            "number": 450384,
+                            "head": {
+                                "ref": "release-0.2.20",
+                                "repo": {"owner": {"login": "loonghao"}},
+                            },
+                        }
+                    ]
+                return {
+                    "number": 450384,
+                    "head": {
+                        "ref": "release-0.2.20",
+                        "repo": {"full_name": "loonghao/winget-pkgs"},
+                    },
+                }
+
+        pr = normalize.find_pull_request_in(
+            FakeGitHub(), "microsoft/winget-pkgs", "loonghao.msvc-kit", "0.2.20", "loonghao/winget-pkgs")
+
+        self.assertIsNotNone(pr)
+        self.assertFalse(any("/search/issues" in url for url in calls))
+
+    def test_returns_none_without_a_fork(self):
+        # Without a fork owner the PR cannot be identified safely.
+        self.assertIsNone(
+            normalize.find_pull_request_in(
+                None, "microsoft/winget-pkgs", "loonghao.msvc-kit", "0.2.20", None
+            )
+        )
+
+
+def normalize_head_pull():
+    return {
+        "number": 7,
+        "head": {"ref": "release-0.2.20", "repo": {"owner": {"login": "loonghao"}}},
+    }
+
+
+class LicenseRefPrefixTest(unittest.TestCase):
+    """Ref probing must try both the bare and the ``v``-prefixed tag forms."""
+
+    def gh_where_only(self, existing):
+        class FakeGitHub:
+            def get(self, url):
+                ref = urllib.parse.unquote(url.rsplit("/commits/", 1)[-1])
+                if ref in existing:
+                    return {"sha": "0" * 40}
+                raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+        return FakeGitHub()
+
+    def test_falls_back_to_the_prefixed_tag_when_the_bare_one_is_absent(self):
+        # release.yml tags v<version>; probing the bare form first logged a
+        # spurious 422 and only worked because of the fallback.
+        gh = self.gh_where_only({"v0.2.20"})
+        self.assertEqual(["v0.2.20"], normalize.license_refs(gh, "loonghao/msvc-kit", "0.2.20"))
+
+    def test_accepts_a_repo_that_tags_without_the_prefix(self):
+        gh = self.gh_where_only({"0.2.20"})
+        self.assertEqual(["0.2.20"], normalize.license_refs(gh, "loonghao/msvc-kit", "0.2.20"))
+
+    def test_prefers_the_prefixed_tag_when_both_resolve(self):
+        gh = self.gh_where_only({"v0.2.20", "0.2.20"})
+        refs = normalize.license_refs(gh, "loonghao/msvc-kit", "0.2.20")
+        # The prefixed tag is tried first, so it is the one a manifest pins to.
+        self.assertEqual("v0.2.20", refs[0])
+        self.assertIn("0.2.20", refs)
 
 
 class ForkTest(unittest.TestCase):
