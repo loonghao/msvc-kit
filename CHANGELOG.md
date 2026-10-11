@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.20](https://github.com/loonghao/msvc-kit/compare/v0.2.19...v0.2.20) (2026-10-11)
+
+
+### Bug Fixes
+
+* **winget:** fail when GH_TOKEN is missing, and test the installer collapse for real ([6cf7fce](https://github.com/loonghao/msvc-kit/commit/6cf7fce1789b6ecb9f9da1f661aae5698eccf2e7))
+* **winget:** rewrite unresolvable blob/HEAD LicenseUrl in generated manifest ([#191](https://github.com/loonghao/msvc-kit/issues/191)) ([c78b878](https://github.com/loonghao/msvc-kit/commit/c78b878bd78f0dc133ce94a9c3f20d8decbd6630))
+
+
+### Dependencies
+
+* update Rust crate serde_json to v1.0.152 ([f378572](https://github.com/loonghao/msvc-kit/commit/f3785726aeff111b004201aa0b7e659c16fa75aa))
+* update Rust crate zip to v9.0.1 ([a3962fd](https://github.com/loonghao/msvc-kit/commit/a3962fdf9ddacd24ecaf39c0a3964c82eecb86b8))
+
 ## [0.2.19](https://github.com/loonghao/msvc-kit/compare/v0.2.18...v0.2.19) (2026-10-10)
 
 
