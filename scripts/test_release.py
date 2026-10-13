@@ -288,6 +288,12 @@ class RegistryTests(unittest.TestCase):
                 release.version_exists("msvc-kit", "1.2.3")
 
 
+# Floor declared by scripts/release.py ("Requires Python 3.11+"). A floor is not an
+# exact-version assertion: Renovate only ever raises the pin, so this stays green
+# across bumps while still rejecting a pin the release script cannot run on.
+MIN_PYTHON = (3, 11)
+
+
 def setup_python_pins(workflow_file):
     """Map every `actions/setup-python` pin in a workflow to {job: version}."""
 
@@ -312,6 +318,8 @@ class WorkflowTests(unittest.TestCase):
 
         self.assertIsInstance(version, str, f"{context}: quote python-version so YAML keeps it a string")
         self.assertRegex(version, r"^\d+\.\d+$", f"{context}: expected a concrete X.Y pin")
+        major, minor = (int(part) for part in version.split("."))
+        self.assertGreaterEqual((major, minor), MIN_PYTHON, f"{context}: below the Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ floor in scripts/release.py")
 
     def test_workflow_uses_isolated_commands_and_preserves_notes(self):
         workflow = yaml.safe_load((REPO / ".github/workflows/release.yml").read_text())
