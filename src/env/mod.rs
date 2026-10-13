@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::installer::InstallInfo;
+use crate::toolchain::layout::{is_legacy_vc, msvc_bin_dirs, msvc_lib_dir, sdk_bin_dir};
 use crate::version::Architecture;
 
 pub use setup::{
@@ -91,6 +92,11 @@ impl MsvcEnvironment {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| msvc_path.clone());
 
+        let base_dir = if is_legacy_vc(&msvc_path) {
+            msvc_path.parent().unwrap_or(&msvc_path).to_path_buf()
+        } else {
+            base_dir
+        };
         let vc_install_dir = base_dir.join("VC");
         let vc_tools_install_dir = msvc_path;
         let vc_tools_version = msvc_info.version.clone();
@@ -125,7 +131,7 @@ impl MsvcEnvironment {
             &windows_sdk_version,
             host_arch,
             arch,
-        );
+        )?;
 
         Ok(Self {
             vc_install_dir,
@@ -167,11 +173,11 @@ impl MsvcEnvironment {
     ) -> Vec<PathBuf> {
         let arch_str = arch.to_string();
         if sdk_version.is_empty() {
-            return vec![vc_tools_dir.join("lib").join(&arch_str)];
+            return vec![msvc_lib_dir(vc_tools_dir, arch)];
         }
         vec![
             // MSVC libs
-            vc_tools_dir.join("lib").join(&arch_str),
+            msvc_lib_dir(vc_tools_dir, arch),
             // Windows SDK libs
             sdk_dir
                 .join("Lib")
@@ -193,24 +199,31 @@ impl MsvcEnvironment {
         sdk_version: &str,
         host_arch: Architecture,
         target_arch: Architecture,
-    ) -> Vec<PathBuf> {
-        let host_dir = host_arch.msvc_host_dir();
-        let target_dir = target_arch.msvc_target_dir();
-
-        let mut paths = vec![
-            // MSVC binaries
-            vc_tools_dir.join("bin").join(host_dir).join(target_dir),
-        ];
+    ) -> Result<Vec<PathBuf>> {
+        let mut paths = msvc_bin_dirs(vc_tools_dir, host_arch, target_arch)?;
         if !sdk_version.is_empty() {
-            // SDK executables run on the host; their libraries target the output architecture.
-            paths.push(
-                sdk_dir
-                    .join("bin")
-                    .join(sdk_version)
-                    .join(host_arch.to_string()),
-            );
+            paths.push(sdk_bin_dir(sdk_dir, sdk_version, host_arch));
         }
-        paths
+        Ok(paths)
+    }
+
+    /// Whether the portable activation templates can represent this layout.
+    /// Existing VS2015 and separate SDK roots use `env` or `run` instead.
+    pub fn supports_activation_scripts(&self) -> bool {
+        let root = self.vc_install_dir.parent().unwrap_or(&self.vc_install_dir);
+        self.vc_tools_install_dir != self.vc_install_dir
+            && (!self.windows_sdk_dir.is_dir()
+                || self.windows_sdk_version.is_empty()
+                || (self.windows_sdk_dir == root.join("Windows Kits/10")
+                    && sdk_bin_dir(
+                        &self.windows_sdk_dir,
+                        &self.windows_sdk_version,
+                        self.host_arch,
+                    ) == self
+                        .windows_sdk_dir
+                        .join("bin")
+                        .join(&self.windows_sdk_version)
+                        .join(self.host_arch.to_string())))
     }
 
     /// Check if cl.exe is available in the configured paths
@@ -218,60 +231,73 @@ impl MsvcEnvironment {
         self.cl_exe_path().is_some()
     }
 
-    /// Get the path to cl.exe
+    /// Find compiler tools without consulting native-host DLL directories for legacy cross builds.
+    pub(crate) fn compiler_tool_path(&self, name: &str) -> Option<PathBuf> {
+        let count = if is_legacy_vc(&self.vc_tools_install_dir) {
+            1
+        } else {
+            self.bin_paths.len()
+        };
+        self.bin_paths
+            .iter()
+            .take(count)
+            .map(|p| p.join(name))
+            .find(|p| p.is_file())
+    }
+
+    fn sdk_tool_path(&self, name: &str) -> Option<PathBuf> {
+        if !is_legacy_vc(&self.vc_tools_install_dir) {
+            return self
+                .bin_paths
+                .iter()
+                .map(|p| p.join(name))
+                .find(|p| p.is_file());
+        }
+        (!self.windows_sdk_version.is_empty())
+            .then(|| {
+                sdk_bin_dir(
+                    &self.windows_sdk_dir,
+                    &self.windows_sdk_version,
+                    self.host_arch,
+                )
+                .join(name)
+            })
+            .filter(|p| p.is_file())
+    }
+
+    /// Get the path to cl.exe.
     pub fn cl_exe_path(&self) -> Option<PathBuf> {
-        self.bin_paths
-            .iter()
-            .map(|p| p.join("cl.exe"))
-            .find(|p| p.is_file())
+        self.compiler_tool_path("cl.exe")
     }
 
-    /// Get the path to link.exe
+    /// Get the path to link.exe.
     pub fn link_exe_path(&self) -> Option<PathBuf> {
-        self.bin_paths
-            .iter()
-            .map(|p| p.join("link.exe"))
-            .find(|p| p.is_file())
+        self.compiler_tool_path("link.exe")
     }
 
-    /// Get the path to lib.exe (static library manager)
+    /// Get the path to lib.exe (static library manager).
     pub fn lib_exe_path(&self) -> Option<PathBuf> {
-        self.bin_paths
-            .iter()
-            .map(|p| p.join("lib.exe"))
-            .find(|p| p.is_file())
+        self.compiler_tool_path("lib.exe")
     }
 
-    /// Get the path to ml64.exe (MASM assembler)
+    /// Get the path to ml64.exe (MASM assembler).
     pub fn ml64_exe_path(&self) -> Option<PathBuf> {
-        self.bin_paths
-            .iter()
-            .map(|p| p.join("ml64.exe"))
-            .find(|p| p.is_file())
+        self.compiler_tool_path("ml64.exe")
     }
 
-    /// Get the path to nmake.exe
+    /// Get the path to nmake.exe.
     pub fn nmake_exe_path(&self) -> Option<PathBuf> {
-        self.bin_paths
-            .iter()
-            .map(|p| p.join("nmake.exe"))
-            .find(|p| p.is_file())
+        self.compiler_tool_path("nmake.exe")
     }
 
-    /// Get the path to rc.exe (resource compiler)
+    /// Get the path to rc.exe (resource compiler).
     pub fn rc_exe_path(&self) -> Option<PathBuf> {
-        self.bin_paths
-            .iter()
-            .map(|p| p.join("rc.exe"))
-            .find(|p| p.is_file())
+        self.sdk_tool_path("rc.exe")
     }
 
     /// Get the path to the Windows manifest tool.
     pub fn mt_exe_path(&self) -> Option<PathBuf> {
-        self.bin_paths
-            .iter()
-            .map(|p| p.join("mt.exe"))
-            .find(|p| p.is_file())
+        self.sdk_tool_path("mt.exe")
     }
 
     /// Stable toolchain identity independent of its installation directory.
@@ -397,7 +423,8 @@ pub fn get_sdk_env_vars(
 ) -> HashMap<String, String> {
     let mut vars = HashMap::new();
     let root = sdk_dir.display().to_string();
-    let bin_root = sdk_dir.join("bin").join(version);
+    let bin_dir = sdk_bin_dir(sdk_dir, version, host_arch);
+    let bin_root = bin_dir.parent().expect("SDK bin path has a parent");
     vars.insert("WindowsSdkDir".into(), root.clone());
     vars.insert("WindowsSDKVersion".into(), format!("{}\\", version));
     vars.insert("WindowsSDKLibVersion".into(), format!("{}\\", version));
@@ -439,10 +466,7 @@ pub fn get_sdk_env_vars(
             .collect::<Vec<_>>()
             .join(";"),
     );
-    vars.insert(
-        "PATH".into(),
-        bin_root.join(host_arch.to_string()).display().to_string(),
-    );
+    vars.insert("PATH".into(), bin_dir.display().to_string());
     vars.insert("Platform".into(), arch.to_string());
     vars.insert("VSCMD_ARG_HOST_ARCH".into(), host_arch.to_string());
     vars.insert("VSCMD_ARG_TGT_ARCH".into(), arch.to_string());

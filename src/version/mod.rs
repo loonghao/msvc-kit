@@ -348,6 +348,11 @@ pub struct InstalledVersion {
 
 /// Check if MSVC is installed at the given path with the specified version
 pub fn is_msvc_installed(install_dir: &Path, version: &str) -> bool {
+    if version_matches("14.0", version)
+        && crate::toolchain::layout::is_legacy_vc(&install_dir.join("VC"))
+    {
+        return true;
+    }
     let msvc_dir = install_dir.join("VC").join("Tools").join("MSVC");
     if !msvc_dir.exists() {
         return false;
@@ -408,11 +413,13 @@ pub fn is_sdk_installed(install_dir: &Path, version: &str) -> bool {
 pub fn list_installed_msvc(install_dir: &Path) -> Vec<MsvcVersion> {
     let msvc_dir = install_dir.join("VC").join("Tools").join("MSVC");
 
-    if !msvc_dir.exists() {
-        return Vec::new();
-    }
-
     let mut versions = Vec::new();
+    let legacy_vc = install_dir.join("VC");
+    if crate::toolchain::layout::is_legacy_vc(&legacy_vc) {
+        let mut legacy = MsvcVersion::new("14.0", "MSVC 14.0 (VS2015 family; patch unverified)");
+        legacy.install_path = Some(legacy_vc);
+        versions.push(legacy);
+    }
 
     if let Ok(entries) = std::fs::read_dir(&msvc_dir) {
         for entry in entries.flatten() {
@@ -439,7 +446,12 @@ pub fn list_installed_msvc(install_dir: &Path) -> Vec<MsvcVersion> {
 
 /// List all installed Windows SDK versions
 pub fn list_installed_sdk(install_dir: &Path) -> Vec<SdkVersion> {
-    let sdk_dir = install_dir.join("Windows Kits").join("10").join("Include");
+    list_installed_sdk_at(&install_dir.join("Windows Kits").join("10"))
+}
+
+/// Enumerate an existing Windows Kits/10 root without changing it.
+pub(crate) fn list_installed_sdk_at(sdk_root: &Path) -> Vec<SdkVersion> {
+    let sdk_dir = sdk_root.join("Include");
 
     if !sdk_dir.exists() {
         return Vec::new();
@@ -453,7 +465,7 @@ pub fn list_installed_sdk(install_dir: &Path) -> Vec<SdkVersion> {
                 if let Some(name) = entry.file_name().to_str() {
                     if name.starts_with("10.0.") {
                         let mut version = SdkVersion::new(name, format!("Windows SDK {}", name));
-                        version.install_path = Some(install_dir.join("Windows Kits").join("10"));
+                        version.install_path = Some(sdk_root.to_path_buf());
                         versions.push(version);
                     }
                 }

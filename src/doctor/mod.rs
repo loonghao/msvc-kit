@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use crate::env::MsvcEnvironment;
 use crate::execution::configure_command;
-use crate::query::{query_installation, QueryOptions, QueryResult};
-use crate::toolchain::{resolve_toolchain, ToolchainRequest};
+use crate::query::{query_installation_with_sdk_root, QueryOptions, QueryResult};
+use crate::toolchain::{resolve_toolchain_with_sdk_root, ToolchainRequest};
 use crate::version::Architecture;
 
 /// Diagnostic outcome. Skips never hide a failed prerequisite.
@@ -113,13 +113,18 @@ impl DoctorReport {
 
 /// Inspect an installation. Default mode never launches tools or changes it.
 pub fn doctor(options: &DoctorOptions) -> DoctorReport {
+    doctor_with_sdk_root(options, None)
+}
+
+/// Inspect an existing compiler installation with an optional separate Windows Kits/10 root.
+pub fn doctor_with_sdk_root(options: &DoctorOptions, sdk_dir: Option<&Path>) -> DoctorReport {
     let mut report = DoctorReport {
         schema: "msvc-kit.doctor.v1".into(),
         status: DoctorStatus::Passed,
         checks: vec![],
         toolchain: None,
     };
-    let env = match resolve_toolchain(&options.toolchain) {
+    let env = match resolve_toolchain_with_sdk_root(&options.toolchain, sdk_dir) {
         Ok(env) => env,
         Err(error) => {
             report.push("resolution", DoctorStatus::Failed, error.to_string(), None);
@@ -134,7 +139,7 @@ pub fn doctor(options: &DoctorOptions) -> DoctorReport {
         sdk_version: (!env.windows_sdk_version.is_empty()).then(|| env.windows_sdk_version.clone()),
         ..QueryOptions::default()
     };
-    match query_installation(&query_options) {
+    match query_installation_with_sdk_root(&query_options, sdk_dir) {
         Ok(query) => report.toolchain = Some(query),
         Err(error) => report.push("resolution", DoctorStatus::Failed, error.to_string(), None),
     }
@@ -160,10 +165,27 @@ pub fn doctor(options: &DoctorOptions) -> DoctorReport {
             path,
         );
     }
+    if crate::toolchain::layout::is_legacy_vc(&env.vc_tools_install_dir) {
+        report.push("version.msvc", DoctorStatus::Skipped,
+            "VS2015 v140 family (14.0) identified from CRT headers; exact compiler patch is unverified", None);
+    }
+    if !env.windows_sdk_version.is_empty()
+        && crate::toolchain::layout::sdk_bin_dir(
+            &env.windows_sdk_dir,
+            &env.windows_sdk_version,
+            env.host_arch,
+        ) == env
+            .windows_sdk_dir
+            .join("bin")
+            .join(env.host_arch.to_string())
+    {
+        report.push("version.sdk_tools", DoctorStatus::Skipped,
+            "Early SDK tools use an unversioned bin directory; selected headers/libraries are versioned, tool binary versions are unverified", None);
+    }
     let vc = &env.vc_tools_install_dir;
     report.check_file("header.msvc", vc.join("include").join("vcruntime.h"));
     report.check_file("header.cpp", vc.join("include").join("vector"));
-    let vc_lib = vc.join("lib").join(env.arch.to_string());
+    let vc_lib = crate::toolchain::layout::msvc_lib_dir(vc, env.arch);
     for (id, name) in [
         ("runtime", "msvcrt.lib"),
         ("vcruntime", "vcruntime.lib"),
