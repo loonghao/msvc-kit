@@ -288,7 +288,31 @@ class RegistryTests(unittest.TestCase):
                 release.version_exists("msvc-kit", "1.2.3")
 
 
+def setup_python_pins(workflow_file):
+    """Map every `actions/setup-python` pin in a workflow to {job: version}."""
+
+    workflow = yaml.safe_load((REPO / ".github/workflows" / workflow_file).read_text())
+    return {
+        job_name: step["with"]["python-version"]
+        for job_name, job in workflow["jobs"].items()
+        for step in job.get("steps") or []
+        if str(step.get("uses", "")).startswith("actions/setup-python@")
+    }
+
+
 class WorkflowTests(unittest.TestCase):
+    def assertPythonPin(self, version, context):
+        """Assert a `python-version` pin is a well-formed `X.Y` string.
+
+        The value itself is never asserted literally: Renovate raises the pinned
+        interpreter on its own schedule, so a literal here is a time bomb that
+        only moves the failure to the next bump. Check the shape of the pin and
+        let the cross-workflow comparison below pin down the value.
+        """
+
+        self.assertIsInstance(version, str, f"{context}: quote python-version so YAML keeps it a string")
+        self.assertRegex(version, r"^\d+\.\d+$", f"{context}: expected a concrete X.Y pin")
+
     def test_workflow_uses_isolated_commands_and_preserves_notes(self):
         workflow = yaml.safe_load((REPO / ".github/workflows/release.yml").read_text())
         jobs = workflow["jobs"]
@@ -304,9 +328,20 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn(f'python scripts/release.py {command} --tag "$env:RELEASE_TAG"', runs)
             self.assertNotIn("vx setup", runs)
             self.assertNotIn("vx just", runs)
+        # The CI workflow owns the pinned interpreter and release.yml has to follow it.
+        # Renovate bumps every `actions/setup-python` step in one PR, so derive the
+        # expectation from pr-checks.yml instead of restating a version that drifts.
+        ci_pins = set(setup_python_pins("pr-checks.yml").values())
+        self.assertEqual(len(ci_pins), 1, "pr-checks.yml must pin exactly one Python version")
+        ci_python_version = ci_pins.pop()
+        self.assertPythonPin(ci_python_version, "pr-checks.yml python-version")
+        release_pins = set()
         for name in ("crates-publish", "build-release-binary", "github-release"):
             setup_python = next(s for s in jobs[name]["steps"] if s.get("uses", "").startswith("actions/setup-python@"))
-            self.assertEqual(setup_python["with"]["python-version"], "3.12")
+            release_pins.add(setup_python["with"]["python-version"])
+            self.assertPythonPin(setup_python["with"]["python-version"], f"release.yml:{name} python-version")
+            self.assertEqual(setup_python["with"]["python-version"], ci_python_version)
+        self.assertEqual(len(release_pins), 1, "release.yml must pin one Python version")
         steps = jobs["github-release"]["steps"]
         self.assertFalse(any("changelog-generator" in s.get("uses", "") for s in steps))
         action = next(s for s in steps if s.get("uses", "").startswith("ncipollo/release-action@"))["with"]
