@@ -144,9 +144,9 @@ publish-dry:
 publish:
     vx cargo publish
 
-# Publish to crates.io (CI)
+# Publish to crates.io (CI). The release workflow isolates vx state with scripts/release.py.
 publish-ci:
-    vx cargo publish --allow-dirty
+    vx cargo publish --locked
 
 # ============== Cleanup ==============
 
