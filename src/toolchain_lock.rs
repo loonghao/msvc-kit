@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::downloader::{hash::compute_file_hash, DownloadIndex, DownloadStatus};
 use crate::storage::atomic_write;
-use crate::toolchain::{resolve_toolchain, ToolchainRequest};
+use crate::toolchain::ToolchainRequest;
 use crate::{Architecture, InstallInfo, MsvcKitError, Result};
 
 async fn source_entry(file: &Path) -> Result<crate::downloader::IndexEntry> {
@@ -105,12 +105,25 @@ impl ToolchainLock {
 
     /// Capture installed versions without a network request. Existing external installs may have no receipts.
     pub fn capture(request: &ToolchainRequest) -> Result<Self> {
-        let environment = resolve_toolchain(request)?;
+        Self::capture_with_sdk_root(request, None)
+    }
+
+    /// Capture a selection using a separate SDK root without inheriting unrelated SDK receipts.
+    pub fn capture_with_sdk_root(
+        request: &ToolchainRequest,
+        sdk_dir: Option<&Path>,
+    ) -> Result<Self> {
+        let environment = crate::toolchain::resolve_toolchain_with_sdk_root(request, sdk_dir)?;
         let mut receipts = Vec::new();
         for (component, version) in [
             ("msvc", &environment.vc_tools_version),
             ("sdk", &environment.windows_sdk_version),
         ] {
+            // An explicitly selected SDK belongs to a separate read-only root;
+            // receipts from the portable compiler root cannot attest its provenance.
+            if component == "sdk" && sdk_dir.is_some() {
+                continue;
+            }
             let path = receipt_path(
                 &request.install_dir,
                 component,

@@ -374,3 +374,29 @@ fn lock_rejects_invalid_receipt_identity_and_payloads_before_publication() {
         assert_eq!(std::fs::read(&path).unwrap(), previous);
     }
 }
+
+#[test]
+fn explicit_sdk_root_does_not_inherit_portable_root_receipts() {
+    let compiler = tempfile::tempdir().unwrap();
+    let sdk = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(compiler.path().join("VC/Tools/MSVC/14.44.35207")).unwrap();
+    std::fs::create_dir_all(sdk.path().join("Include/10.0.22621.0")).unwrap();
+    let unrelated = compiler
+        .path()
+        .join(".msvc-kit/receipts/sdk-10.0.22621.0-x64-x64.json");
+    std::fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
+    std::fs::write(unrelated, b"unrelated SDK receipt; must not be read").unwrap();
+    let lock = ToolchainLock::capture_with_sdk_root(
+        &msvc_kit::ToolchainRequest {
+            install_dir: compiler.path().into(),
+            msvc_version: Some("14.44.35207".into()),
+            sdk_version: Some("10.0.22621.0".into()),
+            arch: Architecture::X64,
+            host_arch: Architecture::X64,
+        },
+        Some(sdk.path()),
+    )
+    .unwrap();
+    assert!(lock.receipts.is_empty());
+    assert_eq!(lock.sdk_version, "10.0.22621.0");
+}

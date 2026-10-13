@@ -56,3 +56,66 @@ Channels are fetched fresh. Package catalogs normally must match the fresh chann
 | Unity | Python/C# editor bridge needs no MSVC by default; Windows IL2CPP and native standalone packaging validate only when used |
 
 Compilation and package tests do not certify an active editor GUI or a released installation. Each consumer remains responsible for its own host acceptance.
+
+
+## Existing VS2015 and early Windows 10 SDK layouts
+
+Read-only selection can use the original VS2015 installation root and a separate
+Windows Kits/10 root. No copy, registry update, symbolic link or modern-layout
+alias is required:
+
+```powershell
+msvc-kit doctor --dir 'C:/Program Files (x86)/Microsoft Visual Studio 14.0' --sdk-dir 'C:/Program Files (x86)/Windows Kits/10' --msvc-version 14.0 --sdk-version 10.0.14393.0 --host-arch x64 --arch x64 --format json
+```
+
+Use the same selectors for `env --format json`, `query`, `run` and `cmake`.
+`--sdk-dir` is the directory containing `Include`, `Lib` and `bin`, not a version
+subdirectory. When an SDK is selected, explicit nonexistent or empty SDK roots fail; no ambient environment
+variable, registry entry or different root is substituted. This option does not
+install or download VS2015 and is not an automatic system-installation search.
+When capturing a modern toolchain lock with a separate SDK root, SDK receipts
+from the portable compiler root are not reused as provenance for that SDK.
+
+VS2015 detection requires `VC/vcvarsall.bat` and `VC/include/crtversion.h`
+identifying major 14, minor 0. Because it has no versioned compiler directory,
+the selected `msvc.version` and `VCToolsVersion` are **`14.0` (v140 family)**.
+CRT build metadata is not used to claim an exact compiler patch version.
+`14.0.x` selectors fail instead of widening or selecting a newer compiler.
+Modern versioned toolsets retain their existing full version/prefix rules.
+
+The machine-readable doctor check `version.msvc` has status `skipped` and explains
+that the exact legacy compiler patch is unverified. Other required filesystem
+checks must still pass for overall status `passed`. A `resolution` failure reports
+unsupported legacy host/target combinations or the precise missing compiler path.
+The existing fingerprint identifies the selected family, SDK, host and target;
+it does not attest a legacy compiler patch or binary integrity. Exact-version
+`lock` files therefore remain unavailable for family-only VS2015 selections.
+
+Supported legacy host/target pairs are x86/x86 (`VC/bin`), x86/x64
+(`VC/bin/x86_amd64`), x64/x86 (`VC/bin/amd64_x86`) and x64/x64 (`VC/bin/amd64`).
+Target libraries come from `VC/lib` for x86 and `VC/lib/amd64` for x64.
+The selected directory must contain `cl.exe`, `link.exe` and `lib.exe`.
+Cross environments also put the native host directory on PATH for compiler DLLs;
+compiler lookup never substitutes its different-target tools. Other legacy
+architectures fail explicitly.
+
+SDK versions `10.0.10240.0`, `10.0.10586.0` and `10.0.14393.0` may use unversioned
+`bin/<host>` directories when their versioned bin directory is absent. A versioned
+bin directory takes priority even if incomplete. Modern SDKs never fall back to
+unversioned tools. All SDK include and library paths remain version-selected.
+Unversioned SDK tool paths do not prove the executables' exact binary versions.
+Doctor reports this as `version.sdk_tools` with status `skipped`.
+
+Portable activation templates cannot represent these layouts or a separate SDK
+root, so `setup --script` rejects them with guidance to use `env` or `run`.
+Directory-fixture tests cover discovery, host/target mapping, selection failures,
+JSON contracts and diagnostics. They are not evidence that a real VS2015
+installation has compiled a program; that requires an explicit Windows
+`doctor --compile` probe on the actual installation.
+
+For Rust callers, existing `ToolchainRequest`, `QueryOptions`, `DoctorOptions` and
+entrypoints remain source-compatible, including complete struct literals.
+The additive `resolve_toolchain_with_sdk_root`, `query_installation_with_sdk_root`
+and `doctor_with_sdk_root` functions take an optional `&Path` after the original
+request/options argument; `None` retains portable-root selection.
+`ToolchainLock::capture_with_sdk_root` follows the same convention.

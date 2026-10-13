@@ -7,16 +7,17 @@ use clap::{Args, CommandFactory, Parser, Subcommand};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use msvc_kit::bundle::{generate_bundle_scripts, save_bundle_scripts, BundleLayout};
-use msvc_kit::doctor::{doctor, DoctorOptions};
+use msvc_kit::doctor::{doctor_with_sdk_root, DoctorOptions};
 use msvc_kit::env::generate_activation_script;
 use msvc_kit::query::{QueryComponent, QueryOptions, QueryProperty};
-use msvc_kit::toolchain::{resolve_toolchain, ToolchainRequest};
+use msvc_kit::toolchain::{resolve_toolchain_with_sdk_root, ToolchainRequest};
 use msvc_kit::toolchain_lock::{record_installation, ToolchainLock};
 use msvc_kit::version::{list_installed_msvc, list_installed_sdk, Architecture};
 use msvc_kit::vs_channel::{parse_channel_selector, VsChannelSelection};
 use msvc_kit::{
-    download_msvc, download_sdk, generate_script, get_env_vars, load_config, query_installation,
-    save_config, DownloadOptions, MsvcComponent, MsvcKitConfig, ScriptContext, ShellType,
+    download_msvc, download_sdk, generate_script, get_env_vars, load_config,
+    query_installation_with_sdk_root, save_config, DownloadOptions, MsvcComponent, MsvcKitConfig,
+    ScriptContext, ShellType,
 };
 
 /// Resolve the Visual Studio channel for a command.
@@ -190,6 +191,9 @@ struct ToolchainArgs {
     msvc_version: Option<String>,
     #[arg(long)]
     sdk_version: Option<String>,
+    /// Existing Windows Kits/10 root for inspection or execution; never installed or copied.
+    #[arg(long)]
+    sdk_dir: Option<PathBuf>,
     /// Use exact versions and architectures recorded in a portable toolchain lock.
     #[arg(long)]
     lockfile: Option<PathBuf>,
@@ -625,6 +629,7 @@ async fn main() -> anyhow::Result<()> {
                 host_arch,
                 msvc_version,
                 sdk_version,
+                sdk_dir: None,
                 lockfile,
             };
             let request = selection.request(&config)?;
@@ -785,9 +790,12 @@ async fn main() -> anyhow::Result<()> {
             let request = selection.request(&config)?;
             let install_dir = request.install_dir.clone();
             let arch = request.arch;
-            let env = resolve_toolchain(&request)?;
+            let env = resolve_toolchain_with_sdk_root(&request, selection.sdk_dir.as_deref())?;
 
             if script {
+                if !env.supports_activation_scripts() {
+                    anyhow::bail!("Activation templates require a modern portable layout; use env or run for VS2015, an early SDK or a separate SDK root");
+                }
                 let shell_type = match shell.to_lowercase().as_str() {
                     "cmd" | "bat" => ShellType::Cmd,
                     "powershell" | "ps1" | "pwsh" => ShellType::PowerShell,
@@ -1411,7 +1419,7 @@ async fn main() -> anyhow::Result<()> {
             };
 
             let options = options.build();
-            let result = query_installation(&options)?;
+            let result = query_installation_with_sdk_root(&options, selection.sdk_dir.as_deref())?;
 
             match format.as_str() {
                 "json" => {
@@ -1528,7 +1536,10 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Env { selection, format } => {
-            let env = resolve_toolchain(&selection.request(&config)?)?;
+            let env = resolve_toolchain_with_sdk_root(
+                &selection.request(&config)?,
+                selection.sdk_dir.as_deref(),
+            )?;
             let vars = get_env_vars(&env);
 
             match format.as_str() {
@@ -1548,10 +1559,13 @@ async fn main() -> anyhow::Result<()> {
             compile,
             format,
         } => {
-            let report = doctor(&DoctorOptions {
-                toolchain: selection.request(&config)?,
-                compile_probe: compile,
-            });
+            let report = doctor_with_sdk_root(
+                &DoctorOptions {
+                    toolchain: selection.request(&config)?,
+                    compile_probe: compile,
+                },
+                selection.sdk_dir.as_deref(),
+            );
             if format == "json" {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -1563,24 +1577,31 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Run { selection, command } => {
-            let env = resolve_toolchain(&selection.request(&config)?)?;
+            let env = resolve_toolchain_with_sdk_root(
+                &selection.request(&config)?,
+                selection.sdk_dir.as_deref(),
+            )?;
             let status = msvc_kit::execution::run_in_toolchain(&env, &command[0], &command[1..])?;
             std::process::exit(status.code().unwrap_or(1));
         }
 
         Commands::Lock { selection, output } => {
             let request = selection.request(&config)?;
-            let report = doctor(&DoctorOptions {
-                toolchain: request.clone(),
-                compile_probe: false,
-            });
+            let report = doctor_with_sdk_root(
+                &DoctorOptions {
+                    toolchain: request.clone(),
+                    compile_probe: false,
+                },
+                selection.sdk_dir.as_deref(),
+            );
             if !report.is_success() {
                 anyhow::bail!(
                     "Cannot lock an incomplete toolchain:\n{}",
                     report.format_summary()
                 );
             }
-            let lock = ToolchainLock::capture(&request)?;
+            let lock =
+                ToolchainLock::capture_with_sdk_root(&request, selection.sdk_dir.as_deref())?;
             lock.save(&output)?;
             println!(
                 "Locked MSVC {} + SDK {} ({}) to {}",
@@ -1592,7 +1613,10 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Cmake { selection, output } => {
-            let env = resolve_toolchain(&selection.request(&config)?)?;
+            let env = resolve_toolchain_with_sdk_root(
+                &selection.request(&config)?,
+                selection.sdk_dir.as_deref(),
+            )?;
             msvc_kit::execution::write_cmake_toolchain(&env, &output)?;
             println!("CMake toolchain written to {}", output.display());
         }

@@ -67,12 +67,22 @@ fn create_script_context(env: &MsvcEnvironment) -> ScriptContext {
 /// Creates a script that can be sourced/executed to set up the
 /// MSVC environment in a new shell session.
 pub fn generate_activation_script(env: &MsvcEnvironment, shell: ShellType) -> Result<String> {
+    if !env.supports_activation_scripts() {
+        return Err(MsvcKitError::EnvSetup(
+            "Activation templates require a modern portable layout; use env or run for VS2015, an early SDK or a separate SDK root".into(),
+        ));
+    }
     let ctx = create_script_context(env);
     generate_script(&ctx, shell)
 }
 
 /// Generate all activation scripts
 pub fn generate_all_activation_scripts(env: &MsvcEnvironment) -> Result<GeneratedScripts> {
+    if !env.supports_activation_scripts() {
+        return Err(MsvcKitError::EnvSetup(
+            "Activation templates require a modern portable layout; use env or run for VS2015, an early SDK or a separate SDK root".into(),
+        ));
+    }
     let ctx = create_script_context(env);
     generate_absolute_scripts(&ctx)
 }
