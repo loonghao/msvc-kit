@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.22](https://github.com/loonghao/msvc-kit/compare/v0.2.21...v0.2.22) (2026-10-13)
+
+
+### Bug Fixes
+
+* **toolchain:** resolve original VS2015 and early SDK layouts ([f3f92b2](https://github.com/loonghao/msvc-kit/commit/f3f92b2731a6e91f406f15898c4096b541b96aff))
+
 ## [0.2.21](https://github.com/loonghao/msvc-kit/compare/v0.2.20...v0.2.21) (2026-10-11)
 
 
