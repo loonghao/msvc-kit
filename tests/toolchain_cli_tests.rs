@@ -152,11 +152,8 @@ fn cli_legacy_selection_uses_original_vs_and_sdk_roots() {
     let vars: serde_json::Value = serde_json::from_slice(&env.stdout).unwrap();
     assert_eq!(vars["VCToolsVersion"], "14.0");
     assert_eq!(
-        vars["CC"],
-        vs.path()
-            .join("VC/bin/x86_amd64/cl.exe")
-            .display()
-            .to_string()
+        std::path::Path::new(vars["CC"].as_str().unwrap()),
+        vs.path().join("VC/bin/x86_amd64/cl.exe")
     );
     assert_eq!(vars["WindowsSdkDir"], sdk.path().display().to_string());
     let query = command("query")

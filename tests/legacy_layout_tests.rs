@@ -5,7 +5,7 @@ use msvc_kit::{
     get_env_vars, query_installation_with_sdk_root, resolve_toolchain_with_sdk_root, Architecture,
     QueryComponent, QueryOptions, ToolchainRequest,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 fn file(path: impl AsRef<Path>, content: &str) {
@@ -298,7 +298,14 @@ fn explicit_sdk_root_is_strict_and_component_queries_stay_separate() {
             .unwrap();
     assert!(msvc.sdk.is_none());
     assert!(!msvc.env_vars.contains_key("WindowsSdkDir"));
-    assert!(msvc.env_vars["PATH"].contains(&vs.path().join("VC/bin").display().to_string()));
+    let paths: Vec<PathBuf> = msvc.env_vars["PATH"]
+        .split(';')
+        .map(PathBuf::from)
+        .collect();
+    assert_eq!(
+        paths,
+        vec![vs.path().join("VC/bin/x86_amd64"), vs.path().join("VC/bin")]
+    );
     assert_eq!(msvc.msvc.unwrap().bin_paths.len(), 2);
     let sdk_only =
         query_installation_with_sdk_root(&query(&req, QueryComponent::Sdk), Some(sdk.path()))
@@ -306,8 +313,8 @@ fn explicit_sdk_root_is_strict_and_component_queries_stay_separate() {
     assert!(sdk_only.msvc.is_none());
     assert!(!sdk_only.env_vars.contains_key("VCINSTALLDIR"));
     assert_eq!(
-        sdk_only.env_vars["PATH"],
-        sdk.path().join("bin/x86").display().to_string()
+        Path::new(&sdk_only.env_vars["PATH"]),
+        sdk.path().join("bin/x86")
     );
     let mut missing = req.clone();
     let absent = sdk.path().join("missing");
