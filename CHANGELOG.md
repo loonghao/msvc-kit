@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.23](https://github.com/loonghao/msvc-kit/compare/v0.2.22...v0.2.23) (2026-10-13)
+
+
+### Dependencies
+
+* update actions/setup-python action to v7 ([1eb5c9f](https://github.com/loonghao/msvc-kit/commit/1eb5c9f6143cca3ce03efe8fac996e7d296b560c))
+
 ## [0.2.22](https://github.com/loonghao/msvc-kit/compare/v0.2.21...v0.2.22) (2026-10-13)
 
 
