@@ -11,7 +11,7 @@ use futures::{stream, StreamExt};
 use reqwest::{Client, StatusCode};
 use sha2::{Digest, Sha256};
 use tokio::{io::AsyncWriteExt, sync::RwLock, time::sleep};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::hash::compute_file_hash;
 use super::progress::{BoxedProgressHandler, IndicatifProgressHandler};
@@ -204,8 +204,9 @@ impl CommonDownloader {
                         batch_bytes += r.transferred;
                     }
                     Err(e) => {
-                        progress_handler.on_error(&e.to_string());
-                        return Err(e);
+                        let error = payload_failure(component_name, &e);
+                        progress_handler.on_error(&error.to_string());
+                        return Err(error);
                     }
                 }
             }
@@ -335,6 +336,35 @@ async fn validated_cache_hash(
             .and_then(|entry| entry.computed_hash.clone())
             .unwrap_or_default(),
     ))
+}
+
+/// Label a payload failure with its fault domain so callers never have to infer it.
+///
+/// A bundle that aborts mid-download leaves no `setup.bat` behind, and a bare
+/// "setup.bat not found" from a downstream consumer hides which payload
+/// actually failed and why. Wrapping keeps the package and root cause visible.
+fn payload_failure(component_name: &str, error: &MsvcKitError) -> MsvcKitError {
+    match error {
+        MsvcKitError::HashMismatch {
+            file,
+            expected,
+            actual,
+        } => MsvcKitError::Other(format!(
+            "{component_name} payload download failed: {file} did not match its expected \
+             SHA256 after {} retries (expected {expected}, received {actual}). \
+             No {component_name} output was produced because this payload could not be \
+             verified.",
+            dl_const::MAX_RETRIES + 1
+        )),
+        MsvcKitError::DownloadNetwork { file, .. } => MsvcKitError::Other(format!(
+            "{component_name} payload download failed: {file} could not be transferred. \
+             No {component_name} output was produced. Cause: {error}"
+        )),
+        other => MsvcKitError::Other(format!(
+            "{component_name} payload download failed while preparing the {component_name} \
+             output. Cause: {other}"
+        )),
+    }
 }
 
 /// Download or reuse a payload while retaining old final bytes until replacement is validated.
@@ -469,6 +499,23 @@ async fn download_file_with_streaming_hash(
         if verify_hashes {
             if let Some(expected) = &payload.sha256 {
                 if !computed_hash.eq_ignore_ascii_case(expected) {
+                    // A transfer that completes with the wrong digest means the
+                    // bytes were corrupted in flight or truncated by the remote
+                    // end. Retry by dropping the buffer and refetching from the
+                    // original URL; a corrupt body is never reusable.
+                    drop(temporary);
+                    if attempt < dl_const::MAX_RETRIES {
+                        warn!(
+                            "Hash mismatch for {} (attempt {}/{}), refetching: expected {}, got {}",
+                            payload.file_name,
+                            attempt + 1,
+                            dl_const::MAX_RETRIES + 1,
+                            expected,
+                            computed_hash
+                        );
+                        sleep(Duration::from_secs(1 << attempt)).await;
+                        continue 'attempts;
+                    }
                     return Err(MsvcKitError::HashMismatch {
                         file: payload.file_name.clone(),
                         expected: expected.clone(),
