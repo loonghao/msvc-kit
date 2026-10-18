@@ -95,7 +95,7 @@ winreg = "0.56"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 
 [dev-dependencies]
-rstest = "0.27"
+rstest = "0.28"
 mockito = "1.7"
 
 [profile.release]
