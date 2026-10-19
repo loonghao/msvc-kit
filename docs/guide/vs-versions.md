@@ -1,16 +1,22 @@
 # Visual Studio Versions & Channels
 
 msvc-kit discovers MSVC toolsets and Windows SDK packages from a Visual Studio
-**channel manifest** — the JSON document served at
-`https://aka.ms/vs/<major>/release/channel`.
+**channel manifest** — a per-version JSON document served at a channel URL such
+as `https://aka.ms/vs/17/release/channel`. Each supported release's URL is
+listed in the table below.
 
 Every channel msvc-kit knows about lives in one table, `VS_CHANNELS`, so Visual
 Studio support is data, not logic:
 
 | Major | Release | Channel URL |
 |-------|---------|-------------|
-| `18` | Visual Studio 2026 | `https://aka.ms/vs/18/release/channel` |
+| `18` | Visual Studio 2026 | `https://aka.ms/vs/18/stable/channel` |
 | `17` | Visual Studio 2022 | `https://aka.ms/vs/17/release/channel` |
+
+> **Note:** VS 2026 (v18) has no published `release` channel — that URL serves
+> an HTML page instead of a JSON manifest. msvc-kit tracks v18 through the
+> published `stable` channel. The `release` channel stays correct for VS 2022
+> (v17).
 
 ## Selecting a channel
 
@@ -47,7 +53,9 @@ Precedence: `--vs-channel` > `MSVC_KIT_VS_CHANNEL` > config file > auto.
 ## When a channel is not published yet
 
 Microsoft publishes a channel manifest only once the release is available. Until
-then `https://aka.ms/vs/18/release/channel` serves an HTML page instead of JSON.
+then its channel URL serves an HTML page instead of JSON — for example the
+`release` channel of a future, not-yet-published version such as
+`https://aka.ms/vs/19/release/channel`.
 msvc-kit detects this and degrades cleanly instead of failing with a parse error:
 
 - **Auto selection** skips the channel and falls back to the next one. The skip
@@ -57,7 +65,7 @@ msvc-kit detects this and degrades cleanly instead of failing with a parse error
   normal case:
 
   ```text
-  Visual Studio channel: Visual Studio 2022 (v17)
+  Visual Studio channel: Visual Studio 2026 (v18)
   ```
 
 - **Pinned selection** reports a typed error, `ChannelUnavailable`, with the URL
@@ -92,7 +100,7 @@ Adding a release is a **one-row data change** in `src/vs_channel.rs`:
        VsChannelEntry {
            major: 18,
            year: 2026,
-           channel_url: "https://aka.ms/vs/18/release/channel",
+           channel_url: "https://aka.ms/vs/18/stable/channel",
        },
        // ...
    ];

@@ -194,16 +194,26 @@ fn legacy_vs_channel_url_matches_the_registry() {
     use msvc_kit::vs_channel::{entry_for_major, VS_CHANNEL_URL_TEMPLATE};
 
     // The legacy constant must not drift away from the VS 2022 registry row.
+    let v17 = entry_for_major(17).expect("VS 2022 row");
+    assert_eq!(msvc_kit::constants::VS_CHANNEL_URL, v17.channel_url);
+
+    // VS 2022 still uses the plain `release` channel, so its URL is exactly what
+    // the fallback template produces.
     assert_eq!(
-        msvc_kit::constants::VS_CHANNEL_URL,
-        entry_for_major(17).expect("VS 2022 row").channel_url
+        v17.channel_url,
+        VS_CHANNEL_URL_TEMPLATE.replace("{major}", "17")
     );
 
-    // And every known URL must be expressible through the template.
-    for entry in msvc_kit::VS_CHANNELS {
-        let from_template = VS_CHANNEL_URL_TEMPLATE.replace("{major}", &entry.major.to_string());
-        assert_eq!(entry.channel_url, from_template, "v{}", entry.major);
-    }
+    // VS 2026 (v18) is an intentional exception to the template: upstream has not
+    // published a `release` channel for it, so msvc-kit serves v18 from the
+    // `stable` channel instead of the `release` fallback.
+    let v18 = entry_for_major(18).expect("VS 2026 row");
+    assert_eq!(v18.channel_url, "https://aka.ms/vs/18/stable/channel");
+    assert_ne!(
+        v18.channel_url,
+        VS_CHANNEL_URL_TEMPLATE.replace("{major}", "18"),
+        "v18 must not use the unpublished `release` channel"
+    );
 }
 
 #[test]
