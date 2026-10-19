@@ -83,7 +83,13 @@ fn msiexec_path_arg(path: &Path) -> String {
             selected
         );
     }
-    selected.to_string_lossy().into_owned()
+    // Windows Installer cannot operate on a path containing forward slashes:
+    // `msiexec /a <msi>` returns 1619 ("package could not be opened") and an
+    // administrative install into a forward-slash TARGETDIR returns 1603.
+    // GetShortPathNameW preserves the original separators, so the short-path
+    // fallback above is not sufficient on its own. Normalize the final argument
+    // to backslashes so both the package path and TARGETDIR are always openable.
+    selected.to_string_lossy().replace('/', "\\")
 }
 
 #[cfg(windows)]
@@ -564,6 +570,44 @@ mod tests {
         assert!(!selected.is_empty());
         assert!(Path::new(&selected).exists());
         assert!(selected.len() <= temp.path().to_string_lossy().len());
+    }
+
+    /// The VS 2026 / SDK 10.0.28000 manifest yields forward-slash payload paths
+    /// such as `Redistributable/10.1.0.0/UAPSDKAddOn-x86.msi`. A path containing
+    /// `/` makes `msiexec /a` fail with 1619, so the argument handed to msiexec
+    /// must never contain a forward slash.
+    #[cfg(windows)]
+    #[test]
+    fn test_msiexec_path_arg_strips_forward_slashes() {
+        let forward = Path::new(
+            "C:/cache/downloads/sdk/28000_x64/Redistributable/10.1.0.0/UAPSDKAddOn-x86.msi",
+        );
+        let arg = msiexec_path_arg(forward);
+
+        assert!(
+            !arg.contains('/'),
+            "msiexec argument must not contain '/': {arg}"
+        );
+        assert!(
+            arg.contains(r"Redistributable\10.1.0.0\UAPSDKAddOn-x86.msi"),
+            "forward slashes must be normalized to backslashes: {arg}"
+        );
+    }
+
+    /// Regression guard for the working v17 / SDK 10.0.26100 path: an
+    /// already-backslash argument must be passed through unchanged.
+    #[cfg(windows)]
+    #[test]
+    fn test_msiexec_path_arg_preserves_backslash_paths() {
+        let backslash =
+            Path::new(r"C:\cache\downloads\sdk\26100_x64\Installers\Windows SDK Headers-x86.msi");
+        let arg = msiexec_path_arg(backslash);
+
+        assert!(!arg.contains('/'));
+        assert!(
+            arg.ends_with(r"Installers\Windows SDK Headers-x86.msi"),
+            "backslash layout must be preserved: {arg}"
+        );
     }
 
     #[cfg(windows)]

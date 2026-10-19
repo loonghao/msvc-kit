@@ -65,7 +65,10 @@ pub const VS_CHANNELS: &[VsChannelEntry] = &[
     VsChannelEntry {
         major: 18,
         year: 2026,
-        channel_url: "https://aka.ms/vs/18/release/channel",
+        // VS 2026 (v18) has no published `release` channel yet — that URL
+        // redirects to an HTML page instead of a JSON manifest. Upstream
+        // publishes the stable manifest under `/vs/18/stable/channel`.
+        channel_url: "https://aka.ms/vs/18/stable/channel",
     },
     VsChannelEntry {
         major: 17,
@@ -284,10 +287,24 @@ mod tests {
         let v18 = entry_for_major(18).expect("VS 2026 row");
         assert_eq!(v18.year, 2026);
         assert!(v18.channel_url.contains("/vs/18/"));
+        // v18 has no published `release` channel — it must use `stable`,
+        // otherwise the URL serves an HTML page and v18 looks unavailable.
+        assert!(
+            v18.channel_url.contains("/vs/18/stable/"),
+            "VS 2026 must use the stable channel, got {}",
+            v18.channel_url
+        );
+        assert!(
+            !v18.channel_url.contains("/release/"),
+            "VS 2026 must not use the release channel, got {}",
+            v18.channel_url
+        );
 
         let v17 = entry_for_major(17).expect("VS 2022 row");
         assert_eq!(v17.year, 2022);
         assert!(v17.channel_url.contains("/vs/17/"));
+        // v17 still serves a JSON manifest from `release`; keep it pinned.
+        assert_eq!(v17.channel_url, "https://aka.ms/vs/17/release/channel");
     }
 
     #[test]
@@ -309,7 +326,7 @@ mod tests {
             assert_eq!(spec.major, 18, "selector {selector}");
             assert_eq!(spec.year, Some(2026));
             assert_eq!(
-                spec.channel_url, "https://aka.ms/vs/18/release/channel",
+                spec.channel_url, "https://aka.ms/vs/18/stable/channel",
                 "selector {selector}"
             );
         }

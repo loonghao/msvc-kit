@@ -258,9 +258,24 @@ impl CommonDownloader {
 }
 
 /// Resolve safe payload paths under the cache root.
+///
+/// Upstream channel manifests disagree on the separator used inside payload
+/// file names: older channels (and Windows SDK 10.0.26100) use backslashes,
+/// while the VS 2026 / SDK 10.0.28000 manifest uses forward slashes (225 of its
+/// 227 payloads, e.g. `Redistributable/10.1.0.0/UAPSDKAddOn-x86.msi`). Joining
+/// such a name with a Windows cache root yields a mixed-separator path such as
+/// `downloads\sdk\28000_x64\Redistributable/10.1.0.0/UAPSDKAddOn-x86.msi`, and
+/// Windows Installer cannot open a package through it: `msiexec /a` fails with
+/// error 1619. Normalize forward slashes to the platform separator so every
+/// downstream consumer (download location, extraction, msiexec) receives a
+/// canonical path. Backslash payload names are left untouched, preserving the
+/// behaviour of channels that already use them.
 fn payload_path(download_dir: &Path, name: &str) -> Result<PathBuf> {
-    let relative = Path::new(name);
-    if name.is_empty()
+    // A forward slash is never valid inside a single path component on any
+    // supported platform, so this replacement is a lossless normalization.
+    let normalized = name.replace('/', std::path::MAIN_SEPARATOR_STR);
+    let relative = Path::new(&normalized);
+    if normalized.is_empty()
         || relative
             .components()
             .any(|part| !matches!(part, std::path::Component::Normal(_)))
@@ -487,4 +502,76 @@ async fn download_file_with_streaming_hash(
         payload.file_name,
         dl_const::MAX_RETRIES
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The VS 2026 / SDK 10.0.28000 manifest encodes payload paths with forward
+    /// slashes. They must resolve to the same nested layout regardless of the
+    /// separator a channel manifest happens to use.
+    #[test]
+    fn forward_slash_payload_resolves_to_nested_layout() {
+        let dir = Path::new("downloads").join("sdk").join("28000_x64");
+        let resolved = payload_path(&dir, "Redistributable/10.1.0.0/UAPSDKAddOn-x86.msi").unwrap();
+
+        assert!(resolved.starts_with(&dir));
+        assert_eq!(resolved.file_name().unwrap(), "UAPSDKAddOn-x86.msi");
+        let parent = resolved.parent().unwrap();
+        assert_eq!(parent.file_name().unwrap(), "10.1.0.0");
+        let grandparent = parent.parent().unwrap();
+        assert_eq!(grandparent.file_name().unwrap(), "Redistributable");
+    }
+
+    /// On Windows a forward slash must never survive into the resolved path:
+    /// `msiexec /a` returns 1619 for a package path containing `/`.
+    #[cfg(windows)]
+    #[test]
+    fn forward_slash_payload_has_no_forward_separator_on_windows() {
+        let dir = Path::new(r"downloads\sdk\28000_x64");
+        let resolved = payload_path(dir, "Redistributable/10.1.0.0/UAPSDKAddOn-x86.msi").unwrap();
+        let text = resolved.to_string_lossy().into_owned();
+        assert!(
+            !text.contains('/'),
+            "resolved payload path must not contain '/': {text}"
+        );
+        assert!(
+            text.contains(r"Redistributable\10.1.0.0\UAPSDKAddOn-x86.msi"),
+            "forward slashes must become backslashes: {text}"
+        );
+    }
+
+    /// Regression guard for the working v17 / SDK 10.0.26100 path: a backslash
+    /// payload name must resolve to the exact same nested path as before.
+    #[cfg(windows)]
+    #[test]
+    fn backslash_payload_resolution_is_unchanged() {
+        let dir = Path::new(r"downloads\sdk\26100_x64");
+        let name = r"Installers\Windows SDK Desktop Headers x86-x86_en-us.msi";
+        let resolved = payload_path(dir, name).unwrap();
+        let expected = dir
+            .join("Installers")
+            .join("Windows SDK Desktop Headers x86-x86_en-us.msi");
+        assert_eq!(resolved, expected);
+        assert!(!resolved.to_string_lossy().contains('/'));
+    }
+
+    #[test]
+    fn traversal_and_absolute_payloads_are_rejected() {
+        let dir = Path::new("dl");
+        assert!(payload_path(dir, "").is_err());
+        assert!(payload_path(dir, "../evil").is_err());
+        assert!(payload_path(dir, "a/../../evil").is_err());
+        assert!(payload_path(dir, "/abs/path").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_traversal_and_drive_payloads_are_rejected() {
+        let dir = Path::new(r"dl");
+        assert!(payload_path(dir, r"..\evil").is_err());
+        assert!(payload_path(dir, "C:/abs").is_err());
+        assert!(payload_path(dir, r"a\..\..\evil").is_err());
+    }
 }

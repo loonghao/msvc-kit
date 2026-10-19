@@ -1,15 +1,20 @@
 # Visual Studio 版本与 Channel
 
-msvc-kit 从 Visual Studio 的 **channel manifest**（`https://aka.ms/vs/<大版本号>/release/channel`
-返回的 JSON）中发现 MSVC 工具集与 Windows SDK 包。
+msvc-kit 从 Visual Studio 的 **channel manifest**（每个版本对应的 channel URL
+所返回的 JSON，例如 `https://aka.ms/vs/17/release/channel`，各版本见下表）中
+发现 MSVC 工具集与 Windows SDK 包。
 
 msvc-kit 认识的每个 channel 都只存在于一张表 `VS_CHANNELS` 里，因此「支持某个
 Visual Studio 版本」是**数据**，不是逻辑：
 
 | 大版本 | 发行版本 | Channel URL |
 |--------|----------|-------------|
-| `18` | Visual Studio 2026 | `https://aka.ms/vs/18/release/channel` |
+| `18` | Visual Studio 2026 | `https://aka.ms/vs/18/stable/channel` |
 | `17` | Visual Studio 2022 | `https://aka.ms/vs/17/release/channel` |
+
+> **说明：** VS 2026 (v18) 没有已发布的 `release` channel —— 该 URL 返回的是
+> HTML 页面而不是 JSON manifest。msvc-kit 改用已发布的 `stable` channel 来跟踪
+> v18。VS 2022 (v17) 仍继续使用 `release` channel。
 
 ## 选择 channel
 
@@ -44,18 +49,19 @@ msvc-kit config --set-vs-channel 2022
 
 ## 上游 channel 尚未发布时
 
-Microsoft 只在该版本可用后才发布 channel manifest。在那之前，
-`https://aka.ms/vs/18/release/channel` 返回的是 HTML 页面而不是 JSON。msvc-kit
-会识别这种情况并干净降级，而不是抛出解析错误：
+Microsoft 只在该版本可用后才发布 channel manifest。在那之前，该版本的 channel
+URL 返回的是 HTML 页面而不是 JSON —— 例如尚未发布的未来版本，其 `release`
+channel 为 `https://aka.ms/vs/19/release/channel`。msvc-kit 会识别这种情况并
+干净降级，而不是抛出解析错误：
 
 - **auto 选择**：跳过该 channel，回退到下一个：
 
   ```text
-  WARN Visual Studio channel(s) skipped as unavailable: Visual Studio 2026 (v18)
-       (Visual Studio channel Visual Studio 2026 (v18) is not available
-       (https://aka.ms/vs/18/release/channel): the server returned an HTML page
+  WARN Visual Studio channel(s) skipped as unavailable: Visual Studio 2027 (v19)
+       (Visual Studio channel Visual Studio 2027 (v19) is not available
+       (https://aka.ms/vs/19/release/channel): the server returned an HTML page
        instead of a JSON manifest (the channel is probably not published yet))
-  Visual Studio channel: Visual Studio 2022 (v17)
+  Visual Studio channel: Visual Studio 2026 (v18)
   ```
 
 - **固定选择**：返回带类型的错误 `ChannelUnavailable`，包含 URL 和原因；绝不
@@ -81,7 +87,7 @@ manifest 缓存里，因此上游一旦发布就能立刻生效。
        VsChannelEntry {
            major: 18,
            year: 2026,
-           channel_url: "https://aka.ms/vs/18/release/channel",
+           channel_url: "https://aka.ms/vs/18/stable/channel",
        },
        // ...
    ];
