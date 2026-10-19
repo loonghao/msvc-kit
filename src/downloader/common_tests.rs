@@ -28,6 +28,11 @@ fn fixture_downloader(verify_hashes: bool) -> super::common::CommonDownloader {
     .with_progress_handler(Arc::new(NoopProgressHandler))
 }
 
+/// Total HTTP requests a payload may generate: one initial try plus one per retry.
+fn download_total_attempts() -> usize {
+    crate::constants::download::MAX_RETRIES + 1
+}
+
 #[tokio::test]
 async fn altered_cached_bytes_are_rehashed_even_when_index_hash_matches() {
     let mut server = mockito::Server::new_async().await;
@@ -99,7 +104,7 @@ async fn rejected_download_preserves_the_previous_final_file() {
     let mock = server
         .mock("GET", "/payload")
         .with_body("bad")
-        .expect(1)
+        .expect(download_total_attempts())
         .create_async()
         .await;
     let root = tempfile::tempdir().unwrap();
@@ -108,10 +113,12 @@ async fn rejected_download_preserves_the_previous_final_file() {
     let result = fixture_downloader(true)
         .download_packages(&[package], root.path(), "fixture")
         .await;
-    assert!(matches!(
-        result,
-        Err(crate::MsvcKitError::HashMismatch { .. })
-    ));
+    let error = result.unwrap_err().to_string();
+    assert!(error.contains("fixture.vsix"), "{error}");
+    assert!(
+        error.contains("did not match its expected SHA256"),
+        "{error}"
+    );
     assert_eq!(
         std::fs::read(root.path().join("fixture.vsix")).unwrap(),
         b"old"
@@ -211,7 +218,7 @@ async fn stale_size_never_overrides_a_mismatched_authoritative_digest() {
     let mock = server
         .mock("GET", "/payload")
         .with_body("malicious larger payload")
-        .expect(1)
+        .expect(download_total_attempts())
         .create_async()
         .await;
     let root = tempfile::tempdir().unwrap();
@@ -220,10 +227,8 @@ async fn stale_size_never_overrides_a_mismatched_authoritative_digest() {
     let result = fixture_downloader(true)
         .download_packages(&[package], root.path(), "fixture")
         .await;
-    assert!(matches!(
-        result,
-        Err(crate::MsvcKitError::HashMismatch { .. })
-    ));
+    let error = result.unwrap_err().to_string();
+    assert!(error.contains("fixture.vsix"), "{error}");
     assert_eq!(
         std::fs::read(root.path().join("fixture.vsix")).unwrap(),
         b"old"
@@ -699,4 +704,75 @@ async fn download_options_builder_sets_cache_manager() {
     // Verify the cache dir matches
     let cm = options.cache_manager.unwrap();
     assert_eq!(cm.cache_dir(), temp_dir.path());
+}
+
+#[tokio::test]
+async fn a_corrupted_first_transfer_is_refetched_and_succeeds() {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/payload", listener.local_addr().unwrap());
+    let good = b"correct";
+    let worker = std::thread::spawn(move || {
+        // First response carries a body whose digest cannot match; the retry
+        // must issue a fresh request instead of reusing those bytes.
+        for body in ["corrupted in flight", "correct"] {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .unwrap();
+            let mut request = [0u8; 4096];
+            let received = socket.read(&mut request).unwrap();
+            assert!(received > 0, "Retry server received an empty HTTP request");
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        }
+    });
+    let root = tempfile::tempdir().unwrap();
+    let package = payload_package(url, good);
+    let result = fixture_downloader(true)
+        .download_packages(std::slice::from_ref(&package), root.path(), "fixture")
+        .await;
+    worker.join().unwrap();
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        std::fs::read(root.path().join("fixture.vsix")).unwrap(),
+        good
+    );
+}
+
+#[tokio::test]
+async fn exhausted_retries_name_the_package_and_the_reason() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/Microsoft.VC.MFC.vsix")
+        .with_body("persistently corrupted")
+        .expect(download_total_attempts())
+        .create_async()
+        .await;
+    let root = tempfile::tempdir().unwrap();
+    let mut package = payload_package(
+        format!("{}/Microsoft.VC.MFC.vsix", server.url()),
+        b"the real bytes",
+    );
+    package.payloads[0].file_name = "Microsoft.VC.MFC.vsix".into();
+    let result = fixture_downloader(true)
+        .download_packages(&[package], root.path(), "MSVC")
+        .await;
+
+    let error = result.unwrap_err().to_string();
+    // The failing package and its root cause are both visible; a missing
+    // bundle artifact is never the only clue.
+    assert!(error.contains("Microsoft.VC.MFC.vsix"), "{error}");
+    assert!(
+        error.contains("did not match its expected SHA256"),
+        "{error}"
+    );
+    assert!(error.contains("MSVC payload download failed"), "{error}");
+    assert!(!root.path().join("Microsoft.VC.MFC.vsix").exists());
+    mock.assert_async().await;
 }
