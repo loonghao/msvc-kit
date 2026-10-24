@@ -709,6 +709,32 @@ async fn download_options_builder_sets_cache_manager() {
 #[tokio::test]
 async fn a_corrupted_first_transfer_is_refetched_and_succeeds() {
     use std::io::{Read, Write};
+    use std::sync::Mutex;
+    use tracing::instrument::WithSubscriber;
+
+    #[derive(Clone)]
+    struct LogWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for LogWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let writer = LogWriter(log.clone());
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .without_time()
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/payload", listener.local_addr().unwrap());
     let good = b"correct";
@@ -734,8 +760,10 @@ async fn a_corrupted_first_transfer_is_refetched_and_succeeds() {
     });
     let root = tempfile::tempdir().unwrap();
     let package = payload_package(url, good);
+    // Scope the subscriber to each poll without changing the global default.
     let result = fixture_downloader(true)
         .download_packages(std::slice::from_ref(&package), root.path(), "fixture")
+        .with_subscriber(subscriber)
         .await;
     worker.join().unwrap();
     assert!(result.is_ok(), "{result:?}");
@@ -743,6 +771,14 @@ async fn a_corrupted_first_transfer_is_refetched_and_succeeds() {
         std::fs::read(root.path().join("fixture.vsix")).unwrap(),
         good
     );
+    let log = String::from_utf8(log.lock().unwrap().clone()).unwrap();
+    let expected_warning = format!(
+        "Hash mismatch for fixture.vsix (attempt 1/{}), refetching: expected {}, got {}",
+        download_total_attempts(),
+        super::hash::compute_hash(good),
+        super::hash::compute_hash(b"corrupted in flight")
+    );
+    assert!(log.contains(&expected_warning), "{log}");
 }
 
 #[tokio::test]
@@ -774,5 +810,60 @@ async fn exhausted_retries_name_the_package_and_the_reason() {
     );
     assert!(error.contains("MSVC payload download failed"), "{error}");
     assert!(!root.path().join("Microsoft.VC.MFC.vsix").exists());
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn http_failure_reports_payload_context_and_preserves_cached_bytes() {
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct ErrorProgress(Mutex<Vec<String>>);
+
+    impl super::progress::ProgressHandler for ErrorProgress {
+        fn on_start(&self, _: &str, _: usize, _: u64) {}
+        fn on_file_start(&self, _: &str, _: u64) {}
+        fn on_progress(&self, _: u64) {}
+        fn on_file_complete(&self, _: &str, _: &str) {}
+        fn on_complete(&self, _: usize, _: usize) {}
+
+        fn on_error(&self, error: &str) {
+            self.0.lock().unwrap().push(error.to_owned());
+        }
+    }
+
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/Microsoft.VC.MFC.vsix")
+        .with_status(404)
+        .expect(1)
+        .create_async()
+        .await;
+    let root = tempfile::tempdir().unwrap();
+    let url = format!("{}/Microsoft.VC.MFC.vsix", server.url());
+    let mut package = payload_package(url.clone(), b"the real bytes");
+    package.payloads[0].file_name = "Microsoft.VC.MFC.vsix".into();
+    let path = root.path().join("Microsoft.VC.MFC.vsix");
+    std::fs::write(&path, b"old cached bytes").unwrap();
+    let progress = Arc::new(ErrorProgress::default());
+
+    let error = fixture_downloader(true)
+        .with_progress_handler(progress.clone())
+        .download_packages(&[package], root.path(), "MSVC")
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains(
+            "MSVC payload download failed: Microsoft.VC.MFC.vsix could not be transferred"
+        ),
+        "{error}"
+    );
+    assert!(error.contains("Cause: Download failed for"), "{error}");
+    assert!(error.contains("404 Not Found"), "{error}");
+    assert!(error.contains(&url), "{error}");
+    assert_eq!(*progress.0.lock().unwrap(), vec![error]);
+    assert_eq!(std::fs::read(path).unwrap(), b"old cached bytes");
     mock.assert_async().await;
 }
