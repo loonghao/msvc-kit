@@ -239,9 +239,9 @@ dependencies = [
 
 [[package]]
 name = "axoupdater"
-version = "0.10.3"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ff120905809a9ec70a810193d34841abfea1abad1ea1161456a81b2965bfd57"
+checksum = "077098f88d71d47d8e5e922acae9817e1229201701927e84ffeca793356cf64a"
 dependencies = [
  "axoasset",
  "axoprocess",
@@ -1486,7 +1486,7 @@ dependencies = [
 
 [[package]]
 name = "msvc-kit"
-version = "0.2.22"
+version = "0.2.23"
 dependencies = [
  "anyhow",
  "askama",
