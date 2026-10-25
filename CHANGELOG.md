@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.23](https://github.com/loonghao/msvc-kit/compare/v0.2.22...v0.2.23) (2026-10-25)
+
+
+### Bug Fixes
+
+* **downloader:** name the failing payload and retry corrupted transfers ([2446f3f](https://github.com/loonghao/msvc-kit/commit/2446f3f2fddd4ebe9929f1bae5d50678523e8a27))
+* make VS 2026 (v18) downloadable end to end (channel + SDK 10.0.28000 extraction) ([0da6510](https://github.com/loonghao/msvc-kit/commit/0da6510f5606c32176370adc5099f35a81d6af4e))
+
+
+### Dependencies
+
+* update actions/setup-python action to v7 ([1eb5c9f](https://github.com/loonghao/msvc-kit/commit/1eb5c9f6143cca3ce03efe8fac996e7d296b560c))
+* update Rust crate rstest to 0.28 ([8c5ae00](https://github.com/loonghao/msvc-kit/commit/8c5ae002be863e6efdb4df07db92ab0c6a2cf995))
+* update Rust crate sha2 to 0.11.1 ([e0c3ab3](https://github.com/loonghao/msvc-kit/commit/e0c3ab35a3444ef04634988a56c9c8d8cea623e9))
+* update Rust crate tokio to 1.53.3 ([1a06198](https://github.com/loonghao/msvc-kit/commit/1a06198d1101a79c734c6a0b397aaadaa2c23065))
+
 ## [0.2.22](https://github.com/loonghao/msvc-kit/compare/v0.2.21...v0.2.22) (2026-10-13)
 
 
