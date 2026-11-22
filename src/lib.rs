@@ -116,7 +116,12 @@ pub use downloader::{
 };
 pub use env::{get_env_vars, setup_environment, MsvcEnvironment, ToolPaths};
 pub use error::{MsvcKitError, Result};
-pub use installer::{extract_and_finalize_msvc, extract_and_finalize_sdk, InstallInfo};
+pub use installer::{
+    create_install_plan, extract_and_finalize_msvc, extract_and_finalize_sdk, load_and_verify_plan,
+    revalidate_plan, verify_downloaded_against_plan, DiskUsageEstimate, InstallInfo,
+    InstallPlanDocument, PlanAction, PlanActionKind, PlanOptions, PlanPayload, PlanRequest,
+    PlanRevalidation, PrivilegeRequirement, ResolvedSummary,
+};
 pub use query::{
     query_installation, query_installation_with_sdk_root, ComponentInfo, QueryComponent,
     QueryOptions, QueryOptionsBuilder, QueryProperty, QueryResult,

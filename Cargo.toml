@@ -95,7 +95,7 @@ askama = "0.16.0"
 # Windows registry (Windows only)
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 rstest = "0.28"

@@ -33,6 +33,8 @@
 
 use std::fmt;
 
+use sha2::Digest as _;
+
 use crate::error::{MsvcKitError, Result};
 
 /// URL template used to build a channel manifest URL for any VS major version.
@@ -131,9 +133,18 @@ impl VsChannelSpec {
         }
     }
 
-    /// Short slug used for cache file names, e.g. `18`
+    /// Short slug used for cache file names, e.g. `18`.
+    ///
+    /// Custom channel URLs (major 0) derive the slug from the URL so two
+    /// custom channels cannot collide on cache files.
     pub fn cache_slug(&self) -> String {
-        format!("v{}", self.major)
+        if self.major == 0 {
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(self.channel_url.as_bytes());
+            format!("custom-{}", &hex::encode(hasher.finalize())[..12])
+        } else {
+            format!("v{}", self.major)
+        }
     }
 
     /// Cache file name for the channel manifest, e.g. `channel-v18.json`
@@ -239,6 +250,14 @@ pub fn parse_channel_selector(selector: &str) -> Result<Option<VsChannelSpec>> {
     let normalized = raw.to_ascii_lowercase();
     if matches!(normalized.as_str(), "auto" | "latest" | "default") {
         return Ok(None);
+    }
+
+    // Accept an explicit channel manifest URL (http/https). This is the
+    // escape hatch for unpublished or mirrored channels; the manifest trust
+    // chain (catalog digest vs. fresh channel bytes) still applies to
+    // whatever that URL serves.
+    if normalized.starts_with("https://") || normalized.starts_with("http://") {
+        return Ok(Some(VsChannelSpec::new(0, None, raw.to_string())));
     }
 
     // Accept "18", "v18", "vs18", "visual studio 2026", ...

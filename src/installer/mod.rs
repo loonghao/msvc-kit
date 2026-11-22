@@ -3,6 +3,13 @@
 mod contracts;
 mod extractor;
 mod path_safety;
+pub mod plan;
+
+pub use plan::{
+    create_install_plan, load_and_verify_plan, revalidate_plan, verify_downloaded_against_plan,
+    DiskUsageEstimate, InstallPlanDocument, PlanAction, PlanActionKind, PlanOptions, PlanPayload,
+    PlanRequest, PlanRevalidation, PrivilegeRequirement, ResolvedSummary,
+};
 
 use futures::{stream, StreamExt};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
@@ -23,7 +30,8 @@ use extractor::{
     inner_progress_enabled,
 };
 
-const SDK_OPTIONAL_MSI_SKIP_PATTERNS: &[&str] = &["application verifier", "winrt intellisense"];
+pub(crate) const SDK_OPTIONAL_MSI_SKIP_PATTERNS: &[&str] =
+    &["application verifier", "winrt intellisense"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SdkExtractionAction {
