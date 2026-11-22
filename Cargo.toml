@@ -70,6 +70,9 @@ anyhow = "1.0.101"
 directories = "6.0"
 async-trait = "0.1.89"
 
+# Unicode NFC normalization for archive path collision keys
+unicode-normalization = "0.1"
+
 # Async utilities
 futures = "0.3"
 

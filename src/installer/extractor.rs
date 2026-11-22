@@ -1,5 +1,6 @@
 //! File extraction utilities for VSIX, MSI, and CAB files
 
+use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -7,7 +8,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+use sha2::Digest;
 
+use super::path_safety::{
+    oversized_archive_error, oversized_entry_error, unsafe_entry_error, PathOccupancy,
+    SafeRelativePath, MAX_ARCHIVE_OUTPUT_BYTES, MAX_ENTRY_BYTES,
+};
 use crate::constants::{extraction as ext_const, progress as progress_const};
 use crate::error::{MsvcKitError, Result};
 
@@ -174,21 +180,100 @@ pub async fn extract_vsix(vsix_path: &Path, target_dir: &Path) -> Result<()> {
     extract_vsix_with_progress(vsix_path, target_dir, inner_progress_enabled()).await
 }
 
+/// A validated VSIX/ZIP entry ready to be written.
+struct PlannedVsixEntry {
+    index: usize,
+    safe: SafeRelativePath,
+}
+
 fn extract_vsix_sync(vsix_path: &Path, target_dir: &Path, show_progress: bool) -> Result<()> {
-    // Pre-compute total bytes for progress bar (skip metadata files)
-    let total_bytes = {
+    // Pass 1: resolve and validate every entry name, symlink mode and size
+    // limit, detect file/directory conflicts, and hash each entry's content
+    // before anything is written. A rejected archive therefore leaves the
+    // target tree untouched, and duplicate collision keys are resolved
+    // upfront: equal bytes deduplicate, differing bytes are a hard conflict.
+    // (Byte-identical duplicate names are already refused by the zip reader.)
+    let (total_bytes, planned_dirs, planned_files) = {
         let file = File::open(vsix_path)?;
         let mut archive = zip::ZipArchive::new(file)?;
         let mut total = 0u64;
-        for i in 0..archive.len() {
-            let file = archive.by_index(i)?;
-            let name = file.name()?;
-            if name.starts_with('[') || name == "extension.vsixmanifest" || file.is_dir() {
+        let mut occupancy = PathOccupancy::default();
+        let mut seen: HashMap<String, (String, String)> = HashMap::new();
+        let mut planned_dirs = Vec::new();
+        let mut planned_files = Vec::new();
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index)?;
+            let name = entry.name()?.to_string();
+
+            // Skip metadata files
+            if name.starts_with('[') || name == "extension.vsixmanifest" {
                 continue;
             }
-            total = total.saturating_add(file.size());
+
+            // Remove "Contents/" prefix if present
+            let stripped = name.strip_prefix("Contents/").unwrap_or(&name);
+            let is_dir = entry.is_dir() || stripped.ends_with('/') || stripped.ends_with('\\');
+            let relative = stripped.trim_end_matches(['/', '\\']);
+            let safe = SafeRelativePath::resolve(relative)
+                .map_err(|error| unsafe_entry_error(&name, &error))?;
+
+            if entry.is_symlink() {
+                return Err(MsvcKitError::Other(format!(
+                    "Refusing archive entry {name:?}: symlink entries are not extracted"
+                )));
+            }
+
+            if is_dir {
+                occupancy.register_dir(&safe).map_err(|conflict| {
+                    MsvcKitError::Other(format!(
+                        "Refusing archive entry {name:?}: file/directory path conflict with {conflict:?}"
+                    ))
+                })?;
+                planned_dirs.push(safe);
+                continue;
+            }
+
+            let size = entry.size();
+            if size > MAX_ENTRY_BYTES {
+                return Err(oversized_entry_error(&name, size));
+            }
+
+            occupancy.register_file(&safe).map_err(|conflict| {
+                MsvcKitError::Other(format!(
+                    "Refusing archive entry {name:?}: file/directory path conflict with {conflict:?}"
+                ))
+            })?;
+
+            // Hash the full entry content before any file is written.
+            let mut hasher = sha2::Sha256::new();
+            let mut buffer = [0u8; ext_const::EXTRACT_BUFFER_SIZE];
+            loop {
+                let n = entry.read(&mut buffer)?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..n]);
+            }
+            let hash = hex::encode(hasher.finalize());
+
+            let key = safe.collision_key();
+            if let Some((first_path, existing_hash)) = seen.get(&key) {
+                if existing_hash == &hash {
+                    continue;
+                }
+                return Err(MsvcKitError::Other(format!(
+                    "Archive entry collision: {first_path:?} and {name:?} resolve to the same path with different content"
+                )));
+            }
+            seen.insert(key, (safe.display(), hash));
+
+            total = total.saturating_add(size);
+            if total > MAX_ARCHIVE_OUTPUT_BYTES {
+                return Err(oversized_archive_error(total));
+            }
+            planned_files.push(PlannedVsixEntry { index, safe });
         }
-        total
+        (total, planned_dirs, planned_files)
     };
 
     let pb = if show_progress {
@@ -206,31 +291,24 @@ fn extract_vsix_sync(vsix_path: &Path, target_dir: &Path, show_progress: bool) -
         None
     };
 
+    // Pass 2: write. Only entries that survived pass-1 deduplication remain,
+    // so every write is a first occurrence and nothing is overwritten.
     let file = File::open(vsix_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
 
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i)?;
-        let name = file.name()?.to_string();
+    for safe in &planned_dirs {
+        let out_path = target_dir.join(safe.to_path_buf());
+        std::fs::create_dir_all(&out_path)?;
+    }
 
-        // Skip metadata files
-        if name.starts_with('[') || name == "extension.vsixmanifest" {
-            continue;
-        }
-
-        // Remove "Contents/" prefix if present
-        let relative_path = name.strip_prefix("Contents/").unwrap_or(&name);
-        let out_path = target_dir.join(relative_path);
+    for planned in planned_files {
+        let mut entry = archive.by_index(planned.index)?;
 
         if let Some(pb) = pb.as_ref() {
-            pb.set_message(relative_path.to_string());
+            pb.set_message(planned.safe.display());
         }
 
-        if file.is_dir() {
-            std::fs::create_dir_all(&out_path)?;
-            continue;
-        }
-
+        let out_path = target_dir.join(planned.safe.to_path_buf());
         if let Some(parent) = out_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -238,7 +316,7 @@ fn extract_vsix_sync(vsix_path: &Path, target_dir: &Path, show_progress: bool) -
         let mut out_file = File::create(&out_path)?;
         let mut buffer = [0u8; ext_const::EXTRACT_BUFFER_SIZE];
         loop {
-            let n = file.read(&mut buffer)?;
+            let n = entry.read(&mut buffer)?;
             if n == 0 {
                 break;
             }
@@ -437,18 +515,50 @@ pub async fn extract_cab(cab_path: &Path, target_dir: &Path) -> Result<()> {
 }
 
 fn extract_cab_sync(cab_path: &Path, target_dir: &Path, show_progress: bool) -> Result<()> {
-    let file = File::open(cab_path)?;
-    let cabinet = cab::Cabinet::new(file)
-        .map_err(|e| MsvcKitError::Cab(format!("Failed to open CAB: {}", e)))?;
+    // Pass 1: resolve and validate every entry name and size limit before
+    // anything is written, so a rejected archive leaves the target untouched.
+    // The cab crate looks files up by name, so duplicate entry names cannot be
+    // extracted unambiguously and are rejected outright.
+    let planned: Vec<(String, SafeRelativePath)> = {
+        let file = File::open(cab_path)?;
+        let cabinet = cab::Cabinet::new(file)
+            .map_err(|e| MsvcKitError::Cab(format!("Failed to open CAB: {}", e)))?;
+        let mut occupancy = PathOccupancy::default();
+        let mut planned = Vec::new();
+        let mut total_bytes = 0u64;
+        for entry in cabinet
+            .folder_entries()
+            .flat_map(|folder| folder.file_entries())
+        {
+            let name = entry.name().to_string();
+            let safe = SafeRelativePath::resolve(&name)
+                .map_err(|error| unsafe_entry_error(&name, &error))?;
+            // The cab crate resolves entries by name, so duplicates cannot be
+            // read unambiguously and must not be extracted.
+            if occupancy.contains_file(&safe.collision_key()) {
+                return Err(MsvcKitError::Other(format!(
+                    "Refusing CAB entry {name:?}: duplicate entry name in cabinet"
+                )));
+            }
+            occupancy.register_file(&safe).map_err(|conflict| {
+                MsvcKitError::Other(format!(
+                    "Refusing CAB entry {name:?}: file/directory path conflict with {conflict:?}"
+                ))
+            })?;
+            let size = entry.uncompressed_size() as u64;
+            if size > MAX_ENTRY_BYTES {
+                return Err(oversized_entry_error(&name, size));
+            }
+            total_bytes = total_bytes.saturating_add(size);
+            if total_bytes > MAX_ARCHIVE_OUTPUT_BYTES {
+                return Err(oversized_archive_error(total_bytes));
+            }
+            planned.push((name, safe));
+        }
+        planned
+    };
 
-    // Collect file names first by iterating through folders
-    let file_names: Vec<String> = cabinet
-        .folder_entries()
-        .flat_map(|folder| folder.file_entries())
-        .map(|entry| entry.name().to_string())
-        .collect();
-
-    let total_files = file_names.len() as u64;
+    let total_files = planned.len() as u64;
     let pb = if show_progress {
         let pb = ProgressBar::new(total_files.max(1));
         pb.set_draw_target(ProgressDrawTarget::stderr_with_hz(4));
@@ -464,20 +574,16 @@ fn extract_cab_sync(cab_path: &Path, target_dir: &Path, show_progress: bool) -> 
         None
     };
 
-    // Re-open cabinet for extraction (cab crate requires this pattern)
-    // Note: The cab crate's API requires re-opening for each file read.
-    // This is a limitation of the crate, not an efficiency issue we can fix here.
-    // A future optimization would be to use a different CAB library or implement
-    // streaming extraction.
-    for (idx, name) in file_names.iter().enumerate() {
-        let out_path = target_dir.join(name);
+    // Pass 2: extraction (cab crate requires re-opening for each file read).
+    for (idx, (name, safe)) in planned.iter().enumerate() {
+        let out_path = target_dir.join(safe.to_path_buf());
 
         if let Some(parent) = out_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
         if let Some(pb) = pb.as_ref() {
-            pb.set_message(format!("{} ({}/{})", name, idx + 1, total_files));
+            pb.set_message(format!("{} ({}/{})", safe.display(), idx + 1, total_files));
         }
 
         // Re-open cabinet to read the file (cab crate limitation)

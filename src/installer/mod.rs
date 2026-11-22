@@ -1,6 +1,8 @@
 //! Installation and extraction functionality
 
+mod contracts;
 mod extractor;
+mod path_safety;
 
 use futures::{stream, StreamExt};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
@@ -9,10 +11,10 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use crate::constants::{extraction as ext_const, progress as progress_const};
-use crate::error::Result;
+use crate::error::{MsvcKitError, Result};
 use crate::version::Architecture;
 
 pub use extractor::{extract_cab, extract_msi, extract_vsix, get_extractor};
@@ -118,28 +120,75 @@ async fn extract_package_with_progress(
     }
 }
 
-async fn extraction_marker_path(marker_dir: &Path, file: &Path) -> PathBuf {
+/// Extraction marker schema. A v2 marker records the SHA256 of the source
+/// archive it was produced from, so a marker hit is tied to the exact bytes
+/// that were extracted instead of to mutable metadata (v1 used a
+/// path+size+mtime fingerprint and is ignored as legacy).
+pub(crate) const EXTRACTION_MARKER_SCHEMA: &str = "msvc-kit.extraction-marker.v2";
+
+/// Content of a v2 extraction marker file.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct ExtractionMarker {
+    pub schema: String,
+    /// SHA256 of the source archive this marker was produced from.
+    pub source_sha256: String,
+    /// Source archive file name, for diagnostics only.
+    pub source_name: String,
+}
+
+struct ExtractionMarkerProbe {
+    path: PathBuf,
+    source_sha256: String,
+    valid: bool,
+}
+
+/// Compute the v2 marker path and whether it currently proves that this exact
+/// archive was already extracted. Legacy v1 markers never validate: their
+/// file names lack the `-v2-` segment, so they are left in place and re-extraction
+/// upgrades the record.
+async fn probe_extraction_marker(marker_dir: &Path, file: &Path) -> Result<ExtractionMarkerProbe> {
     let name = file
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("unknown");
-    let metadata = tokio::fs::metadata(file).await.ok();
-    let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
-    let modified = metadata
-        .and_then(|m| m.modified().ok())
-        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-
+        .unwrap_or("unknown")
+        .to_string();
+    let source_sha256 = crate::downloader::hash::compute_file_hash(file).await?;
     let mut hasher = Sha256::new();
-    hasher.update(file.to_string_lossy().as_bytes());
+    hasher.update(source_sha256.as_bytes());
     hasher.update(b"\0");
-    hasher.update(size.to_le_bytes());
-    hasher.update(b"\0");
-    hasher.update(modified.to_le_bytes());
+    hasher.update(name.as_bytes());
     let fingerprint = hex::encode(hasher.finalize());
+    let path = marker_dir.join(format!("{}-v2-{}.done", name, &fingerprint[..16]));
 
-    marker_dir.join(format!("{}-{}.done", name, &fingerprint[..16]))
+    let valid = match tokio::fs::read(&path).await {
+        Ok(bytes) => serde_json::from_slice::<ExtractionMarker>(&bytes).is_ok_and(|marker| {
+            marker.schema == EXTRACTION_MARKER_SCHEMA
+                && marker.source_sha256.eq_ignore_ascii_case(&source_sha256)
+        }),
+        Err(_) => false,
+    };
+    Ok(ExtractionMarkerProbe {
+        path,
+        source_sha256,
+        valid,
+    })
+}
+
+async fn persist_extraction_marker(
+    marker_path: PathBuf,
+    source_sha256: String,
+    source_name: String,
+) -> Result<()> {
+    let marker = ExtractionMarker {
+        schema: EXTRACTION_MARKER_SCHEMA.to_string(),
+        source_sha256,
+        source_name,
+    };
+    let bytes = serde_json::to_vec(&marker)?;
+    tokio::task::spawn_blocking(move || crate::storage::atomic_write(&marker_path, &bytes))
+        .await
+        .map_err(|error| MsvcKitError::Other(error.to_string()))??;
+    Ok(())
 }
 
 /// Extract multiple packages with a unified progress bar (parallel extraction)
@@ -173,17 +222,17 @@ pub async fn extract_packages_with_progress(
     let extracted_count = Arc::new(AtomicUsize::new(0));
     let skipped_count = Arc::new(AtomicUsize::new(0));
 
-    // Filter files that need extraction (not cached)
+    // Filter files that need extraction (not proven cached by a v2 marker)
     let mut files_to_extract = Vec::new();
     let mut cached_files = Vec::new();
 
     for file in files.iter() {
-        let marker = extraction_marker_path(&marker_dir, file).await;
+        let probe = probe_extraction_marker(&marker_dir, file).await?;
 
-        if marker.exists() {
+        if probe.valid {
             cached_files.push(file.clone());
         } else {
-            files_to_extract.push(file.clone());
+            files_to_extract.push((file.clone(), probe.path, probe.source_sha256));
         }
     }
 
@@ -206,9 +255,8 @@ pub async fn extract_packages_with_progress(
     let pb = Arc::new(pb);
 
     let results: Vec<Result<PathBuf>> = stream::iter(files_to_extract)
-        .map(|file| {
+        .map(|(file, marker_path, source_sha256)| {
             let target_dir = target_dir.clone();
-            let marker_dir = marker_dir.clone();
             let extracted_count = extracted_count.clone();
             let skipped_count = skipped_count.clone();
             let pb = pb.clone();
@@ -216,13 +264,25 @@ pub async fn extract_packages_with_progress(
             let total = total as usize;
 
             async move {
-                let marker = extraction_marker_path(&marker_dir, &file).await;
-
                 // Extract the package
                 extract_package_with_progress(&file, &target_dir, false).await?;
 
-                // Mark as extracted
-                let _ = tokio::fs::write(&marker, b"ok").await;
+                // Record a content-identity marker; failure to write it only
+                // costs a re-extraction next run, never a false skip.
+                let source_name = file
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                if let Err(error) =
+                    persist_extraction_marker(marker_path, source_sha256, source_name).await
+                {
+                    tracing::warn!(
+                        "Failed to write extraction marker for {:?}: {}",
+                        file,
+                        error
+                    );
+                }
 
                 // Update progress
                 let done = extracted_count.fetch_add(1, Ordering::Relaxed) + 1;
