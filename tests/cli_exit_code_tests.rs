@@ -478,3 +478,46 @@ fn test_release_workflow_winget_job_ordering() {
         "release.yml must wait for release assets before updating winget"
     );
 }
+
+/// plan subcommand: help must exit 0 and mention the plan file output
+#[test]
+fn test_plan_help_exits_zero() {
+    let output = run_command(&["plan", "--help"]).expect("Failed to run msvc-kit plan --help");
+    assert!(
+        output.status.success(),
+        "Expected exit code 0 for plan --help, got: {:?}",
+        output.status.code()
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Usage:") && stdout.contains("plan"),
+        "plan --help must show usage"
+    );
+}
+
+/// apply subcommand: help must exit 0 and document stale-plan refusal
+#[test]
+fn test_apply_help_exits_zero() {
+    let output = run_command(&["apply", "--help"]).expect("Failed to run msvc-kit apply --help");
+    assert!(
+        output.status.success(),
+        "Expected exit code 0 for apply --help, got: {:?}",
+        output.status.code()
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("PLAN_FILE"),
+        "apply --help must document the plan file argument"
+    );
+}
+
+/// apply on a missing plan file must exit non-zero without panicking
+#[test]
+fn test_apply_missing_file_exits_nonzero() {
+    let output = run_command(&["apply", "definitely-missing-plan.json"])
+        .expect("Failed to run msvc-kit apply on a missing file");
+    assert!(
+        !output.status.success(),
+        "apply on a missing plan file must exit non-zero"
+    );
+}
