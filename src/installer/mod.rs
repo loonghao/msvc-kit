@@ -9,6 +9,7 @@ pub use contracts::{InstalledFileEntry, InstalledManifest, INSTALLED_MANIFEST_SC
 pub mod msi;
 mod path_safety;
 pub mod plan;
+pub mod provider;
 pub mod pruning;
 pub mod resolver;
 pub mod transaction;

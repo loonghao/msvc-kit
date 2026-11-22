@@ -129,6 +129,9 @@ pub use installer::lock_v2::{
 pub use installer::msi::{
     MsiBackendPreference, MsiProcessRunner, RunOutcome, RunRecord, SystemRunner,
 };
+pub use installer::provider::{
+    BuildToolProvider, MsvcToolchainProvider, SimpleBuildToolProvider, ToolchainProvider,
+};
 pub use installer::pruning::{
     PruneAction, PruningContext, PruningProfile, PruningRule, PruningRulesDocument,
 };
