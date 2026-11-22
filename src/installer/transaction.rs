@@ -442,7 +442,8 @@ impl Transaction {
         if staged.files.is_empty() {
             return Ok(Vec::new());
         }
-        let package_dir = self.packages_dir.join(safe_package_dir_name(&staged.package_id));
+        let staged_dir_name = safe_package_dir_name(&staged.package_id);
+        let package_dir = self.packages_dir.join(staged_dir_name);
         let staged_for_plan: Vec<(PathBuf, String, u64, String)> = staged
             .files
             .iter()
