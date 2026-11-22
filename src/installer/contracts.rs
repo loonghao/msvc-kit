@@ -14,6 +14,33 @@ use serde::{Deserialize, Serialize};
 pub(crate) const INSTALL_RECEIPT_SCHEMA: &str = "msvc-kit.install-receipt.v1";
 pub(crate) const OWNERSHIP_INDEX_SCHEMA: &str = "msvc-kit.ownership.v1";
 pub(crate) const TRANSACTION_JOURNAL_SCHEMA: &str = "msvc-kit.transaction-journal.v1";
+pub(crate) const INSTALLED_MANIFEST_SCHEMA: &str = "msvc-kit.installed-manifest.v1";
+
+/// One file of the final installed tree (spec 03 §3.5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InstalledFileEntry {
+    /// Root-relative path (forward slashes for stable cross-tool records).
+    pub path: String,
+    pub size: u64,
+    pub sha256: String,
+    /// Packages that produced this file in the latest install.
+    pub owners: Vec<String>,
+    /// `file` today; directory existence is not part of integrity.
+    pub kind: String,
+}
+
+/// The installed manifest document (`msvc-kit.installed-manifest.v1`): the
+/// authoritative per-file digest record of what the last install left on
+/// disk, used for ownership decisions and later integrity verification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InstalledManifest {
+    pub schema: String,
+    /// Install (transaction) identifier that produced this manifest.
+    pub install_id: String,
+    pub files: Vec<InstalledFileEntry>,
+}
 
 /// Per-file ownership record (spec 03 §3.6). Several owners may reference the
 /// same path only when they agree on its SHA256.
@@ -149,6 +176,37 @@ pub(crate) struct SourcePayload {
 #[cfg(test)]
 mod golden_tests {
     use super::*;
+
+    #[test]
+    fn installed_manifest_golden_round_trip() {
+        let json = r#"{
+          "schema": "msvc-kit.installed-manifest.v1",
+          "install_id": "tx-1",
+          "files": [
+            {
+              "path": "VC/Tools/MSVC/14.44/bin/Hostx64/x64/cl.exe",
+              "size": 123456,
+              "sha256": "abc",
+              "owners": ["Microsoft.VC.14.44.Tools.HostX64.TargetX64"],
+              "kind": "file"
+            }
+          ]
+        }"#;
+        let manifest: InstalledManifest = serde_json::from_str(json).unwrap();
+        assert_eq!(manifest.schema, INSTALLED_MANIFEST_SCHEMA);
+        assert_eq!(manifest.files.len(), 1);
+        assert_eq!(manifest.files[0].size, 123456);
+        let reencoded = serde_json::to_string(&manifest).unwrap();
+        assert_eq!(
+            manifest,
+            serde_json::from_str::<InstalledManifest>(&reencoded).unwrap()
+        );
+        let mut value =
+            serde_json::from_value::<serde_json::Value>(serde_json::to_value(&manifest).unwrap())
+                .unwrap();
+        value["extra"] = serde_json::Value::Bool(true);
+        assert!(serde_json::from_value::<InstalledManifest>(value).is_err());
+    }
 
     #[test]
     fn ownership_index_golden_round_trip() {

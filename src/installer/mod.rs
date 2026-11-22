@@ -4,6 +4,7 @@ mod contracts;
 mod extractor;
 mod path_safety;
 pub mod plan;
+pub mod transaction;
 
 pub use plan::{
     create_install_plan, load_and_verify_plan, revalidate_plan, verify_downloaded_against_plan,
@@ -106,7 +107,7 @@ pub async fn extract_package(file: &Path, target_dir: &Path) -> Result<()> {
     extract_package_with_progress(file, target_dir, inner_progress_enabled()).await
 }
 
-async fn extract_package_with_progress(
+pub(crate) async fn extract_package_with_progress(
     file: &Path,
     target_dir: &Path,
     show_progress: bool,
@@ -144,7 +145,7 @@ pub(crate) struct ExtractionMarker {
     pub source_name: String,
 }
 
-struct ExtractionMarkerProbe {
+pub(crate) struct ExtractionMarkerProbe {
     path: PathBuf,
     source_sha256: String,
     valid: bool,
@@ -154,7 +155,10 @@ struct ExtractionMarkerProbe {
 /// archive was already extracted. Legacy v1 markers never validate: their
 /// file names lack the `-v2-` segment, so they are left in place and re-extraction
 /// upgrades the record.
-async fn probe_extraction_marker(marker_dir: &Path, file: &Path) -> Result<ExtractionMarkerProbe> {
+pub(crate) async fn probe_extraction_marker(
+    marker_dir: &Path,
+    file: &Path,
+) -> Result<ExtractionMarkerProbe> {
     let name = file
         .file_name()
         .and_then(|n| n.to_str())
@@ -429,8 +433,26 @@ pub async fn extract_and_finalize_msvc(info: &mut InstallInfo) -> Result<()> {
 
     tracing::info!("Extracting MSVC packages to {:?}", target_dir);
 
-    // Extract all packages
-    extract_packages_with_progress(&info.downloaded_files, target_dir, "MSVC").await?;
+    // Extract into a journaled transaction workspace, then commit file-by-file
+    // (backup/replace with rollback); the shared root is never replaced.
+    transaction::recover_pending(target_dir).await?;
+    let mut tx =
+        transaction::Transaction::begin(target_dir, "download", transaction::FaultHook::none())?;
+    let staged = tx
+        .stage_package("msvc", &info.downloaded_files, |_| true)
+        .await?;
+    let merged = tx.merge(std::slice::from_ref(&staged))?;
+    if let Err(error) = tx.commit(&merged).await {
+        // A fault after the Committed marker means the install is durable.
+        if transaction::journal_has_committed(tx.journal_path()) {
+            tracing::warn!("Transaction committed; post-commit step failed: {}", error);
+        } else if let Err(rollback) = tx.rollback(&error.to_string()).await {
+            tracing::error!("Rollback failed: {}", rollback);
+            return Err(error);
+        } else {
+            return Err(error);
+        }
+    }
 
     // Find the actual MSVC version directory and extract the full version number
     let vc_tools_path = target_dir.join("VC").join("Tools").join("MSVC");
@@ -471,8 +493,29 @@ pub async fn extract_and_finalize_sdk(info: &InstallInfo) -> Result<()> {
     // stay beside their MSI files for msiexec, but they are not standalone archives
     // to unpack. Some optional SDK MSIs also fail administrative extraction while
     // being unnecessary for MSVC/Rust toolchains.
-    let sdk_files = sdk_payloads_to_extract(&info.downloaded_files);
-    extract_packages_with_progress(&sdk_files, target_dir, "Windows SDK").await?;
+    transaction::recover_pending(target_dir).await?;
+    let mut tx =
+        transaction::Transaction::begin(target_dir, "download", transaction::FaultHook::none())?;
+    let sdk_files: Vec<PathBuf> = sdk_payloads_to_extract(&info.downloaded_files);
+    let staged = tx
+        .stage_package("sdk", &sdk_files, |payload| {
+            matches!(
+                classify_sdk_payload_for_extraction(payload),
+                SdkExtractionAction::Extract
+            )
+        })
+        .await?;
+    let merged = tx.merge(std::slice::from_ref(&staged))?;
+    if let Err(error) = tx.commit(&merged).await {
+        if transaction::journal_has_committed(tx.journal_path()) {
+            tracing::warn!("Transaction committed; post-commit step failed: {}", error);
+        } else if let Err(rollback) = tx.rollback(&error.to_string()).await {
+            tracing::error!("Rollback failed: {}", rollback);
+            return Err(error);
+        } else {
+            return Err(error);
+        }
+    }
 
     Ok(())
 }
