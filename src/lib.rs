@@ -116,10 +116,10 @@ pub use downloader::{
 };
 pub use env::{get_env_vars, setup_environment, MsvcEnvironment, ToolPaths};
 pub use error::{MsvcKitError, Result};
+pub use installer::cas::{BlobPins, BlobSourceRef, BlobStore, GcReport, ImportOutcome};
 pub use installer::msi::{
     MsiBackendPreference, MsiProcessRunner, RunOutcome, RunRecord, SystemRunner,
 };
-pub use installer::cas::{BlobPins, BlobSourceRef, BlobStore, GcReport, ImportOutcome};
 pub use installer::pruning::{
     PruneAction, PruningContext, PruningProfile, PruningRule, PruningRulesDocument,
 };
