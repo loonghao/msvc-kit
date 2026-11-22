@@ -2,6 +2,7 @@
 
 mod contracts;
 mod extractor;
+pub mod msi;
 mod path_safety;
 pub mod plan;
 pub mod transaction;

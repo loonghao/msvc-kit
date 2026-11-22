@@ -116,6 +116,9 @@ pub use downloader::{
 };
 pub use env::{get_env_vars, setup_environment, MsvcEnvironment, ToolPaths};
 pub use error::{MsvcKitError, Result};
+pub use installer::msi::{
+    MsiBackendPreference, MsiProcessRunner, RunOutcome, RunRecord, SystemRunner,
+};
 pub use installer::{
     create_install_plan, extract_and_finalize_msvc, extract_and_finalize_sdk, load_and_verify_plan,
     revalidate_plan, verify_downloaded_against_plan, DiskUsageEstimate, InstallInfo,

@@ -10,6 +10,7 @@ use std::time::Duration;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use sha2::Digest;
 
+use super::msi::{MsiexecBackend, SystemRunner};
 use super::path_safety::{
     oversized_archive_error, oversized_entry_error, unsafe_entry_error, PathOccupancy,
     SafeRelativePath, MAX_ARCHIVE_OUTPUT_BYTES, MAX_ENTRY_BYTES,
@@ -17,12 +18,7 @@ use super::path_safety::{
 use crate::constants::{extraction as ext_const, progress as progress_const};
 use crate::error::{MsvcKitError, Result};
 
-/// Maximum retries for MSI extraction when encountering error 1618
-const MSI_MAX_RETRIES: u32 = 5;
-/// Delay between retries in milliseconds
-const MSI_RETRY_DELAY_MS: u64 = 2000;
-
-fn explain_windows_installer_code(code: Option<i32>) -> &'static str {
+pub(crate) fn explain_windows_installer_code(code: Option<i32>) -> &'static str {
     match code {
         Some(1603) => {
             "Windows Installer error 1603 is a generic fatal install/extract failure. For Windows SDK administrative extraction this is often caused by optional SDK MSI payloads, path length limits, or a locked target directory."
@@ -80,7 +76,7 @@ fn windows_short_path(path: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-fn msiexec_path_arg(path: &Path) -> String {
+pub(crate) fn msiexec_path_arg(path: &Path) -> String {
     let selected = prefer_shorter_path(path, windows_short_path(path));
     if selected != path {
         tracing::debug!(
@@ -96,41 +92,6 @@ fn msiexec_path_arg(path: &Path) -> String {
     // fallback above is not sufficient on its own. Normalize the final argument
     // to backslashes so both the package path and TARGETDIR are always openable.
     selected.to_string_lossy().replace('/', "\\")
-}
-
-#[cfg(windows)]
-fn format_msiexec_failure(
-    status: std::process::ExitStatus,
-    file_name: &str,
-    msi_path: &Path,
-    target_dir: &Path,
-) -> String {
-    let code = status.code();
-    let mut message = format!(
-        "msiexec failed with status: {} for {}\n{}\nSource MSI: {}\nTarget directory: {}",
-        status,
-        file_name,
-        explain_windows_installer_code(code),
-        msi_path.display(),
-        target_dir.display()
-    );
-
-    match code {
-        Some(1603) => message.push_str(
-            "\nNext steps: retry with a shorter --target-dir such as C:\\msvc-kit, make sure antivirus or another installer is not locking the target directory, then rerun the command.",
-        ),
-        Some(1619) => message.push_str(
-            "\nNext steps: delete the downloads/sdk cache for this SDK version and rerun so the MSI and its adjacent CAB source files are downloaded together.",
-        ),
-        Some(1618) => message.push_str(
-            "\nNext steps: wait for Windows Update or another installer to finish, then rerun msvc-kit.",
-        ),
-        _ => message.push_str(
-            "\nNext steps: rerun with RUST_LOG=debug for more context, or try a shorter target directory and a fresh download cache.",
-        ),
-    }
-
-    message
 }
 
 pub(crate) fn inner_progress_enabled() -> bool {
@@ -385,58 +346,13 @@ fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> 
 
     #[cfg(windows)]
     {
-        use std::process::Command;
-
-        let msi_path_str = msiexec_path_arg(msi_path);
-        let target_dir_str = format!("TARGETDIR={}", msiexec_path_arg(target_dir));
-
-        // Retry loop for handling error 1618 (another installation in progress)
-        // This can happen if system Windows Installer is busy with other operations
-        let mut last_error = None;
-        for attempt in 1..=MSI_MAX_RETRIES {
-            let status = Command::new("msiexec")
-                .args(["/a", &msi_path_str, "/qn", &target_dir_str])
-                .status()?;
-
-            if status.success() {
-                if let Some(pb) = pb {
-                    pb.finish_with_message(format!("MSI extracted: {}", file_name));
-                }
-                return Ok(());
-            }
-
-            // Check for error 1618 (another installation in progress)
-            // This can still happen if system-level installers are running
-            if let Some(code) = status.code() {
-                if code == 1618 && attempt < MSI_MAX_RETRIES {
-                    tracing::warn!(
-                        "msiexec returned 1618 (another installation in progress) for {}, retry {}/{}",
-                        file_name,
-                        attempt,
-                        MSI_MAX_RETRIES
-                    );
-                    if let Some(pb) = pb.as_ref() {
-                        pb.set_message(format!(
-                            "msiexec waiting (retry {}/{}) {}",
-                            attempt, MSI_MAX_RETRIES, file_name
-                        ));
-                    }
-                    std::thread::sleep(Duration::from_millis(MSI_RETRY_DELAY_MS));
-                    continue;
-                }
-            }
-
-            last_error = Some(status);
-            break;
-        }
-
-        if let Some(status) = last_error {
+        let runner = SystemRunner;
+        let backend = MsiexecBackend::new(&runner);
+        if let Err(error) = backend.extract(msi_path, target_dir) {
             if let Some(pb) = pb.as_ref() {
                 pb.abandon_with_message(format!("msiexec failed: {}", file_name));
             }
-            return Err(MsvcKitError::Other(format_msiexec_failure(
-                status, &file_name, msi_path, target_dir,
-            )));
+            return Err(error);
         }
     }
 
@@ -714,43 +630,6 @@ mod tests {
             arg.ends_with(r"Installers\Windows SDK Headers-x86.msi"),
             "backslash layout must be preserved: {arg}"
         );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn test_format_msiexec_failure_includes_guidance() {
-        use std::process::Command;
-
-        let status_1603 = Command::new("cmd")
-            .args(["/C", "exit", "1603"])
-            .status()
-            .unwrap();
-        let message_1603 = format_msiexec_failure(
-            status_1603,
-            "WinRT Intellisense UAP - en-us-x86_en-us.msi",
-            Path::new(
-                "C:/msvc-kit/downloads/sdk/Installers/WinRT Intellisense UAP - en-us-x86_en-us.msi",
-            ),
-            Path::new("C:/msvc-kit"),
-        );
-        assert!(message_1603.contains("1603"));
-        assert!(message_1603.contains("shorter --target-dir"));
-        assert!(message_1603.contains("Source MSI:"));
-        assert!(message_1603.contains("Target directory:"));
-
-        let status_1619 = Command::new("cmd")
-            .args(["/C", "exit", "1619"])
-            .status()
-            .unwrap();
-        let message_1619 = format_msiexec_failure(
-            status_1619,
-            "Application Verifier arm64 External Package (DesktopEditions)-arm64_en-us.msi",
-            Path::new("C:/msvc-kit/downloads/sdk/Installers/Application Verifier arm64 External Package (DesktopEditions)-arm64_en-us.msi"),
-            Path::new("C:/msvc-kit"),
-        );
-        assert!(message_1619.contains("1619"));
-        assert!(message_1619.contains("downloads/sdk cache"));
-        assert!(message_1619.contains("adjacent CAB source files"));
     }
 
     #[test]
