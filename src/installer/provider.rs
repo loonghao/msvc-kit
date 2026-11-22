@@ -163,7 +163,7 @@ mod tests {
     fn msvc_provider_resolves_version() {
         let provider = MsvcToolchainProvider;
         let manifest = {
-            use crate::downloader::manifest::VsPackage;
+            use crate::downloader::VsPackage;
             crate::downloader::VsManifest {
                 manifest_version: "1.0".to_string(),
                 engine_version: None,

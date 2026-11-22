@@ -271,7 +271,7 @@ mod tests {
 #[cfg(test)]
 mod selection_tests {
     use super::*;
-    use crate::downloader::manifest::VsPackage;
+    use crate::downloader::VsPackage;
     use std::collections::HashMap;
 
     fn manifest() -> VsManifest {
