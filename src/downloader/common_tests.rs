@@ -706,6 +706,9 @@ async fn download_options_builder_sets_cache_manager() {
     assert_eq!(cm.cache_dir(), temp_dir.path());
 }
 
+// Flaky under full-suite parallel load on Windows (asserted twice in isolation
+// on 2026-11-22): the retry log line can be missed when other tests hold the
+// tracing writer. Kept in-line; rerun in isolation when it trips.
 #[tokio::test]
 async fn a_corrupted_first_transfer_is_refetched_and_succeeds() {
     use std::io::{Read, Write};

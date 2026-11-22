@@ -14,12 +14,12 @@ use serde::{Deserialize, Serialize};
 pub(crate) const INSTALL_RECEIPT_SCHEMA: &str = "msvc-kit.install-receipt.v1";
 pub(crate) const OWNERSHIP_INDEX_SCHEMA: &str = "msvc-kit.ownership.v1";
 pub(crate) const TRANSACTION_JOURNAL_SCHEMA: &str = "msvc-kit.transaction-journal.v1";
-pub(crate) const INSTALLED_MANIFEST_SCHEMA: &str = "msvc-kit.installed-manifest.v1";
+pub const INSTALLED_MANIFEST_SCHEMA: &str = "msvc-kit.installed-manifest.v1";
 
 /// One file of the final installed tree (spec 03 §3.5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct InstalledFileEntry {
+pub struct InstalledFileEntry {
     /// Root-relative path (forward slashes for stable cross-tool records).
     pub path: String,
     pub size: u64,
@@ -35,7 +35,7 @@ pub(crate) struct InstalledFileEntry {
 /// disk, used for ownership decisions and later integrity verification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct InstalledManifest {
+pub struct InstalledManifest {
     pub schema: String,
     /// Install (transaction) identifier that produced this manifest.
     pub install_id: String,

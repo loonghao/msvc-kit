@@ -3,6 +3,8 @@
 pub mod cas;
 mod contracts;
 mod extractor;
+pub mod lock_v2;
+pub use contracts::{InstalledFileEntry, InstalledManifest, INSTALLED_MANIFEST_SCHEMA};
 pub mod msi;
 mod path_safety;
 pub mod plan;
