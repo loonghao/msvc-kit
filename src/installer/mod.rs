@@ -2,6 +2,7 @@
 
 pub mod cas;
 mod contracts;
+pub mod detection;
 mod extractor;
 pub mod lock_v2;
 pub use contracts::{InstalledFileEntry, InstalledManifest, INSTALLED_MANIFEST_SCHEMA};
