@@ -116,12 +116,12 @@ pub use downloader::{
 };
 pub use env::{get_env_vars, setup_environment, MsvcEnvironment, ToolPaths};
 pub use error::{MsvcKitError, Result};
-pub use installer::detection::{
-    detect_build_tool, detect_msvc, detect_windows_sdk, plan_reuse, BuildToolId,
-    CheckStatus, DetectionOrigin, DetectedToolchain, ReuseDecision, ToolchainKind,
-    ValidationCheck, ValidationSummary,
-};
 pub use installer::cas::{BlobPins, BlobSourceRef, BlobStore, GcReport, ImportOutcome};
+pub use installer::detection::{
+    detect_build_tool, detect_msvc, detect_windows_sdk, plan_reuse, BuildToolId, CheckStatus,
+    DetectedToolchain, DetectionOrigin, ReuseDecision, ToolchainKind, ValidationCheck,
+    ValidationSummary,
+};
 pub use installer::lock_v2::{
     detect_installed_mutation, verify_installed_tree, CabRelation, InstalledDiff, LockProvenance,
     PruningRecord, ToolchainLockV2,
