@@ -20,6 +20,16 @@ use msvc_kit::{
     ScriptContext, ShellType,
 };
 
+/// The blob store root lives next to the manifest cache under the
+/// configured cache directory.
+fn blob_store_root(config: &MsvcKitConfig) -> std::path::PathBuf {
+    config
+        .manifest_cache_dir()
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("msvc-kit-cache"))
+}
+
 /// Resolve the Visual Studio channel for a command.
 ///
 /// Precedence: command line flag > `MSVC_KIT_VS_CHANNEL` > config file > auto.
@@ -267,6 +277,28 @@ impl ToolchainArgs {
 }
 
 #[derive(Subcommand)]
+enum CacheAction {
+    /// Import files into the content-addressed blob store (re-runnable)
+    Import {
+        /// Files to import
+        #[arg(value_name = "FILE")]
+        files: Vec<PathBuf>,
+    },
+    /// Verify blobs (re-hash; quarantine mismatches)
+    Verify {
+        /// Digests to verify; default: all blobs in the store
+        #[arg(value_name = "DIGEST")]
+        digests: Vec<String>,
+    },
+    /// Garbage-collect unreferenced blobs
+    Gc {
+        /// Report what would be removed without deleting anything
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum Commands {
     /// Download MSVC and/or Windows SDK components
     Download {
@@ -399,6 +431,12 @@ enum Commands {
         /// Pruning profile applied to the staged tree before commit (full, portable, minimal, custom)
         #[arg(long, value_name = "PROFILE", default_value = "full")]
         prune_profile: String,
+    },
+
+    /// Content-addressed blob cache operations (import, verify, gc)
+    Cache {
+        #[command(subcommand)]
+        action: CacheAction,
     },
 
     /// Setup environment variables for MSVC toolchain
@@ -1098,6 +1136,68 @@ async fn main() -> anyhow::Result<()> {
 
             println!("\nPlan {} applied successfully.", plan.plan_id);
         }
+
+        Commands::Cache { action } => match action {
+            CacheAction::Import { files } => {
+                let store = msvc_kit::BlobStore::open(&blob_store_root(&config))?;
+                for file in &files {
+                    match store.import_file(file).await? {
+                        msvc_kit::ImportOutcome::Imported { digest, size } => {
+                            println!("imported {file:?} as {digest} ({size} bytes)");
+                        }
+                        msvc_kit::ImportOutcome::AlreadyPresent { digest, .. } => {
+                            println!("already present: {file:?} -> {digest}");
+                        }
+                    }
+                }
+            }
+            CacheAction::Verify { digests } => {
+                let store = msvc_kit::BlobStore::open(&blob_store_root(&config))?;
+                let digests = if digests.is_empty() {
+                    store
+                        .list_blobs()?
+                        .into_iter()
+                        .map(|(digest, _)| digest)
+                        .collect()
+                } else {
+                    digests
+                };
+                let mut intact = 0usize;
+                for digest in &digests {
+                    if store.verify_blob(digest).await? {
+                        intact += 1;
+                    } else {
+                        println!("quarantined corrupted blob {digest}");
+                    }
+                }
+                println!("{}/{} blobs intact", intact, digests.len());
+            }
+            CacheAction::Gc { dry_run } => {
+                let store = msvc_kit::BlobStore::open(&blob_store_root(&config))?;
+                let report = store.gc(dry_run).await?;
+                if dry_run {
+                    println!("dry run - nothing deleted");
+                }
+                for (digest, size) in &report.swept {
+                    println!("swept {digest} ({size} bytes)");
+                }
+                for (digest, size) in &report.retained_young {
+                    println!("retained (young) {digest} ({size} bytes)");
+                }
+                for digest in &report.needs_recovery {
+                    println!("needs recovery: {digest}");
+                }
+                for error in &report.errors {
+                    println!("error: {error}");
+                }
+                println!(
+                    "{} swept, {} retained, {} errors",
+                    report.swept.len(),
+                    report.retained_young.len(),
+                    report.errors.len()
+                );
+            }
+        },
 
         Commands::Setup {
             selection,

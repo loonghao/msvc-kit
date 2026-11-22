@@ -1,5 +1,6 @@
 //! Installation and extraction functionality
 
+pub mod cas;
 mod contracts;
 mod extractor;
 pub mod msi;
