@@ -127,12 +127,17 @@ pub use installer::msi::{
 pub use installer::pruning::{
     PruneAction, PruningContext, PruningProfile, PruningRule, PruningRulesDocument,
 };
+pub use installer::resolver::{
+    BuildProfile, BuildProfileDocument, DependencySpec, ResolvedPackage, ResolvedToolchain,
+    ResolverError,
+};
 pub use installer::{
-    create_install_plan, extract_and_finalize_msvc, extract_and_finalize_msvc_with_profile,
-    extract_and_finalize_sdk, extract_and_finalize_sdk_with_profile, load_and_verify_plan,
-    revalidate_plan, verify_downloaded_against_plan, DiskUsageEstimate, InstallInfo,
-    InstallPlanDocument, InstalledFileEntry, InstalledManifest, PlanAction, PlanActionKind,
-    PlanOptions, PlanPayload, PlanRequest, PlanRevalidation, PrivilegeRequirement, ResolvedSummary,
+    create_install_plan, create_install_plan_with_profile, extract_and_finalize_msvc,
+    extract_and_finalize_msvc_with_profile, extract_and_finalize_sdk,
+    extract_and_finalize_sdk_with_profile, load_and_verify_plan, revalidate_plan,
+    verify_downloaded_against_plan, DiskUsageEstimate, InstallInfo, InstallPlanDocument,
+    InstalledFileEntry, InstalledManifest, PlanAction, PlanActionKind, PlanOptions, PlanPayload,
+    PlanRequest, PlanRevalidation, PrivilegeRequirement, ResolvedSummary,
     INSTALLED_MANIFEST_SCHEMA,
 };
 pub use query::{

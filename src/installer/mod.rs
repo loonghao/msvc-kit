@@ -9,12 +9,14 @@ pub mod msi;
 mod path_safety;
 pub mod plan;
 pub mod pruning;
+pub mod resolver;
 pub mod transaction;
 
 pub use plan::{
-    create_install_plan, load_and_verify_plan, revalidate_plan, verify_downloaded_against_plan,
-    DiskUsageEstimate, InstallPlanDocument, PlanAction, PlanActionKind, PlanOptions, PlanPayload,
-    PlanRequest, PlanRevalidation, PrivilegeRequirement, ResolvedSummary,
+    create_install_plan, create_install_plan_with_profile, load_and_verify_plan, revalidate_plan,
+    verify_downloaded_against_plan, DiskUsageEstimate, InstallPlanDocument, PlanAction,
+    PlanActionKind, PlanOptions, PlanPayload, PlanRequest, PlanRevalidation, PrivilegeRequirement,
+    ResolvedSummary,
 };
 
 use futures::{stream, StreamExt};

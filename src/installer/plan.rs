@@ -415,6 +415,25 @@ pub async fn revalidate_plan(
 /// Planning never downloads payloads and never writes to the target root; it
 /// reads the manifest (cache-assisted) and probes the payload cache.
 pub async fn create_install_plan(options: &PlanOptions) -> Result<InstallPlanDocument> {
+    create_install_plan_inner(options, None).await
+}
+
+/// Like [`create_install_plan`], but the MSVC package set comes from the
+/// dependency-resolver graph seeded by the build profile (spec 04 section 4;
+/// roadmap P08: the plan is produced by the resolved graph). SDK selection is
+/// unchanged; `--exclude-pattern` still applies at seed level, but required
+/// dependencies pulled in by the closure are always planned.
+pub async fn create_install_plan_with_profile(
+    options: &PlanOptions,
+    profile: &crate::installer::resolver::BuildProfile,
+) -> Result<InstallPlanDocument> {
+    create_install_plan_inner(options, Some(profile)).await
+}
+
+async fn create_install_plan_inner(
+    options: &PlanOptions,
+    profile: Option<&crate::installer::resolver::BuildProfile>,
+) -> Result<InstallPlanDocument> {
     let selection = VsChannelSelection::from_optional(options.vs_channel.as_deref())?;
     let (manifest, channel_spec, identity) =
         VsManifest::fetch_with_identity(selection, &options.manifest_cache_dir).await?;
@@ -455,19 +474,78 @@ pub async fn create_install_plan(options: &PlanOptions) -> Result<InstallPlanDoc
     let include_set: std::collections::HashSet<MsvcComponent> =
         options.include_components.iter().cloned().collect();
 
+    let mut profile_used: Option<String> = None;
     if options.include_msvc {
         let version = msvc_selected.clone().ok_or_else(|| {
             MsvcKitError::VersionNotFound(
                 "No MSVC version found in the manifest to plan".to_string(),
             )
         })?;
-        let packages_for_component = manifest.find_msvc_packages(
+        // Profile-driven resolution: seeds from find_msvc_packages (the
+        // battle-tested matcher, including the profile's component opt-ins),
+        // then the resolver closes over manifest dependencies in a stable
+        // topological order (roadmap P08: the plan is produced by the
+        // resolved graph).
+        let mut include_with_profile = include_set.clone();
+        if let Some(profile) = profile {
+            for component in profile.include_components() {
+                include_with_profile.insert(component);
+            }
+        }
+        let seed_packages = manifest.find_msvc_packages(
             &version,
             &host,
             &target,
-            &include_set,
+            &include_with_profile,
             &options.exclude_patterns,
         );
+        let packages_for_component = match profile {
+            None => seed_packages,
+            Some(profile) => {
+                let seed_ids: Vec<String> = seed_packages
+                    .iter()
+                    .map(|package| package.id.clone())
+                    .collect();
+                let resolved = crate::installer::resolver::resolve(&manifest, &seed_ids)
+                    .map_err(|error| MsvcKitError::Config(error.to_string()))?;
+                profile_used = Some(profile.as_str().to_string());
+                let by_id: std::collections::HashMap<&str, &crate::downloader::VsPackage> =
+                    manifest
+                        .packages
+                        .iter()
+                        .map(|package| (package.id.as_str(), package))
+                        .collect();
+                resolved
+                    .packages
+                    .iter()
+                    .filter_map(|resolved| {
+                        by_id
+                            .get(resolved.id.as_str())
+                            .map(|package| crate::downloader::Package {
+                                id: package.id.clone(),
+                                version: package.version.clone(),
+                                package_type: package.package_type.clone(),
+                                chip: package.chip.clone(),
+                                payloads: package
+                                    .payloads
+                                    .iter()
+                                    .map(|payload| crate::downloader::PackagePayload {
+                                        file_name: payload.file_name.clone(),
+                                        url: payload.url.clone(),
+                                        size: payload.size.unwrap_or(0),
+                                        sha256: payload.sha256.clone(),
+                                    })
+                                    .collect(),
+                                total_size: package
+                                    .payloads
+                                    .iter()
+                                    .map(|payload| payload.size.unwrap_or(0))
+                                    .sum(),
+                            })
+                    })
+                    .collect()
+            }
+        };
         plan_component(ComponentPlan {
             component: "msvc",
             label: "MSVC",
@@ -550,7 +628,7 @@ pub async fn create_install_plan(options: &PlanOptions) -> Result<InstallPlanDoc
         plan_id: String::new(),
         created_at: Utc::now(),
         request: PlanRequest {
-            profile: None,
+            profile: profile_used.clone(),
             provider: "msvc".to_string(),
             host_arch: host,
             target_arches: vec![target],

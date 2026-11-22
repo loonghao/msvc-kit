@@ -125,7 +125,9 @@ pub use http::{
     create_http_client, create_http_client_with_config, tls_backend_name, HttpClientConfig,
 };
 pub use index::{DownloadIndex, DownloadStatus, IndexEntry};
-pub use manifest::{ChannelManifest, ManifestIdentity, Package, PackagePayload, VsManifest};
+pub use manifest::{
+    ChannelManifest, ManifestIdentity, Package, PackagePayload, VsManifest, VsPackage,
+};
 pub use msvc::MsvcDownloader;
 pub use progress::{
     BoxedProgressHandler, IndicatifProgressHandler, NoopProgressHandler, ProgressHandler,

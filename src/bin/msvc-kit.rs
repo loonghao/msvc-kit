@@ -405,6 +405,11 @@ enum Commands {
         #[arg(long, value_name = "CHANNEL")]
         vs_channel: Option<String>,
 
+        /// Build profile driving the dependency-resolved package set
+        /// (c-native, cpp-native, cpp-desktop, cpp-mfc, cpp-spectre, cross-arm64)
+        #[arg(long, value_name = "PROFILE")]
+        profile: Option<String>,
+
         /// Output format: text (human) or json (machine, stdout only)
         #[arg(long, default_value = "text")]
         format: String,
@@ -907,21 +912,30 @@ async fn main() -> anyhow::Result<()> {
             include_components,
             exclude_patterns,
             vs_channel,
+            profile,
             format,
             output,
         } => {
             let target_dir = target.unwrap_or_else(|| config.install_dir.clone());
-            let arch = arch
-                .as_ref()
-                .map(|arch| arch.parse::<Architecture>())
-                .transpose()
-                .map_err(anyhow::Error::msg)?
-                .unwrap_or(config.default_arch);
             let host_arch = host_arch
                 .as_ref()
                 .map(|arch| arch.parse::<Architecture>())
                 .transpose()
                 .map_err(anyhow::Error::msg)?;
+            let build_profile_for_arch: Option<msvc_kit::BuildProfile> = profile
+                .as_deref()
+                .and_then(|value| msvc_kit::BuildProfile::parse(value).ok());
+            let arch = match arch
+                .as_ref()
+                .map(|arch| arch.parse::<Architecture>())
+                .transpose()
+                .map_err(anyhow::Error::msg)?
+            {
+                Some(arch) => arch,
+                None => build_profile_for_arch
+                    .and_then(|profile| profile.target_override())
+                    .unwrap_or(config.default_arch),
+            };
             let components = include_components
                 .iter()
                 .filter_map(|s| s.parse::<MsvcComponent>().ok())
@@ -939,7 +953,26 @@ async fn main() -> anyhow::Result<()> {
                 include_msvc: !no_msvc,
                 include_sdk: !no_sdk,
             };
-            let plan = msvc_kit::create_install_plan(&plan_options).await?;
+            let build_profile: Option<msvc_kit::BuildProfile> = profile
+                .as_deref()
+                .map(msvc_kit::BuildProfile::parse)
+                .transpose()
+                .map_err(anyhow::Error::msg)?;
+            // Large futures are boxed: the main async block's state machine
+            // lives on the 1 MB main-thread stack on Windows, and embedding
+            // create_install_plan_with_profile's state machine inline pushes
+            // it past that limit (stack overflow at startup, even for
+            // --version, because main's frame is allocated at entry).
+            let plan = match &build_profile {
+                Some(profile) => {
+                    Box::pin(msvc_kit::create_install_plan_with_profile(
+                        &plan_options,
+                        profile,
+                    ))
+                    .await?
+                }
+                None => Box::pin(msvc_kit::create_install_plan(&plan_options)).await?,
+            };
             if !plan.blocking_conflicts.is_empty() {
                 eprintln!(
                     "The plan has {} blocking conflict(s):",
