@@ -162,7 +162,24 @@ mod tests {
     #[test]
     fn msvc_provider_resolves_version() {
         let provider = MsvcToolchainProvider;
-        let manifest = crate::installer::resolver::__test_manifest();
+        let manifest = {
+            use crate::downloader::manifest::VsPackage;
+            crate::downloader::VsManifest {
+                manifest_version: "1.0".to_string(),
+                engine_version: None,
+                packages: vec![VsPackage {
+                    id: "Microsoft.VC.14.44.Tools.HostX64.TargetX64".to_string(),
+                    version: "14.44.34823".to_string(),
+                    package_type: "VSIX".to_string(),
+                    chip: None,
+                    language: None,
+                    payloads: Vec::new(),
+                    dependencies: Default::default(),
+                    machine_arch: None,
+                    product_arch: None,
+                }],
+            }
+        };
         let resolved = provider.resolve_version(&manifest, Some("14.44")).unwrap();
         assert_eq!(resolved, "14.44.34823");
     }

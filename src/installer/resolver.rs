@@ -489,6 +489,27 @@ pub fn profile_seeds(
     resolve(manifest, &seed_ids).map_err(|error| error.to_error())
 }
 
+/// Test helper: construct a minimal manifest for unit tests.
+#[cfg(test)]
+pub(crate) fn __test_manifest() -> VsManifest {
+    use crate::downloader::VsPackage;
+    VsManifest {
+        manifest_version: "1.0".to_string(),
+        engine_version: None,
+        packages: vec![VsPackage {
+            id: "Microsoft.VC.14.44.Tools.HostX64.TargetX64".to_string(),
+            version: "14.44.34823".to_string(),
+            package_type: "VSIX".to_string(),
+            chip: None,
+            language: None,
+            payloads: Vec::new(),
+            dependencies: Default::default(),
+            machine_arch: None,
+            product_arch: None,
+        }],
+    }
+}
+
 /// Load a build-profile document (custom profiles): returns the profile id
 /// and its capability fragments for seed selection.
 pub fn load_profile(path: &Path) -> Result<(String, Vec<String>)> {
