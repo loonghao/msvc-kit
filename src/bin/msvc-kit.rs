@@ -323,6 +323,10 @@ enum Commands {
         /// Visual Studio channel to discover packages from (18/2026/17/2022, default: auto)
         #[arg(long, value_name = "CHANNEL")]
         vs_channel: Option<String>,
+
+        /// Pruning profile applied to the staged tree before commit (full, portable, minimal, custom)
+        #[arg(long, value_name = "PROFILE", default_value = "full")]
+        prune_profile: String,
     },
 
     /// Preview what an install would do, without downloading payloads or writing the target
@@ -391,6 +395,10 @@ enum Commands {
         /// Verify the plan and its observations without installing
         #[arg(long)]
         check_only: bool,
+
+        /// Pruning profile applied to the staged tree before commit (full, portable, minimal, custom)
+        #[arg(long, value_name = "PROFILE", default_value = "full")]
+        prune_profile: String,
     },
 
     /// Setup environment variables for MSVC toolchain
@@ -688,8 +696,10 @@ async fn main() -> anyhow::Result<()> {
             include_components,
             exclude_patterns,
             vs_channel,
+            prune_profile,
         } => {
             let target_dir = target.unwrap_or_else(|| config.install_dir.clone());
+            let prune = msvc_kit::PruningProfile::parse(&prune_profile)?;
             let locked = lockfile.as_deref().map(ToolchainLock::load).transpose()?;
             let selection = ToolchainArgs {
                 dir: Some(target_dir.clone()),
@@ -784,7 +794,7 @@ async fn main() -> anyhow::Result<()> {
                     lock.verify_download(&msvc_info).await?;
                 }
                 println!("Extracting MSVC packages...");
-                msvc_kit::extract_and_finalize_msvc(&mut msvc_info).await?;
+                msvc_kit::extract_and_finalize_msvc_with_profile(&mut msvc_info, prune).await?;
                 if request.msvc_version.as_ref().is_some_and(|version| {
                     version.split('.').count() >= 3 && *version != msvc_info.version
                 }) {
@@ -823,8 +833,8 @@ async fn main() -> anyhow::Result<()> {
                 if let Some(lock) = &locked {
                     lock.verify_download(&sdk_info).await?;
                 }
-                println!("Extracting SDK packages...");
-                msvc_kit::extract_and_finalize_sdk(&sdk_info).await?;
+                println!("Extracting Windows SDK packages...");
+                msvc_kit::extract_and_finalize_sdk_with_profile(&sdk_info, prune).await?;
                 record_installation(
                     &sdk_info,
                     &target_dir,
@@ -947,7 +957,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Apply {
             plan_file,
             check_only,
+            prune_profile,
         } => {
+            let prune = msvc_kit::PruningProfile::parse(&prune_profile)?;
             let plan = msvc_kit::load_and_verify_plan(&plan_file)?;
             println!("Plan {}: {}", plan.plan_id, plan.summarize());
 
@@ -1036,7 +1048,7 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await?;
                 println!("Extracting MSVC packages...");
-                msvc_kit::extract_and_finalize_msvc(&mut msvc_info).await?;
+                msvc_kit::extract_and_finalize_msvc_with_profile(&mut msvc_info, prune).await?;
                 if let Some(resolved) = &plan.resolved.msvc_version {
                     let prefix = format!("{resolved}.");
                     if msvc_info.version != *resolved && !msvc_info.version.starts_with(&prefix) {
@@ -1068,7 +1080,7 @@ async fn main() -> anyhow::Result<()> {
                 msvc_kit::verify_downloaded_against_plan("sdk", &sdk_info.downloaded_files, &plan)
                     .await?;
                 println!("Extracting Windows SDK packages...");
-                msvc_kit::extract_and_finalize_sdk(&sdk_info).await?;
+                msvc_kit::extract_and_finalize_sdk_with_profile(&sdk_info, prune).await?;
                 record_installation(
                     &sdk_info,
                     &target_dir,

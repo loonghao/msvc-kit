@@ -427,6 +427,56 @@ impl Transaction {
         })
     }
 
+    /// Plan and execute pruning for a staged package (spec 06 section 1.5):
+    /// removal happens in the staging tree only, every removal is journaled
+    /// as FileRemoved, and the staged file list is updated so the merge (and
+    /// therefore the commit) never sees the pruned bytes.
+    pub async fn prune_staged(
+        &mut self,
+        staged: &mut StagedPackage,
+        profile: crate::installer::pruning::PruningProfile,
+        context: &crate::installer::pruning::PruningContext,
+    ) -> Result<Vec<crate::installer::pruning::PruneAction>> {
+        use crate::installer::pruning;
+
+        if staged.files.is_empty() {
+            return Ok(Vec::new());
+        }
+        let package_dir = self.packages_dir.join(safe_package_dir_name(&staged.package_id));
+        let staged_for_plan: Vec<(PathBuf, String, u64, String)> = staged
+            .files
+            .iter()
+            .map(|file| {
+                (
+                    file.relative.clone(),
+                    file.sha256.clone(),
+                    file.size,
+                    staged.package_id.clone(),
+                )
+            })
+            .collect();
+        let actions = pruning::plan_pruning(profile, &staged_for_plan, context)?;
+        if actions.is_empty() {
+            return Ok(actions);
+        }
+        let mut executed = Vec::new();
+        for action in actions {
+            pruning::remove_staged_file(&package_dir, &action)?;
+            self.append_event(
+                JournalEventKind::FileRemoved,
+                &format!("{} ({})", action.relative.to_string_lossy(), action.rule_id),
+                None,
+            )?;
+            executed.push(action);
+        }
+        let pruned: std::collections::HashSet<PathBuf> = executed
+            .iter()
+            .map(|action| action.relative.clone())
+            .collect();
+        staged.files.retain(|file| !pruned.contains(&file.relative));
+        Ok(executed)
+    }
+
     /// Merge staged packages into one deterministic file list, rejecting
     /// cross-package collisions (same path, different bytes) before anything
     /// is committed.

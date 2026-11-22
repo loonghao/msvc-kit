@@ -5,6 +5,7 @@ mod extractor;
 pub mod msi;
 mod path_safety;
 pub mod plan;
+pub mod pruning;
 pub mod transaction;
 
 pub use plan::{
@@ -430,6 +431,15 @@ impl InstallInfo {
 /// 2. Scans for the MSVC version directory to get the full version number
 /// 3. Updates InstallInfo with the complete version and correct paths
 pub async fn extract_and_finalize_msvc(info: &mut InstallInfo) -> Result<()> {
+    extract_and_finalize_msvc_with_profile(info, pruning::PruningProfile::Full).await
+}
+
+/// Like [`extract_and_finalize_msvc`] but prunes the staged tree with the
+/// given profile before committing (spec 06 section 1.5: staging-only).
+pub async fn extract_and_finalize_msvc_with_profile(
+    info: &mut InstallInfo,
+    profile: pruning::PruningProfile,
+) -> Result<()> {
     let target_dir = &info.install_path;
 
     tracing::info!("Extracting MSVC packages to {:?}", target_dir);
@@ -439,9 +449,19 @@ pub async fn extract_and_finalize_msvc(info: &mut InstallInfo) -> Result<()> {
     transaction::recover_pending(target_dir).await?;
     let mut tx =
         transaction::Transaction::begin(target_dir, "download", transaction::FaultHook::none())?;
-    let staged = tx
+    let mut staged = tx
         .stage_package("msvc", &info.downloaded_files, |_| true)
         .await?;
+    {
+        let context = pruning::PruningContext {
+            msvc_version: None,
+            sdk_version: Some(info.version.clone()),
+            host: Some(info.arch.msvc_host_dir().to_string()),
+            target: Some(info.arch.to_string()),
+            selected_arches: Default::default(),
+        };
+        tx.prune_staged(&mut staged, profile, &context).await?;
+    }
     let merged = tx.merge(std::slice::from_ref(&staged))?;
     if let Err(error) = tx.commit(&merged).await {
         // A fault after the Committed marker means the install is durable.
@@ -486,6 +506,15 @@ pub async fn extract_and_finalize_msvc(info: &mut InstallInfo) -> Result<()> {
 /// 1. Extracts downloaded packages to the target directory
 /// 2. Verifies the SDK installation path
 pub async fn extract_and_finalize_sdk(info: &InstallInfo) -> Result<()> {
+    extract_and_finalize_sdk_with_profile(info, pruning::PruningProfile::Full).await
+}
+
+/// Like [`extract_and_finalize_sdk`] but prunes the staged tree with the
+/// given profile before committing (spec 06 section 1.5: staging-only).
+pub async fn extract_and_finalize_sdk_with_profile(
+    info: &InstallInfo,
+    profile: pruning::PruningProfile,
+) -> Result<()> {
     let target_dir = &info.install_path;
 
     tracing::info!("Extracting Windows SDK packages to {:?}", target_dir);
@@ -498,7 +527,7 @@ pub async fn extract_and_finalize_sdk(info: &InstallInfo) -> Result<()> {
     let mut tx =
         transaction::Transaction::begin(target_dir, "download", transaction::FaultHook::none())?;
     let sdk_files: Vec<PathBuf> = sdk_payloads_to_extract(&info.downloaded_files);
-    let staged = tx
+    let mut staged = tx
         .stage_package("sdk", &sdk_files, |payload| {
             matches!(
                 classify_sdk_payload_for_extraction(payload),
@@ -506,6 +535,16 @@ pub async fn extract_and_finalize_sdk(info: &InstallInfo) -> Result<()> {
             )
         })
         .await?;
+    {
+        let context = pruning::PruningContext {
+            msvc_version: None,
+            sdk_version: None,
+            host: Some(info.arch.msvc_host_dir().to_string()),
+            target: Some(info.arch.to_string()),
+            selected_arches: Default::default(),
+        };
+        tx.prune_staged(&mut staged, profile, &context).await?;
+    }
     let merged = tx.merge(std::slice::from_ref(&staged))?;
     if let Err(error) = tx.commit(&merged).await {
         if transaction::journal_has_committed(tx.journal_path()) {

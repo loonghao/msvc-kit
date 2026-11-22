@@ -119,8 +119,10 @@ pub use error::{MsvcKitError, Result};
 pub use installer::msi::{
     MsiBackendPreference, MsiProcessRunner, RunOutcome, RunRecord, SystemRunner,
 };
+pub use installer::pruning::{PruneAction, PruningContext, PruningProfile, PruningRule, PruningRulesDocument};
 pub use installer::{
-    create_install_plan, extract_and_finalize_msvc, extract_and_finalize_sdk, load_and_verify_plan,
+    create_install_plan, extract_and_finalize_msvc, extract_and_finalize_msvc_with_profile,
+    extract_and_finalize_sdk, extract_and_finalize_sdk_with_profile, load_and_verify_plan,
     revalidate_plan, verify_downloaded_against_plan, DiskUsageEstimate, InstallInfo,
     InstallPlanDocument, PlanAction, PlanActionKind, PlanOptions, PlanPayload, PlanRequest,
     PlanRevalidation, PrivilegeRequirement, ResolvedSummary,
