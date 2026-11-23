@@ -148,6 +148,10 @@ struct PlannedVsixEntry {
 }
 
 fn extract_vsix_sync(vsix_path: &Path, target_dir: &Path, show_progress: bool) -> Result<()> {
+    // G-6 (R7): the staging root itself must not be (or contain, at its
+    // immediate path) a reparse point — otherwise every write below would
+    // be redirected through it.
+    super::path_safety::check_no_reparse_within(target_dir, target_dir)?;
     // Pass 1: resolve and validate every entry name, symlink mode and size
     // limit, detect file/directory conflicts, and hash each entry's content
     // before anything is written. A rejected archive therefore leaves the
@@ -174,7 +178,7 @@ fn extract_vsix_sync(vsix_path: &Path, target_dir: &Path, show_progress: bool) -
             // Remove "Contents/" prefix if present
             let stripped = name.strip_prefix("Contents/").unwrap_or(&name);
             let is_dir = entry.is_dir() || stripped.ends_with('/') || stripped.ends_with('\\');
-            let relative = stripped.trim_end_matches(['/', '\\']);
+            let relative = super::path_safety::strip_one_trailing_separator(stripped);
             let safe = SafeRelativePath::resolve(relative)
                 .map_err(|error| unsafe_entry_error(&name, &error))?;
 
@@ -259,6 +263,9 @@ fn extract_vsix_sync(vsix_path: &Path, target_dir: &Path, show_progress: bool) -
 
     for safe in &planned_dirs {
         let out_path = target_dir.join(safe.to_path_buf());
+        // G-6 (R7): refuse to create a directory through a pre-existing
+        // reparse point; otherwise create_dir_all would follow it.
+        super::path_safety::check_no_reparse_within(target_dir, &out_path)?;
         std::fs::create_dir_all(&out_path)?;
     }
 
@@ -270,8 +277,11 @@ fn extract_vsix_sync(vsix_path: &Path, target_dir: &Path, show_progress: bool) -
         }
 
         let out_path = target_dir.join(planned.safe.to_path_buf());
+        // G-6 (R7): check the full out_path (not just its parent) so that a
+        // pre-existing symlink at the file path itself is rejected before
+        // File::create would follow it (TOCTOU hardening).
+        super::path_safety::check_no_reparse_within(target_dir, &out_path)?;
         if let Some(parent) = out_path.parent() {
-            super::path_safety::check_no_reparse_within(target_dir, parent)?;
             std::fs::create_dir_all(parent)?;
         }
 
@@ -495,8 +505,10 @@ fn extract_cab_sync(cab_path: &Path, target_dir: &Path, show_progress: bool) -> 
     for (idx, (name, safe)) in planned.iter().enumerate() {
         let out_path = target_dir.join(safe.to_path_buf());
 
+        // G-6 (R7): check the full out_path before File::create would follow
+        // a pre-existing reparse point at the file path itself (TOCTOU).
+        super::path_safety::check_no_reparse_within(target_dir, &out_path)?;
         if let Some(parent) = out_path.parent() {
-            super::path_safety::check_no_reparse_within(target_dir, parent)?;
             std::fs::create_dir_all(parent)?;
         }
 

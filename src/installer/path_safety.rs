@@ -101,6 +101,21 @@ pub(crate) fn oversized_archive_error(total: u64) -> crate::MsvcKitError {
     ))
 }
 
+/// Strip a single trailing path separator (`/` or `\\`) from an entry name.
+///
+/// R2: a directory entry is conventionally written as `dir/`. Exactly one
+/// trailing separator is stripped before validation; any remaining empty
+/// component (from `dir//`) or `.` component (from `dir/./`) is then rejected
+/// by [`SafeRelativePath::resolve`]. Stripping all trailing separators would
+/// wrongly accept `dir//`.
+pub(crate) fn strip_one_trailing_separator(entry_name: &str) -> &str {
+    let bytes = entry_name.as_bytes();
+    match bytes.last() {
+        Some(b'/') | Some(b'\\') => &entry_name[..bytes.len() - 1],
+        _ => entry_name,
+    }
+}
+
 /// A validated, normalized archive entry path relative to the extraction root.
 ///
 /// Every component passed strict Windows-semantics validation; the path can
@@ -280,16 +295,26 @@ impl PathOccupancy {
 /// G-6 (R7): prevents a symlink placed inside the staging tree from
 /// redirecting writes outside the boundary (TOCTOU hardening).
 pub(crate) fn check_no_reparse_within(
-    root: &Path,
-    path: &Path,
-) -> std::result::Result<(), MsvcKitError> {
+    root: &std::path::Path,
+    path: &std::path::Path,
+) -> std::result::Result<(), crate::MsvcKitError> {
+    // G-6 (R7): check the root itself first (it may be a reparse point),
+    // then every component from root down to the full path.
+    if let Ok(meta) = std::fs::symlink_metadata(root) {
+        if meta.file_type().is_symlink() {
+            return Err(crate::MsvcKitError::Other(format!(
+                "Refusing to write through reparse point at {:?}",
+                root
+            )));
+        }
+    }
     let mut current = root.to_path_buf();
     if let Ok(relative) = path.strip_prefix(root) {
         for component in relative.components() {
             current.push(component);
             if let Ok(meta) = std::fs::symlink_metadata(&current) {
                 if meta.file_type().is_symlink() {
-                    return Err(MsvcKitError::Other(format!(
+                    return Err(crate::MsvcKitError::Other(format!(
                         "Refusing to write through reparse point at {:?}",
                         current
                     )));
@@ -461,5 +486,72 @@ mod tests {
         let text = path.to_string_lossy().replace('\\', "/");
         assert_eq!(text, "VC/Tools/MSVC/14.44/x.txt");
         assert!(path.is_relative());
+    }
+
+    /// G-7 (R2): a directory entry written as `dir/` is accepted after
+    /// stripping exactly one trailing separator; `dir//` (a remaining empty
+    /// component) and `dir/./` (a remaining `.` component) are still rejected.
+    #[test]
+    fn g7_trailing_separator_strips_exactly_one() {
+        // Positive: `dir/` and `dir\\` strip to `dir` and resolve.
+        for raw in ["dir/", "dir\\"] {
+            let stripped = strip_one_trailing_separator(raw);
+            assert_eq!(stripped, "dir");
+            let resolved = resolve(stripped).unwrap_or_else(|e| panic!("{raw} rejected: {e:?}"));
+            assert_eq!(resolved.display(), "dir");
+        }
+
+        // Negative: `dir//` strips one separator, leaving `dir/` which has an
+        // empty component — still rejected.
+        assert_eq!(strip_one_trailing_separator("dir//"), "dir/");
+        assert_eq!(resolve(strip_one_trailing_separator("dir//")).unwrap_err(), PathSafetyError::EmptyComponent);
+
+        // Negative: `dir/./` strips one separator, leaving `dir/.` which has a
+        // `.` component — still rejected.
+        assert_eq!(strip_one_trailing_separator("dir/./"), "dir/.");
+        assert_eq!(
+            resolve(strip_one_trailing_separator("dir/./")).unwrap_err(),
+            PathSafetyError::CurrentDirComponent
+        );
+
+        // A file entry with no trailing separator is untouched.
+        assert_eq!(strip_one_trailing_separator("file.txt"), "file.txt");
+    }
+
+    /// G-6 (R7): a pre-existing reparse point (directory symlink) anywhere on
+    /// the path from root to target is detected and refused before any write.
+    ///
+    /// Creating a directory symlink needs developer mode or elevation on
+    /// Windows; when the environment does not permit it the test is skipped
+    /// (not failed) rather than reporting a false positive.
+    #[cfg(windows)]
+    #[test]
+    fn g6_check_no_reparse_within_detects_directory_symlink() {
+        use std::os::windows::fs::symlink_dir;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(&root).unwrap();
+
+        // A real directory symlink at `root/linked` pointing outside the root.
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let linked = root.join("linked");
+        if let Err(_e) = symlink_dir(&outside, &linked) {
+            eprintln!("G-6 symlink test skipped: cannot create directory symlink (needs dev mode/elevation)");
+            return;
+        }
+
+        // A path that traverses the symlink must be refused.
+        let through_link = root.join("linked").join("nested.txt");
+        let err = check_no_reparse_within(&root, &through_link).unwrap_err();
+        assert!(
+            err.to_string().contains("reparse point"),
+            "expected reparse-point refusal, got: {err}"
+        );
+
+        // A clean path (no symlink) is accepted.
+        let clean = root.join("plain").join("file.txt");
+        assert!(check_no_reparse_within(&root, &clean).is_ok());
     }
 }

@@ -417,6 +417,11 @@ enum Commands {
         /// Write the plan document to this file instead of stdout
         #[arg(long, value_name = "FILE")]
         output: Option<PathBuf>,
+
+        /// Bypass the persistent manifest cache: fetch manifests into a fresh
+        /// temp directory and never read or write the normal cache location.
+        #[arg(long)]
+        no_cache: bool,
     },
 
     /// Apply an install plan produced by `msvc-kit plan`
@@ -915,6 +920,7 @@ async fn main() -> anyhow::Result<()> {
             profile,
             format,
             output,
+            no_cache,
         } => {
             let target_dir = target.unwrap_or_else(|| config.install_dir.clone());
             let host_arch = host_arch
@@ -940,6 +946,16 @@ async fn main() -> anyhow::Result<()> {
                 .iter()
                 .filter_map(|s| s.parse::<MsvcComponent>().ok())
                 .collect();
+            // G-8 (R6): `--no-cache` must bypass the persistent manifest cache
+            // entirely. We point the manifest cache dir at a fresh temp
+            // directory that is deleted when this scope ends, so nothing is
+            // read from or written to the normal cache location.
+            let no_cache_temp: Option<tempfile::TempDir> =
+                if no_cache { Some(tempfile::tempdir()?) } else { None };
+            let manifest_cache_dir = match &no_cache_temp {
+                Some(dir) => dir.path().to_path_buf(),
+                None => config.manifest_cache_dir(),
+            };
             let plan_options = msvc_kit::PlanOptions {
                 msvc_version: msvc_version.or_else(|| config.default_msvc_version.clone()),
                 sdk_version: sdk_version.or_else(|| config.default_sdk_version.clone()),
@@ -949,7 +965,7 @@ async fn main() -> anyhow::Result<()> {
                 vs_channel: resolve_vs_channel(vs_channel, &config)?,
                 include_components: components,
                 exclude_patterns,
-                manifest_cache_dir: config.manifest_cache_dir(),
+                manifest_cache_dir,
                 include_msvc: !no_msvc,
                 include_sdk: !no_sdk,
             };
