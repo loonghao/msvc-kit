@@ -452,3 +452,92 @@ async fn explicit_rollback_restores_original_bytes_and_marks_journal() {
     let report = transaction::recover_pending(&fx.root).await.unwrap();
     assert_eq!(report.cleaned_staging, vec![tx_id]);
 }
+// ---------- G-5: Real process crash recovery (spec revision R4) ------------
+//
+// Spawns a helper child process (same test binary) that runs a transaction
+// to the AfterInstall fault point and then calls std::process::abort() —
+// terminating immediately without running Drop, simulating a kill at that
+// journal boundary. The parent process verifies the journal state matches
+// the crash point and calls recovery to restore the original bytes. This is
+// a real cross-process test: the child's file handles are closed by the OS.
+
+fn crash_helper_logic(root: &Path, payload: &Path) -> ! {
+    let mut tx = transaction::Transaction::begin(
+        root,
+        "crash-test",
+        transaction::FaultHook::with_points(&[transaction::FaultPoint::AfterInstall]),
+    )
+    .unwrap();
+    let staged = tx
+        .stage_package(PKG, std::slice::from_ref(&payload.to_path_buf()), |_| true)
+        .unwrap();
+    let merged = tx.merge(std::slice::from_ref(&staged)).unwrap();
+    // The fault hook returns Err (AfterInstall fires). We do NOT call
+    // rollback — the child aborts here, simulating a process kill.
+    let _ = tx.commit(&merged).unwrap_err();
+    std::process::abort();
+}
+
+#[tokio::test]
+async fn real_process_crash_recovery_restores_original_bytes() {
+    let root_env = std::env::var("MSVC_KIT_CRASH_TEST_ROOT");
+    let payload_env = std::env::var("MSVC_KIT_CRASH_TEST_PAYLOAD");
+
+    // Child mode: re-entered with the fixture paths from env vars.
+    if let (Ok(root), Ok(payload)) = (&root_env, &payload_env) {
+        let root = PathBuf::from(root);
+        let payload = PathBuf::from(payload);
+        crash_helper_logic(&root, &payload);
+        // crash_helper_logic aborts and never returns.
+    }
+
+    // Parent mode: create fixture, spawn child, verify recovery.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("root");
+    let payload = dir.path().join("payload.vsix");
+    make_zip(&payload, &[(REL_FILE, b"new-bytes")]);
+    // Legacy root with a pre-existing file (for backup/replace path).
+    let receipts = root.join(".msvc-kit").join("receipts");
+    std::fs::create_dir_all(&receipts).unwrap();
+    std::fs::write(receipts.join("legacy.json"), b"{}").unwrap();
+    let target = root.join(REL_FILE);
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(&target, b"original-bytes").unwrap();
+
+    // Spawn the crash helper child.
+    let exe = std::env::current_exe().unwrap();
+    let status = std::process::Command::new(exe)
+        .args([
+            "--exact",
+            "real_process_crash_recovery_restores_original_bytes",
+            "--nocapture",
+        ])
+        .env("MSVC_KIT_CRASH_TEST_ROOT", root.to_str().unwrap())
+        .env("MSVC_KIT_CRASH_TEST_PAYLOAD", payload.to_str().unwrap())
+        .status()
+        .expect("Failed to spawn crash helper child");
+    assert!(
+        !status.success(),
+        "crash helper child should have aborted, got: {status:?}"
+    );
+
+    // The journal is in the "commit started but not completed" state:
+    // backup_done + install_done exist (AfterInstall fired after install),
+    // but ownership/committed events are missing. Recovery must roll back.
+    let report = transaction::recover_pending(&root).await.unwrap();
+    assert!(
+        report.rolled_back.len() == 1 || report.cleaned_staging.len() == 1,
+        "recovery must resolve the crashed transaction: {report:?}"
+    );
+
+    // The original bytes must be restored from backup.
+    let restored = std::fs::read(&target).unwrap();
+    assert_eq!(
+        restored, b"original-bytes",
+        "crash recovery must restore the original file from backup"
+    );
+
+    // Idempotent recovery.
+    let report = transaction::recover_pending(&root).await.unwrap();
+    assert_eq!(report.transactions_examined, 0, "recovery must be idempotent");
+}

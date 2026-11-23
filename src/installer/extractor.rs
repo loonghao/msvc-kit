@@ -271,6 +271,7 @@ fn extract_vsix_sync(vsix_path: &Path, target_dir: &Path, show_progress: bool) -
 
         let out_path = target_dir.join(planned.safe.to_path_buf());
         if let Some(parent) = out_path.parent() {
+            super::path_safety::check_no_reparse_within(target_dir, parent)?;
             std::fs::create_dir_all(parent)?;
         }
 
@@ -495,6 +496,7 @@ fn extract_cab_sync(cab_path: &Path, target_dir: &Path, show_progress: bool) -> 
         let out_path = target_dir.join(safe.to_path_buf());
 
         if let Some(parent) = out_path.parent() {
+            super::path_safety::check_no_reparse_within(target_dir, parent)?;
             std::fs::create_dir_all(parent)?;
         }
 

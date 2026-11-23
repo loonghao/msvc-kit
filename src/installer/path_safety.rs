@@ -275,6 +275,31 @@ impl PathOccupancy {
     }
 }
 
+/// Check that no component of `path` (from `root` down to the full path) is
+/// a reparse point (symlink/junction). Returns the first offending component.
+/// G-6 (R7): prevents a symlink placed inside the staging tree from
+/// redirecting writes outside the boundary (TOCTOU hardening).
+pub(crate) fn check_no_reparse_within(
+    root: &Path,
+    path: &Path,
+) -> std::result::Result<(), MsvcKitError> {
+    let mut current = root.to_path_buf();
+    if let Ok(relative) = path.strip_prefix(root) {
+        for component in relative.components() {
+            current.push(component);
+            if let Ok(meta) = std::fs::symlink_metadata(&current) {
+                if meta.file_type().is_symlink() {
+                    return Err(MsvcKitError::Other(format!(
+                        "Refusing to write through reparse point at {:?}",
+                        current
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
