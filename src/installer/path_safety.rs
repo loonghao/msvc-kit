@@ -504,7 +504,10 @@ mod tests {
         // Negative: `dir//` strips one separator, leaving `dir/` which has an
         // empty component — still rejected.
         assert_eq!(strip_one_trailing_separator("dir//"), "dir/");
-        assert_eq!(resolve(strip_one_trailing_separator("dir//")).unwrap_err(), PathSafetyError::EmptyComponent);
+        assert_eq!(
+            resolve(strip_one_trailing_separator("dir//")).unwrap_err(),
+            PathSafetyError::EmptyComponent
+        );
 
         // Negative: `dir/./` strips one separator, leaving `dir/.` which has a
         // `.` component — still rejected.

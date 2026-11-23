@@ -950,8 +950,11 @@ async fn main() -> anyhow::Result<()> {
             // entirely. We point the manifest cache dir at a fresh temp
             // directory that is deleted when this scope ends, so nothing is
             // read from or written to the normal cache location.
-            let no_cache_temp: Option<tempfile::TempDir> =
-                if no_cache { Some(tempfile::tempdir()?) } else { None };
+            let no_cache_temp: Option<tempfile::TempDir> = if no_cache {
+                Some(tempfile::tempdir()?)
+            } else {
+                None
+            };
             let manifest_cache_dir = match &no_cache_temp {
                 Some(dir) => dir.path().to_path_buf(),
                 None => config.manifest_cache_dir(),

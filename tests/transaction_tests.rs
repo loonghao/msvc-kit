@@ -540,5 +540,8 @@ async fn real_process_crash_recovery_restores_original_bytes() {
 
     // Idempotent recovery.
     let report = transaction::recover_pending(&root).await.unwrap();
-    assert_eq!(report.transactions_examined, 0, "recovery must be idempotent");
+    assert_eq!(
+        report.transactions_examined, 0,
+        "recovery must be idempotent"
+    );
 }
