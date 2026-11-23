@@ -327,6 +327,89 @@ pub async fn extract_msi(msi_path: &Path, target_dir: &Path) -> Result<()> {
     extract_msi_with_progress(msi_path, target_dir, inner_progress_enabled()).await
 }
 
+/// Rust `std::fs` supports long paths on Windows (it uses the verbatim
+/// `\\?\` form internally), but `msiexec` does not: Windows Installer
+/// cannot create files beyond MAX_PATH (260). SDK 10.0.28000 contains
+/// WinMD Reference payloads ~187 characters deep, so extraction under a
+/// deep staging root (`.msvc-kit/transactions/<id>/packages/<pkg>`) fails
+/// with Error 1304 -> 1603.
+///
+/// When the target path is long enough for the deepest known payload to
+/// overflow, extract into a short temp root first and move the tree into
+/// place with `std::fs` (long-path safe). Threshold 70 leaves ~12 chars of
+/// headroom for a 187-character payload.
+#[cfg(windows)]
+const MSI_LONG_PATH_THRESHOLD: usize = 70;
+
+/// Conservative upper bound for SDK 28000's deepest payload path
+/// (`Windows Kits\10\References\10.0.28000.0\<Contract>\<version>\<winmd>`).
+#[cfg(windows)]
+const MSI_MAX_DEEP_PAYLOAD: usize = 200;
+
+#[cfg(windows)]
+fn needs_short_msi_root(target_dir: &Path) -> bool {
+    target_dir.to_string_lossy().len() > MSI_LONG_PATH_THRESHOLD
+}
+
+/// Pick a short extraction root for msiexec when the real target is too
+/// deep for Windows Installer. Prefer the target volume's root (`D:\mk…`):
+/// a short name on the same volume makes the later relocation a rename
+/// instead of a cross-volume copy. Fall back to the system temp dir when
+/// the volume root is not writable (standard users on the system drive).
+#[cfg(windows)]
+fn short_msi_root(target_dir: &Path) -> Option<PathBuf> {
+    if !needs_short_msi_root(target_dir) {
+        return None;
+    }
+    let stamp = format!(
+        "mk{}-{:x}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default()
+    );
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(volume_root) = target_dir.ancestors().last() {
+        candidates.push(volume_root.join(&stamp));
+    }
+    candidates.push(std::env::temp_dir().join(&stamp));
+    for candidate in candidates {
+        // Leave headroom for the deepest payload plus a separator.
+        if candidate.to_string_lossy().len() + MSI_MAX_DEEP_PAYLOAD >= 260 {
+            continue;
+        }
+        if std::fs::create_dir_all(&candidate).is_ok() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Move every entry of `from` into `to`, creating directories as needed.
+/// `std::fs::rename` across volumes fails, so fall back to copy + delete.
+#[cfg(windows)]
+fn move_tree(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let source = entry.path();
+        let destination = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            move_tree(&source, &destination)?;
+        } else {
+            if destination.exists() {
+                std::fs::remove_file(&destination)?;
+            }
+            if std::fs::rename(&source, &destination).is_err() {
+                std::fs::copy(&source, &destination)?;
+                std::fs::remove_file(&source)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> Result<()> {
     let file_name = msi_path
         .file_name()
@@ -359,7 +442,23 @@ fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> 
     {
         let runner = SystemRunner;
         let backend = MsiexecBackend::new(&runner);
-        if let Err(error) = backend.extract(msi_path, target_dir, None) {
+        // Windows Installer cannot write beyond MAX_PATH; if the real target
+        // is too deep, extract into a short temp root and move the tree into
+        // place afterwards (std::fs handles long paths).
+        let short_root = short_msi_root(target_dir);
+        let staging_target = short_root.as_deref().unwrap_or(target_dir);
+        let outcome = backend.extract(msi_path, staging_target, None);
+        let outcome = match (outcome, short_root.as_deref()) {
+            (Ok(()), Some(temp)) => move_tree(temp, target_dir)
+                .and_then(|()| std::fs::remove_dir_all(temp).map_err(MsvcKitError::from)),
+            (Ok(()), None) => Ok(()),
+            (Err(error), Some(temp)) => {
+                let _ = std::fs::remove_dir_all(temp);
+                Err(error)
+            }
+            (Err(error), None) => Err(error),
+        };
+        if let Err(error) = outcome {
             if let Some(pb) = pb.as_ref() {
                 pb.abandon_with_message(format!("msiexec failed: {}", file_name));
             }
@@ -576,6 +675,38 @@ mod tests {
         assert!(explain_windows_installer_code(Some(1619)).contains("could not be opened"));
         assert!(explain_windows_installer_code(Some(1620)).contains("not a valid"));
         assert!(explain_windows_installer_code(None).contains("non-zero"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_needs_short_msi_root() {
+        // Deep staging roots (transactions/<id>/packages/<pkg>) overflow
+        // MAX_PATH with SDK 28000's ~187-character Reference payloads.
+        let deep = Path::new(
+            r"D:\b\.msvc-kit\transactions\20261123T175756-181b01dbe972\packages\sdk-a9d0df18",
+        );
+        assert!(needs_short_msi_root(deep));
+        let shallow = Path::new(r"D:\msvc");
+        assert!(!needs_short_msi_root(shallow));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_move_tree_relocates_nested_files_and_dirs() {
+        let from = tempfile::tempdir().unwrap();
+        let to = tempfile::tempdir().unwrap();
+        let nested = from.path().join("a").join("b");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("leaf.txt"), b"payload").unwrap();
+        std::fs::write(from.path().join("top.txt"), b"top").unwrap();
+
+        move_tree(from.path(), to.path()).unwrap();
+
+        assert_eq!(
+            std::fs::read(to.path().join("a").join("b").join("leaf.txt")).unwrap(),
+            b"payload"
+        );
+        assert_eq!(std::fs::read(to.path().join("top.txt")).unwrap(), b"top");
     }
 
     #[test]

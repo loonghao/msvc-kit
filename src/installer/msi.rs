@@ -111,6 +111,42 @@ fn sha256_file(path: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+/// First actionable failure line from an msiexec verbose log (`/L*V`).
+///
+/// msiexec writes these logs as UTF-16LE with a BOM on Windows. The exit
+/// code alone is often generic (1603), while the log names the real cause
+/// — e.g. `Error 1304 ... Error writing to file: <path>` when the target
+/// path exceeds MAX_PATH 260. Return the first such line (trimmed) so the
+/// caller can surface it verbatim.
+fn first_installer_failure_line(log_path: &Path) -> Option<String> {
+    let bytes = std::fs::read(log_path).ok()?;
+    let text = if bytes.starts_with(&[0xFF, 0xFE]) {
+        let units: Vec<u16> = bytes[2..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
+            .collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
+    text.lines()
+        .find(|line| {
+            (line.contains("Error 1304")
+                || line.contains("Error 1606")
+                || line.contains("Could not access network location"))
+                && !line.contains("Note: 1: 1304 2:")
+        })
+        .or_else(|| {
+            // Fall back to the raw Note line naming the offending path.
+            text.lines()
+                .find(|line| line.contains("Note: 1: 1304 2:") || line.contains("Note: 1: 1606 2:"))
+        })
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+}
+
 /// The production runner: real processes, fixed 2-second retry delay.
 #[derive(Debug, Default)]
 pub struct SystemRunner;
@@ -199,10 +235,12 @@ impl<'a> MsiexecBackend<'a> {
             }
         }
         let msi_arg = super::extractor::msiexec_path_arg(msi_path);
-        let target_arg = format!(
-            "TARGETDIR={}",
-            super::extractor::msiexec_path_arg(target_dir)
-        );
+        // build_args prepends `TARGETDIR=`; pass the bare path here. Passing
+        // an already-prefixed value produced `TARGETDIR=TARGETDIR=<path>`,
+        // which Windows Installer reports as Error 1606 ("could not access
+        // network location") and then surfaces as exit code 1603 for every
+        // SDK MSI — see the msiexec verbose logs.
+        let target_arg = super::extractor::msiexec_path_arg(target_dir);
         let file_name = msi_path
             .file_name()
             .and_then(|name| name.to_str())
@@ -232,15 +270,27 @@ impl<'a> MsiexecBackend<'a> {
                     self.runner.sleep(self.retry_delay);
                 }
                 code => {
+                    let inner = first_installer_failure_line(&log_path);
+                    let inner_note = match &inner {
+                        Some(line) if line.contains("1304") => format!(
+                            "\nInner error: {line}\nHint: Windows Installer is limited to \
+                             MAX_PATH (260) characters; this usually means the target \
+                             directory is too deep for the SDK's Reference/WinMD paths. Use a \
+                             shorter installation directory."
+                        ),
+                        Some(line) => format!("\nInner error: {line}"),
+                        None => String::new(),
+                    };
                     return Err(MsvcKitError::Other(format!(
                         "msiexec failed with exit code {:?} for {}\n{}\nSource MSI: {}\nTarget \
-                         directory: {}\nVerbose log: {}",
+                         directory: {}\nVerbose log: {}{}",
                         code,
                         file_name,
                         super::extractor::explain_windows_installer_code(code),
                         msi_path.display(),
                         target_dir.display(),
-                        log_path.display()
+                        log_path.display(),
+                        inner_note
                     )));
                 }
             }
@@ -304,6 +354,39 @@ mod tests {
         path
     }
 
+    #[test]
+    fn installer_failure_line_is_extracted_from_utf16_verbose_log() {
+        // msiexec writes /L*V logs as UTF-16LE with a BOM. The interesting
+        // line names the real cause behind a generic 1603: Error 1304 with
+        // the offending path (MAX_PATH overflow).
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("msvc-kit-fixture.msi.log");
+        let body = concat!(
+            "=== Verbose logging started ===\r\n",
+            "MSI (s) (60:6C) [17:14:19:813]: Note: 1: 1304 2: D:\\very\\deep\\path.winmd\r\n",
+            "MSI (s) (60:6C) [17:14:19:813]: Product: Foo -- Error 1304. Error writing to file: ",
+            "D:\\very\\deep\\path.winmd.  Verify that you have access to that directory.\r\n",
+            "MSI (c) (14:4C) [17:14:19:905]: MainEngineThread is returning 1603\r\n",
+        );
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in body.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        std::fs::write(&log, bytes).unwrap();
+
+        let line = first_installer_failure_line(&log).expect("failure line");
+        assert!(line.contains("Error 1304"), "line: {line}");
+        assert!(line.contains("path.winmd"), "line: {line}");
+    }
+
+    #[test]
+    fn installer_failure_line_is_none_for_clean_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("clean.log");
+        std::fs::write(&log, b"=== Verbose logging started ===\r\nall good\r\n").unwrap();
+        assert!(first_installer_failure_line(&log).is_none());
+    }
+
     #[cfg(windows)]
     #[test]
     fn success_runs_administrative_extraction_with_verbose_log_and_no_install() {
@@ -321,7 +404,18 @@ mod tests {
         let args = &runs[0].args;
         assert_eq!(args[0], "/a", "must be administrative extraction");
         assert_eq!(args[2], "/qn");
-        assert!(args[3].starts_with("TARGETDIR="));
+        // Exactly one `TARGETDIR=` prefix: a double prefix
+        // (`TARGETDIR=TARGETDIR=<path>`) makes Windows Installer fail every
+        // MSI with Error 1606 -> exit code 1603, so assert the exact form.
+        assert_eq!(
+            args[3],
+            format!("TARGETDIR={}", target.display()),
+            "TARGETDIR must carry exactly one prefix and the bare path"
+        );
+        assert!(
+            !args[3].contains("TARGETDIR=TARGETDIR="),
+            "double TARGETDIR prefix must never be produced"
+        );
         assert!(
             args.windows(2).any(|pair| pair[0] == "/L*V"),
             "verbose log flag required"
