@@ -397,11 +397,40 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
 
+  # Non-Windows compilation guard. See ci.yml: MsiexecBackend is cfg(windows)
+  # and a shared-module import must not assume a Windows target.
+  linux-check:
+    name: Linux cargo check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup vx
+        uses: loonghao/vx@v0.9.37
+        with:
+          version: '0.9.37'
+          cache: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup tools (vx)
+        run: vx setup
+
+      - name: Report rustc version
+        run: vx cargo --version
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cargo check (Linux)
+        run: vx just check-workspace
+
+
   # Final gate
   pr-ready:
     name: PR Ready
     runs-on: ubuntu-latest
-    needs: [pre-build, quick-checks, clippy, rust-tests, python-tests, docs-build, vx-check]
+    needs: [pre-build, quick-checks, clippy, rust-tests, python-tests, docs-build, vx-check, linux-check]
     if: always()
     steps:
       - name: Check results
@@ -413,6 +442,7 @@ jobs:
           PYTHON_TESTS_RESULT: ${{ needs.python-tests.result }}
           DOCS_BUILD_RESULT: ${{ needs.docs-build.result }}
           VX_CHECK_RESULT: ${{ needs.vx-check.result }}
+          LINUX_CHECK_RESULT: ${{ needs.linux-check.result }}
         run: |
           echo "## PR Check Results" >> "$GITHUB_STEP_SUMMARY"
 
@@ -438,6 +468,7 @@ jobs:
           check_result "python-tests" "$PYTHON_TESTS_RESULT"
           check_result "docs-build" "$DOCS_BUILD_RESULT"
           check_result "vx-check" "$VX_CHECK_RESULT"
+          check_result "linux-check" "$LINUX_CHECK_RESULT"
 
           echo "" >> "$GITHUB_STEP_SUMMARY"
 

@@ -207,11 +207,43 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
 
+  # Non-Windows compilation guard.
+  # MsiexecBackend is #[cfg(windows)]; an unconditional import in a shared
+  # module compiles on Windows but fails `cargo check` everywhere else. This
+  # job makes that class of conditional-compilation regression a hard failure
+  # instead of something only a reviewer can spot.
+  linux-check:
+    name: Linux cargo check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup vx
+        uses: loonghao/vx@v0.9.37
+        with:
+          version: '0.9.37'
+          cache: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup tools (vx)
+        run: vx setup
+
+      - name: Report rustc version
+        run: vx cargo --version
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cargo check (Linux)
+        run: vx just check-workspace
+
+
   # CI success gate
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [rust-tests, docs, vx-check]
+    needs: [rust-tests, docs, vx-check, linux-check]
     if: always()
     steps:
       - name: Check results
@@ -234,6 +266,12 @@ jobs:
             exit 1
           fi
           echo "✅ Vx check passed" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ needs.linux-check.result }}" != "success" ]]; then
+            echo "❌ Linux cargo check failed" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          echo "✅ Linux cargo check passed" >> $GITHUB_STEP_SUMMARY
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "✅ **All CI checks passed!**" >> $GITHUB_STEP_SUMMARY

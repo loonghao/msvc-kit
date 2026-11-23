@@ -10,6 +10,7 @@ use std::time::Duration;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use sha2::Digest;
 
+#[cfg(windows)]
 use super::msi::{MsiexecBackend, SystemRunner};
 use super::path_safety::{
     oversized_archive_error, oversized_entry_error, unsafe_entry_error, PathOccupancy,
@@ -36,6 +37,7 @@ pub(crate) fn explain_windows_installer_code(code: Option<i32>) -> &'static str 
     }
 }
 
+#[cfg(windows)]
 fn prefer_shorter_path(original: &Path, candidate: Option<PathBuf>) -> PathBuf {
     candidate
         .filter(|path| path.as_os_str().len() < original.as_os_str().len())
@@ -692,6 +694,34 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn test_transaction_staging_overflows_max_path_but_short_root_fits() {
+        // Regression for the SDK 10.0.28000 CI failures: extracting straight
+        // into the transaction staging directory made the deepest Reference
+        // WinMD path cross MAX_PATH (Error 1304 -> exit 1603). A short root
+        // must leave enough headroom for the same payload.
+        const MAX_PATH: usize = 260;
+        let staging = Path::new(
+            r"D:\b\.msvc-kit\transactions\20261123T175756-181b01dbe972\packages\sdk-a9d0df18",
+        );
+        // The code reserves MSI_MAX_DEEP_PAYLOAD (200) for the deepest SDK
+        // Reference WinMD payload; that is the bound that matters here.
+        assert!(
+            staging.to_string_lossy().len() + 1 + MSI_MAX_DEEP_PAYLOAD > 260,
+            "staging path must reproduce the observed MAX_PATH overflow"
+        );
+        assert!(
+            needs_short_msi_root(staging),
+            "a staging path that overflows must request a short root"
+        );
+        let short_root = Path::new(r"D:\mk181b01d");
+        assert!(
+            short_root.to_string_lossy().len() + MSI_MAX_DEEP_PAYLOAD < MAX_PATH,
+            "short root must leave headroom for the deepest known payload"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn test_move_tree_relocates_nested_files_and_dirs() {
         let from = tempfile::tempdir().unwrap();
         let to = tempfile::tempdir().unwrap();
@@ -709,6 +739,7 @@ mod tests {
         assert_eq!(std::fs::read(to.path().join("top.txt")).unwrap(), b"top");
     }
 
+    #[cfg(windows)]
     #[test]
     fn test_prefer_shorter_path() {
         let original = Path::new(
