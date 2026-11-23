@@ -78,7 +78,7 @@ jobs:
         if: matrix.target == 'x86_64-pc-windows-msvc'
         uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          python-version: '3.15'
 
       - name: Exercise real vx and Cargo with a clean tagged fixture
         if: matrix.target == 'x86_64-pc-windows-msvc'
