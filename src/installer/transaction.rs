@@ -401,6 +401,7 @@ impl Transaction {
         let marker_dir = self.root.join(".msvc-kit-extracted");
         let mut files = Vec::new();
         let mut skipped_via_marker = false;
+        let mut extracted_any = false;
 
         for payload in payload_files {
             if !classify(payload) {
@@ -412,10 +413,17 @@ impl Transaction {
                 continue;
             }
             super::extract_package(&payload.clone(), &package_dir).await?;
+            extracted_any = true;
         }
 
-        // Build the staged file list with digests.
-        if !skipped_via_marker {
+        // G-3: Build the staged file list with digests. Only newly extracted
+        // payloads contribute files; marker-skipped payloads leave the root
+        // untouched. In mixed cache state, newly extracted files are staged
+        // while marker-skipped ones are not re-installed (they are already
+        // in the root from a previous install). This fixes the bug where
+        // `skipped_via_marker` was a package-level boolean that dropped ALL
+        // staged files when ANY payload had a valid marker.
+        if extracted_any {
             collect_files(&package_dir, &package_dir, &mut files)?;
         }
 

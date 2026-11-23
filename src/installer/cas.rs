@@ -286,11 +286,24 @@ impl BlobStore {
     }
 
     /// Load the pins document, or defaults.
-    pub fn pins(&self) -> BlobPins {
-        std::fs::read(self.root.join(PINS_FILE))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
+    /// Load the pins document. Fail-closed (G-2): if pins.json exists but
+    /// is corrupt, this returns an error rather than silently treating all
+    /// pins as absent (which would let GC sweep pinned blobs).
+    pub fn pins(&self) -> Result<BlobPins> {
+        let path = self.root.join(PINS_FILE);
+        match std::fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| {
+                MsvcKitError::Database(format!(
+                    "pins.json is corrupt ({}): {} - refusing to GC without valid pins",
+                    path.display(),
+                    error
+                ))
+            }),
+            Err(ref io_error) if io_error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(BlobPins::default())
+            }
+            Err(error) => Err(MsvcKitError::Io(error)),
+        }
     }
 
     /// Persist the pins document.
@@ -302,7 +315,7 @@ impl BlobStore {
     /// Register a pin for a digest (active install/plan/lock reference).
     pub fn pin(&self, digest: &str) -> Result<()> {
         let key = Self::validate_digest(digest)?;
-        let mut pins = self.pins();
+        let mut pins = self.pins()?;
         pins.pinned.insert(key);
         self.save_pins(&pins)
     }

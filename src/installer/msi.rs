@@ -95,6 +95,22 @@ pub trait MsiProcessRunner: Send + Sync {
     }
 }
 
+/// Synchronous SHA256 file hash (called from the blocking msiexec path).
+fn sha256_file(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 256 * 1024];
+    loop {
+        let n = std::io::Read::read(&mut file, &mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
 /// The production runner: real processes, fixed 2-second retry delay.
 #[derive(Debug, Default)]
 pub struct SystemRunner;
@@ -162,7 +178,26 @@ impl<'a> MsiexecBackend<'a> {
     /// carries the log path plus exit-code-specific guidance. No elevation is
     /// ever requested; MSI-internal custom actions may still require it, in
     /// which case the failure is reported (spec 05 §4).
-    pub fn extract(&self, msi_path: &Path, target_dir: &Path) -> Result<()> {
+    ///
+    /// G-4 (R3): when `expected_sha256` is provided, the MSI is re-hashed
+    /// before extraction and a mismatch aborts. This enforces the trust
+    /// boundary: only verified official payloads are passed to msiexec.
+    pub fn extract(
+        &self,
+        msi_path: &Path,
+        target_dir: &Path,
+        expected_sha256: Option<&str>,
+    ) -> Result<()> {
+        if let Some(expected) = expected_sha256 {
+            let actual = sha256_file(msi_path)?;
+            if !actual.eq_ignore_ascii_case(expected) {
+                return Err(MsvcKitError::HashMismatch {
+                    file: msi_path.display().to_string(),
+                    expected: expected.to_string(),
+                    actual,
+                });
+            }
+        }
         let msi_arg = super::extractor::msiexec_path_arg(msi_path);
         let target_arg = format!(
             "TARGETDIR={}",
@@ -278,7 +313,7 @@ mod tests {
         let msi = msi_fixture(dir.path());
         let target = dir.path().join("target");
 
-        backend.extract(&msi, &target).unwrap();
+        backend.extract(&msi, &target, None).unwrap();
 
         let runs = runner.recorded_runs();
         assert_eq!(runs.len(), 1);
@@ -315,7 +350,7 @@ mod tests {
         let backend = MsiexecBackend::new(&runner).with_retry_delay(Duration::from_millis(1));
         let dir = tempfile::tempdir().unwrap();
         backend
-            .extract(&msi_fixture(dir.path()), &dir.path().join("t"))
+            .extract(&msi_fixture(dir.path()), &dir.path().join("t"), None)
             .unwrap();
 
         assert_eq!(runner.recorded_runs().len(), 3);
@@ -330,7 +365,7 @@ mod tests {
         let backend = MsiexecBackend::new(&runner).with_retry_delay(Duration::from_millis(1));
         let dir = tempfile::tempdir().unwrap();
         let error = backend
-            .extract(&msi_fixture(dir.path()), &dir.path().join("t"))
+            .extract(&msi_fixture(dir.path()), &dir.path().join("t"), None)
             .unwrap_err();
         assert!(error.to_string().contains("1618"), "{error}");
         // Initial attempt + 3 retries (max_retries budget from the runner).
@@ -350,7 +385,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let msi = msi_fixture(dir.path());
             let error = backend
-                .extract(&msi, &dir.path().join("t"))
+                .extract(&msi, &dir.path().join("t"), None)
                 .unwrap_err()
                 .to_string();
             assert!(error.contains(&code.to_string()), "{error}");
@@ -382,7 +417,7 @@ mod tests {
         let backend = MsiexecBackend::new(&FailingRunner);
         let dir = tempfile::tempdir().unwrap();
         let error = backend
-            .extract(&msi_fixture(dir.path()), &dir.path().join("t"))
+            .extract(&msi_fixture(dir.path()), &dir.path().join("t"), None)
             .unwrap_err();
         assert!(error.to_string().contains("msiexec missing"), "{error}");
     }

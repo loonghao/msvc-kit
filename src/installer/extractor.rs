@@ -348,7 +348,7 @@ fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> 
     {
         let runner = SystemRunner;
         let backend = MsiexecBackend::new(&runner);
-        if let Err(error) = backend.extract(msi_path, target_dir) {
+        if let Err(error) = backend.extract(msi_path, target_dir, None) {
             if let Some(pb) = pb.as_ref() {
                 pb.abandon_with_message(format!("msiexec failed: {}", file_name));
             }
