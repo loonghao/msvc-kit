@@ -461,7 +461,7 @@ async fn explicit_rollback_restores_original_bytes_and_marks_journal() {
 // the crash point and calls recovery to restore the original bytes. This is
 // a real cross-process test: the child's file handles are closed by the OS.
 
-fn crash_helper_logic(root: &Path, payload: &Path) -> ! {
+async fn crash_helper_logic(root: &Path, payload: &Path) -> ! {
     let mut tx = transaction::Transaction::begin(
         root,
         "crash-test",
@@ -470,11 +470,12 @@ fn crash_helper_logic(root: &Path, payload: &Path) -> ! {
     .unwrap();
     let staged = tx
         .stage_package(PKG, std::slice::from_ref(&payload.to_path_buf()), |_| true)
+        .await
         .unwrap();
     let merged = tx.merge(std::slice::from_ref(&staged)).unwrap();
     // The fault hook returns Err (AfterInstall fires). We do NOT call
     // rollback — the child aborts here, simulating a process kill.
-    let _ = tx.commit(&merged).unwrap_err();
+    let _ = tx.commit(&merged).await.unwrap_err();
     std::process::abort();
 }
 
@@ -487,7 +488,7 @@ async fn real_process_crash_recovery_restores_original_bytes() {
     if let (Ok(root), Ok(payload)) = (&root_env, &payload_env) {
         let root = PathBuf::from(root);
         let payload = PathBuf::from(payload);
-        crash_helper_logic(&root, &payload);
+        crash_helper_logic(&root, &payload).await;
         // crash_helper_logic aborts and never returns.
     }
 
