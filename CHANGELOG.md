@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.24](https://github.com/loonghao/msvc-kit/compare/v0.2.23...v0.2.24) (2026-11-23)
+
+
+### Dependencies
+
+* update Rust crate zip to v9.4.1 ([901f20f](https://github.com/loonghao/msvc-kit/commit/901f20f4f4d6d4f9825b145b23c33736e7b8da01))
+
 ## [0.2.23](https://github.com/loonghao/msvc-kit/compare/v0.2.22...v0.2.23) (2026-10-25)
 
 
