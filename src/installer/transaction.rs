@@ -183,6 +183,12 @@ struct JournalLine {
     plan_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     target_root: Option<String>,
+    /// Exact backup file name (within this transaction's backup dir) for the
+    /// event's path, when a backup was taken. Written on WillBackup/BackupDone
+    /// so a crash between them and during recovery uses the precise identity
+    /// instead of a fuzzy suffix match. Missing on old journals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    backup_name: Option<String>,
 }
 
 pub(crate) fn msvc_kit_dir(root: &Path) -> PathBuf {
@@ -227,6 +233,46 @@ fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hex::encode(hasher.finalize())
+}
+
+/// Build a backup file name that is *uniquely* tied to one root-relative
+/// install path.
+///
+/// P1 (v3): the old scheme truncated the content digest to 8 hex chars and
+/// only escaped path separators, so the two distinct paths `a/b` and `a__b`
+/// both produced names ending in `__a__b` that `find_backup` could not tell
+/// apart. The full SHA-256 (64 hex chars) of the normalized lowercase key
+/// that the ownership index uses makes the name injective: distinct keys
+/// always yield distinct file names, and a bare key is tied to exactly one
+/// backup file.
+fn backup_file_name(key: &str) -> String {
+    format!("{}__", sha256_hex(key.as_bytes()))
+}
+
+/// Whether a payload file is an MSI package (the only format whose bytes are
+/// handed to the Windows Installer).
+fn is_msi_payload(payload: &Path) -> bool {
+    payload
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.eq_ignore_ascii_case("msi"))
+        .unwrap_or(false)
+}
+
+/// Look up the official SHA256 of a payload.
+///
+/// The map is keyed by the payload's path as it exists on disk. Paths are
+/// compared exactly first and then by file name, so a caller that keyed the
+/// map by the manifest payload name still resolves correctly.
+fn official_digest_for(payload: &Path, digests: &HashMap<PathBuf, String>) -> Option<String> {
+    if let Some(digest) = digests.get(payload) {
+        return Some(digest.clone());
+    }
+    let file_name = payload.file_name()?;
+    digests
+        .iter()
+        .find(|(key, _)| key.file_name() == Some(file_name))
+        .map(|(_, digest)| digest.clone())
 }
 
 /// Load the ownership index, or an empty one when the root predates it.
@@ -326,6 +372,7 @@ impl Transaction {
             transaction_id: Some(tx_id),
             plan_id: Some(plan_id.to_string()),
             target_root: Some(root.to_string_lossy().into_owned()),
+            backup_name: None,
         })?;
         tx.faults.hit(FaultPoint::AfterJournalHeader)?;
         Ok(tx)
@@ -363,11 +410,26 @@ impl Transaction {
         path: &str,
         hash: Option<String>,
     ) -> Result<()> {
+        self.append_event_with_backup(kind, path, hash, None)
+    }
+
+    /// Like [`append_event`] but records the exact backup file name (within
+    /// this transaction's backup dir) that a WillBackup/BackupDone event took,
+    /// so recovery can restore the precise file even when two distinct paths
+    /// sanitize to the same human-readable suffix (P1: `a/b` vs `a__b`).
+    fn append_event_with_backup(
+        &mut self,
+        kind: JournalEventKind,
+        path: &str,
+        hash: Option<String>,
+        backup_name: Option<String>,
+    ) -> Result<()> {
         let event = JournalEvent {
             sequence: self.seq + 1,
             kind,
             path: path.to_string(),
             hash,
+            backup_name,
             recorded_at: chrono::Utc::now(),
         };
         self.append_line(&JournalLine {
@@ -381,6 +443,7 @@ impl Transaction {
             transaction_id: None,
             plan_id: None,
             target_root: None,
+            backup_name: event.backup_name.clone(),
         })
     }
 
@@ -388,10 +451,17 @@ impl Transaction {
     ///
     /// A valid v2 extraction marker skips the extraction entirely (the
     /// package was installed before and the root is left untouched).
+    ///
+    /// `digests` maps a payload path to the *official* SHA256 of that
+    /// payload (from the channel manifest / plan). MSI payloads MUST have an
+    /// entry: the digest is re-verified immediately before the installer
+    /// runs (G-4 / R3), so a payload with no official digest cannot be
+    /// installed and is rejected instead of being passed through unverified.
     pub async fn stage_package(
         &mut self,
         package_id: &str,
         payload_files: &[PathBuf],
+        digests: &HashMap<PathBuf, String>,
         classify: impl Fn(&Path) -> bool,
     ) -> Result<StagedPackage> {
         let dir_name = safe_package_dir_name(package_id);
@@ -407,12 +477,28 @@ impl Transaction {
             if !classify(payload) {
                 continue;
             }
+            let expected_sha256 = official_digest_for(payload, digests);
+            if is_msi_payload(payload) && expected_sha256.is_none() {
+                // G-4 (R3): an MSI without an official digest cannot be
+                // verified before the installer runs, so it must not be
+                // installed at all.
+                return Err(MsvcKitError::Other(format!(
+                    "Refusing to install {}: no official SHA256 is known for this MSI payload",
+                    payload.display()
+                )));
+            }
             let probe = super::probe_extraction_marker(&marker_dir, payload).await?;
             if probe.valid {
                 skipped_via_marker = true;
                 continue;
             }
-            super::extract_package(&payload.clone(), &package_dir).await?;
+            super::extract_package_with_progress(
+                &payload.clone(),
+                &package_dir,
+                super::inner_progress_enabled(),
+                expected_sha256.as_deref(),
+            )
+            .await?;
             extracted_any = true;
         }
 
@@ -549,6 +635,13 @@ impl Transaction {
     /// backup/replace semantics, then write ownership and the installed
     /// manifest.
     pub async fn commit(&mut self, merged: &MergedTree) -> Result<CommittedInstall> {
+        // P1: refuse to commit anywhere that would resolve writes through a
+        // symlink/junction. The install root itself must not be a reparse
+        // point, and every target path is checked so a junction planted under
+        // the root (e.g. `install/VC -> D:/outside`) cannot redirect a write
+        // outside the install boundary. Checked up front, before any mutation.
+        super::path_safety::check_no_reparse_within(&self.root, &self.root)?;
+
         // ---- Pre-pass: classify every file before touching the root. ----
         let mut ownership = load_ownership(&self.root)?;
         let legacy_managed = root_has_legacy_management(&self.root);
@@ -563,6 +656,10 @@ impl Transaction {
             Skip,
             ReplaceOwned {
                 backup_path: PathBuf,
+                /// Exact backup file name (within the tx backup dir) for the
+                /// replaced file; recorded in the journal so recovery restores
+                /// the precise file even when two paths share a suffix (P1).
+                backup_file_name: String,
                 old_hash: String,
             },
         }
@@ -579,18 +676,31 @@ impl Transaction {
                 .replace('\\', "/")
                 .to_lowercase();
             let target = self.root.join(&file.relative);
-            let existing_hash = if target.is_file() {
-                compute_file_hash(&target).await.ok()
-            } else if target.exists() {
-                // A directory (or something unreadable) stands where the file
-                // should be: refuse rather than fight it.
-                conflicts.push(format!(
-                    "{}: a non-file object already occupies the target path",
-                    key
-                ));
-                continue;
-            } else {
-                None
+
+            // P1: a symlink/junction anywhere along the target path would
+            // redirect the write outside the install boundary.
+            super::path_safety::check_no_reparse_within(&self.root, &target)?;
+
+            // P1: classify by metadata that cannot follow links, and fail
+            // closed. `Path::is_file`/`Path::exists` swallow metadata errors
+            // and *follow* symlinks; neither is acceptable here. If the
+            // target is unreadable we must NOT treat it as absent (that would
+            // let an unknown existing file be overwritten later).
+            let existing_hash = match std::fs::symlink_metadata(&target) {
+                Ok(meta) => {
+                    if meta.is_dir() || meta.file_type().is_symlink() {
+                        // A directory or symlink stands where the file should
+                        // be: refuse rather than fight it.
+                        conflicts.push(format!(
+                            "{}: a non-file object already occupies the target path",
+                            key
+                        ));
+                        continue;
+                    }
+                    Some(compute_file_hash(&target).await?)
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
             };
 
             let planned = match existing_hash {
@@ -606,14 +716,12 @@ impl Transaction {
                         .map(|entry| entry.sha256.as_deref() == Some(hash.to_lowercase().as_str()))
                         .unwrap_or(false);
                     if owned || legacy_managed {
-                        let backup_path = self.backup_dir.join(format!(
-                            "{}__{}",
-                            &sha256_hex(key.as_bytes())[..8],
-                            file.relative.to_string_lossy().replace(['/', '\\'], "__")
-                        ));
+                        let backup_name = backup_file_name(&key);
+                        let backup_path = self.backup_dir.join(&backup_name);
                         replaced += 1;
                         Planned::ReplaceOwned {
                             backup_path,
+                            backup_file_name: backup_name,
                             old_hash: hash.clone(),
                         }
                     } else {
@@ -703,12 +811,17 @@ impl Transaction {
                 }
                 Planned::ReplaceOwned {
                     backup_path,
+                    backup_file_name,
                     old_hash,
                 } => {
-                    self.append_event(
+                    // P1: never back up / write through a reparse point along
+                    // the backup path either.
+                    super::path_safety::check_no_reparse_within(&self.root, backup_path)?;
+                    self.append_event_with_backup(
                         JournalEventKind::WillBackup,
                         &journal_path,
                         Some(old_hash.clone()),
+                        Some(backup_file_name.clone()),
                     )?;
                     self.faults.hit(FaultPoint::BeforeBackup)?;
                     if let Some(parent) = backup_path.parent() {
@@ -716,10 +829,11 @@ impl Transaction {
                     }
                     std::fs::rename(&target, backup_path)?;
                     self.faults.hit(FaultPoint::AfterBackup)?;
-                    self.append_event(
+                    self.append_event_with_backup(
                         JournalEventKind::BackupDone,
                         &journal_path,
                         Some(old_hash.clone()),
+                        Some(backup_file_name.clone()),
                     )?;
                     self.append_event(
                         JournalEventKind::WillInstall,
@@ -763,10 +877,10 @@ impl Transaction {
         // rollback. ----
         self.faults.hit(FaultPoint::BeforeOwnershipWrite)?;
         let ownership_target = ownership_path(&self.root);
-        let ownership_backup = self.backup_dir.join(format!(
-            "{}_ownership.json",
-            &sha256_hex(b"ownership.json")[..8]
-        ));
+        let ownership_backup_name = backup_file_name(OWNERSHIP_FILE);
+        let ownership_backup = self.backup_dir.join(&ownership_backup_name);
+        // P1: never back up through a reparse point on the metadata path either.
+        super::path_safety::check_no_reparse_within(&self.root, &ownership_backup)?;
         // Journal the metadata transition: a None hash means "did not exist
         // before this transaction" so rollback removes the file; a digest
         // means "existed" and rollback restores the backup bytes.
@@ -777,15 +891,17 @@ impl Transaction {
         } else {
             None
         };
-        self.append_event(
+        self.append_event_with_backup(
             JournalEventKind::WillBackup,
             OWNERSHIP_FILE,
             prior_ownership_hash.clone(),
+            Some(ownership_backup_name.clone()),
         )?;
-        self.append_event(
+        self.append_event_with_backup(
             JournalEventKind::BackupDone,
             OWNERSHIP_FILE,
             prior_ownership_hash,
+            Some(ownership_backup_name),
         )?;
         for (key, entry) in &self.ownership_added {
             match ownership
@@ -881,6 +997,9 @@ impl Transaction {
             old_hash: Option<String>,
             new_hash: Option<String>,
             backup_done: bool,
+            /// Precise backup file name (within the backup dir) recorded for
+            /// this path, when known (P1: distinguishes `a/b` from `a__b`).
+            backup_name: Option<String>,
         }
         let mut per_path: HashMap<String, PathPlan> = HashMap::new();
         for event in &events {
@@ -889,10 +1008,18 @@ impl Transaction {
             }
             let plan = per_path.entry(event.path.clone()).or_default();
             match event.kind {
-                JournalEventKind::WillBackup => plan.old_hash = event.hash.clone(),
+                JournalEventKind::WillBackup => {
+                    plan.old_hash = event.hash.clone();
+                    if let Some(name) = &event.backup_name {
+                        plan.backup_name = Some(name.clone());
+                    }
+                }
                 JournalEventKind::BackupDone => {
                     plan.old_hash = event.hash.clone();
                     plan.backup_done = true;
+                    if let Some(name) = &event.backup_name {
+                        plan.backup_name = Some(name.clone());
+                    }
                 }
                 JournalEventKind::WillInstall | JournalEventKind::InstallDone => {
                     plan.new_hash = event.hash.clone()
@@ -918,7 +1045,9 @@ impl Transaction {
                         let _ = std::fs::remove_file(&target);
                     }
                     (Some(_), true) => {
-                        if let Ok(backup) = find_backup(&self.backup_dir, &path) {
+                        if let Ok(backup) =
+                            resolve_backup(&self.backup_dir, &path, plan.backup_name.as_deref())
+                        {
                             std::fs::copy(&backup, &target)?;
                         }
                     }
@@ -942,7 +1071,8 @@ impl Transaction {
                 // the path after the failure; refuse to guess and let the
                 // caller mark the transaction needs_recovery.
                 (Some(_), Some(new_hash)) => {
-                    let backup = find_backup(&self.backup_dir, &path)?;
+                    let backup =
+                        resolve_backup(&self.backup_dir, &path, plan.backup_name.as_deref())?;
                     let target_state = if target.exists() {
                         compute_file_hash(&target).await.ok()
                     } else {
@@ -970,7 +1100,8 @@ impl Transaction {
                 // backup file exists and must be restored.
                 (Some(_), None) => {
                     if !target.exists() {
-                        let backup = find_backup(&self.backup_dir, &path)?;
+                        let backup =
+                            resolve_backup(&self.backup_dir, &path, plan.backup_name.as_deref())?;
                         std::fs::rename(&backup, &target)?;
                     }
                 }
@@ -1042,6 +1173,7 @@ fn read_journal_events(journal: &Path) -> Result<Vec<JournalEvent>> {
                     kind,
                     path,
                     hash: parsed.hash,
+                    backup_name: parsed.backup_name,
                     recorded_at,
                 });
             }
@@ -1050,6 +1182,28 @@ fn read_journal_events(journal: &Path) -> Result<Vec<JournalEvent>> {
     Ok(events)
 }
 
+/// Resolve the backup file for `key` (a root-relative install path) within a
+/// transaction's backup dir.
+///
+/// When the journal recorded an exact backup name (`precise`), that name is
+/// used directly — two distinct paths that sanitize to the same suffix (P1:
+/// `a/b` vs `a__b`) therefore always recover the correct file. When no name
+/// was recorded (a pre-fix journal from an in-flight transaction), fall back
+/// to the legacy suffix scan so recovery stays possible.
+fn resolve_backup(backup_dir: &Path, key: &str, precise: Option<&str>) -> Result<PathBuf> {
+    if let Some(name) = precise {
+        let candidate = backup_dir.join(name);
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    find_backup(backup_dir, key)
+}
+
+/// Legacy backup lookup: suffix-match `key` against backup file names. Kept
+/// for journals written before the precise backup-name field existed; it is
+/// ambiguous when two paths collapse onto one suffix, which is why new
+/// journals carry an exact name and callers use [`resolve_backup`].
 fn find_backup(backup_dir: &Path, key: &str) -> Result<PathBuf> {
     let suffix = format!(
         "__{}",

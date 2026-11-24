@@ -176,6 +176,7 @@ mod env_generation_tests {
             install_path: PathBuf::from(format!("C:/test/{}", component_type)),
             downloaded_files: vec![],
             arch: Architecture::X64,
+            payload_sha256: Default::default(),
         }
     }
 

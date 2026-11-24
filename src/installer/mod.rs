@@ -25,6 +25,7 @@ use futures::{stream, StreamExt};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -113,13 +114,22 @@ fn sdk_payloads_to_extract(files: &[PathBuf]) -> Vec<PathBuf> {
 
 /// Extract a package based on its file extension
 pub async fn extract_package(file: &Path, target_dir: &Path) -> Result<()> {
-    extract_package_with_progress(file, target_dir, inner_progress_enabled()).await
+    extract_package_with_progress(file, target_dir, inner_progress_enabled(), None).await
 }
 
+/// Extract a package, verifying the *official* SHA256 of MSI payloads against
+/// the file immediately before the installer runs.
+///
+/// `expected_sha256` is the official digest for `file` (from the channel
+/// manifest / plan). It is only meaningful for MSI payloads; other formats
+/// carry their own integrity checks. G-4 (R3): the production install path
+/// always supplies it, so a payload swapped between the download-time
+/// verification and the installer invocation is rejected.
 pub(crate) async fn extract_package_with_progress(
     file: &Path,
     target_dir: &Path,
     show_progress: bool,
+    expected_sha256: Option<&str>,
 ) -> Result<()> {
     let extension = file
         .extension()
@@ -129,7 +139,7 @@ pub(crate) async fn extract_package_with_progress(
 
     match extension.as_str() {
         "vsix" | "zip" => extract_vsix_with_progress(file, target_dir, show_progress).await,
-        "msi" => extract_msi_with_progress(file, target_dir, show_progress).await,
+        "msi" => extract_msi_with_progress(file, target_dir, show_progress, expected_sha256).await,
         "cab" => extract_cab_with_progress(file, target_dir, show_progress).await,
         _ => {
             tracing::warn!("Unknown file type: {:?}, skipping extraction", file);
@@ -286,7 +296,7 @@ pub async fn extract_packages_with_progress(
 
             async move {
                 // Extract the package
-                extract_package_with_progress(&file, &target_dir, false).await?;
+                extract_package_with_progress(&file, &target_dir, false, None).await?;
 
                 // Record a content-identity marker; failure to write it only
                 // costs a re-extraction next run, never a false skip.
@@ -352,6 +362,17 @@ pub struct InstallInfo {
 
     /// List of downloaded files
     pub downloaded_files: Vec<PathBuf>,
+
+    /// Official SHA256 digests of the downloaded payloads, keyed by payload
+    /// path.
+    ///
+    /// The digest is the one published by the channel manifest (not a digest
+    /// computed locally). It is carried from the download step to the
+    /// extraction step so an MSI can be re-verified immediately before the
+    /// Windows Installer runs (G-4 / R3) and so an MSI without an official
+    /// digest is rejected instead of being installed unverified.
+    #[serde(default)]
+    pub payload_sha256: HashMap<PathBuf, String>,
 
     /// Target architecture
     pub arch: Architecture,
@@ -457,7 +478,9 @@ pub async fn extract_and_finalize_msvc_with_profile(
     let mut tx =
         transaction::Transaction::begin(target_dir, "download", transaction::FaultHook::none())?;
     let mut staged = tx
-        .stage_package("msvc", &info.downloaded_files, |_| true)
+        .stage_package("msvc", &info.downloaded_files, &info.payload_sha256, |_| {
+            true
+        })
         .await?;
     {
         let context = pruning::PruningContext {
@@ -535,7 +558,7 @@ pub async fn extract_and_finalize_sdk_with_profile(
         transaction::Transaction::begin(target_dir, "download", transaction::FaultHook::none())?;
     let sdk_files: Vec<PathBuf> = sdk_payloads_to_extract(&info.downloaded_files);
     let mut staged = tx
-        .stage_package("sdk", &sdk_files, |payload| {
+        .stage_package("sdk", &sdk_files, &info.payload_sha256, |payload| {
             matches!(
                 classify_sdk_payload_for_extraction(payload),
                 SdkExtractionAction::Extract
@@ -680,6 +703,7 @@ mod tests {
                     .join("WinRT Intellisense UAP - en-us-x86_en-us.msi"),
             ],
             arch: Architecture::X64,
+            payload_sha256: Default::default(),
         };
 
         let installed = install_sdk(&info).await.unwrap();

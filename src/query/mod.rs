@@ -477,6 +477,7 @@ pub fn query_installation_with_sdk_root(
             install_path: info.install_path.clone(),
             downloaded_files: vec![],
             arch: options.arch,
+            payload_sha256: Default::default(),
         };
         let env = MsvcEnvironment::from_install_info(
             &install_info(msvc),
@@ -556,6 +557,7 @@ fn find_msvc_component(
             install_path: install_path.clone(),
             downloaded_files: vec![],
             arch,
+            payload_sha256: Default::default(),
         },
         None,
         host_arch,

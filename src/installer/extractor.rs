@@ -310,23 +310,39 @@ fn extract_vsix_sync(vsix_path: &Path, target_dir: &Path, show_progress: bool) -
 /// Extract an MSI file
 ///
 /// On Windows, uses msiexec. On other platforms, attempts to use msitools.
+///
+/// `expected_sha256` is the *official* digest of the MSI payload. When it is
+/// supplied, the file is re-hashed immediately before the installer runs and
+/// a mismatch aborts the extraction. G-4 (R3) requires the production install
+/// path to always supply it: the download-time verification and the msiexec
+/// invocation are separate moments, and a payload replaced in between must
+/// not reach the installer.
 pub(crate) async fn extract_msi_with_progress(
     msi_path: &Path,
     target_dir: &Path,
     show_progress: bool,
+    expected_sha256: Option<&str>,
 ) -> Result<()> {
     let msi_path = msi_path.to_path_buf();
     let target_dir = target_dir.to_path_buf();
+    let expected_sha256 = expected_sha256.map(str::to_string);
 
-    tokio::task::spawn_blocking(move || extract_msi_sync(&msi_path, &target_dir, show_progress))
-        .await
-        .map_err(|e| MsvcKitError::Other(format!("Task join error: {}", e)))??;
+    tokio::task::spawn_blocking(move || {
+        extract_msi_sync(
+            &msi_path,
+            &target_dir,
+            show_progress,
+            expected_sha256.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| MsvcKitError::Other(format!("Task join error: {}", e)))??;
 
     Ok(())
 }
 
 pub async fn extract_msi(msi_path: &Path, target_dir: &Path) -> Result<()> {
-    extract_msi_with_progress(msi_path, target_dir, inner_progress_enabled()).await
+    extract_msi_with_progress(msi_path, target_dir, inner_progress_enabled(), None).await
 }
 
 /// Rust `std::fs` supports long paths on Windows (it uses the verbatim
@@ -412,7 +428,12 @@ fn move_tree(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> Result<()> {
+fn extract_msi_sync(
+    msi_path: &Path,
+    target_dir: &Path,
+    show_progress: bool,
+    expected_sha256: Option<&str>,
+) -> Result<()> {
     let file_name = msi_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -449,7 +470,7 @@ fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> 
         // place afterwards (std::fs handles long paths).
         let short_root = short_msi_root(target_dir);
         let staging_target = short_root.as_deref().unwrap_or(target_dir);
-        let outcome = backend.extract(msi_path, staging_target, None);
+        let outcome = backend.extract(msi_path, staging_target, expected_sha256);
         let outcome = match (outcome, short_root.as_deref()) {
             (Ok(()), Some(temp)) => move_tree(temp, target_dir)
                 .and_then(|()| std::fs::remove_dir_all(temp).map_err(MsvcKitError::from)),
@@ -472,6 +493,19 @@ fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> 
     {
         // On non-Windows, try using msitools (msiextract)
         use std::process::Command;
+
+        // G-4 (R3): the same pre-execution digest check the Windows backend
+        // performs, so the guarantee holds on every platform.
+        if let Some(expected) = expected_sha256 {
+            let actual = super::msi::sha256_file(msi_path)?;
+            if !actual.eq_ignore_ascii_case(expected) {
+                return Err(MsvcKitError::HashMismatch {
+                    file: msi_path.display().to_string(),
+                    expected: expected.to_string(),
+                    actual,
+                });
+            }
+        }
 
         let status = Command::new("msiextract")
             .args([

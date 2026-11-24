@@ -83,6 +83,7 @@ pub fn resolve_toolchain_with_sdk_root(
             .ok_or_else(|| MsvcKitError::InstallPath("MSVC installation path is missing".into()))?,
         downloaded_files: vec![],
         arch: request.arch,
+        payload_sha256: Default::default(),
     };
     let sdk_info = sdk.map(|version| InstallInfo {
         component_type: "sdk".into(),
@@ -90,6 +91,7 @@ pub fn resolve_toolchain_with_sdk_root(
         install_path: sdk_dir,
         downloaded_files: vec![],
         arch: request.arch,
+        payload_sha256: Default::default(),
     });
     MsvcEnvironment::from_install_info(&msvc_info, sdk_info.as_ref(), request.host_arch)
 }

@@ -96,7 +96,7 @@ pub trait MsiProcessRunner: Send + Sync {
 }
 
 /// Synchronous SHA256 file hash (called from the blocking msiexec path).
-fn sha256_file(path: &Path) -> Result<String> {
+pub(crate) fn sha256_file(path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
@@ -434,6 +434,50 @@ mod tests {
             Path::new(log_arg).parent(),
             msi.parent(),
             "log beside the source MSI"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn matching_digest_runs_msiexec() {
+        // G-4 (R3): the MSI is re-hashed before the installer runs; a digest
+        // that matches the file on disk lets the extraction proceed.
+        let runner = FakeRunner::with_codes(&[Some(0)]);
+        let backend = MsiexecBackend::new(&runner);
+        let dir = tempfile::tempdir().unwrap();
+        let msi = msi_fixture(dir.path());
+        let digest = sha256_file(&msi).unwrap();
+
+        backend
+            .extract(&msi, &dir.path().join("target"), Some(&digest))
+            .unwrap();
+
+        assert_eq!(runner.recorded_runs().len(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn mismatching_digest_aborts_before_msiexec_runs() {
+        // G-4 (R3): a payload that no longer matches its official digest must
+        // never reach the Windows Installer. The check happens before any
+        // process is spawned, so zero runs are recorded.
+        let runner = FakeRunner::with_codes(&[Some(0)]);
+        let backend = MsiexecBackend::new(&runner);
+        let dir = tempfile::tempdir().unwrap();
+        let msi = msi_fixture(dir.path());
+        let wrong = "0".repeat(64);
+
+        let error = backend
+            .extract(&msi, &dir.path().join("target"), Some(&wrong))
+            .unwrap_err();
+
+        assert!(
+            matches!(error, MsvcKitError::HashMismatch { .. }),
+            "expected a hash mismatch, got: {error}"
+        );
+        assert!(
+            runner.recorded_runs().is_empty(),
+            "msiexec must not run for a payload that fails the digest check"
         );
     }
 

@@ -112,6 +112,11 @@ pub(crate) struct JournalEvent {
     pub path: String,
     /// Expected hash before (Will*) or after (Done/Committed) the operation.
     pub hash: Option<String>,
+    /// Exact backup file name within the transaction backup dir, when this
+    /// event backs up a replaced file. Lets recovery pick the *precise*
+    /// backup instead of fuzzy suffix matching (P1: `a/b` vs `a__b`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_name: Option<String>,
     pub recorded_at: DateTime<Utc>,
 }
 

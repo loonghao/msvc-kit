@@ -308,6 +308,7 @@ fn create_test_install_info(component_type: &str) -> InstallInfo {
         install_path: PathBuf::from("C:/test/path"),
         downloaded_files: vec![],
         arch: Architecture::X64,
+        payload_sha256: Default::default(),
     }
 }
 
@@ -340,6 +341,7 @@ fn test_install_info_bin_dir_sdk() {
         install_path: PathBuf::from("C:/test/sdk"),
         downloaded_files: vec![],
         arch: Architecture::X64,
+        payload_sha256: Default::default(),
     };
     let bin_dir = info.bin_dir();
     assert!(bin_dir.to_string_lossy().contains("bin"));
@@ -354,6 +356,7 @@ fn test_install_info_bin_dir_unknown() {
         install_path: PathBuf::from("C:/test"),
         downloaded_files: vec![],
         arch: Architecture::X64,
+        payload_sha256: Default::default(),
     };
     let bin_dir = info.bin_dir();
     assert!(bin_dir.to_string_lossy().contains("bin"));
@@ -374,6 +377,7 @@ fn test_install_info_include_dir_sdk() {
         install_path: PathBuf::from("C:/test/sdk"),
         downloaded_files: vec![],
         arch: Architecture::X64,
+        payload_sha256: Default::default(),
     };
     let include_dir = info.include_dir();
     assert!(include_dir.to_string_lossy().contains("Include"));
@@ -396,6 +400,7 @@ fn test_install_info_lib_dir_sdk() {
         install_path: PathBuf::from("C:/test/sdk"),
         downloaded_files: vec![],
         arch: Architecture::X64,
+        payload_sha256: Default::default(),
     };
     let lib_dir = info.lib_dir();
     assert!(lib_dir.to_string_lossy().contains("Lib"));
