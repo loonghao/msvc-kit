@@ -827,3 +827,265 @@ async fn msi_payload_with_wrong_digest_is_rejected() {
         "a payload that fails the official digest check must abort, got: {error}"
     );
 }
+
+// ============================================================================
+// v3 review fixes: recovery-path reparse guard and fail-closed rollback.
+// ============================================================================
+
+/// Create a directory reparse point at `link` targeting `target`. Windows
+/// uses a junction (`mklink /J`, no elevation needed); Unix uses a symlink.
+/// Returns false when the platform refuses to create it.
+fn make_directory_link(link: &Path, target: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = (link, target);
+        false
+    }
+}
+
+/// The single transaction directory created by the fixture's first commit.
+fn single_transaction_dir(root: &Path) -> PathBuf {
+    let tx_root = root.join(".msvc-kit").join("transactions");
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(&tx_root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(entries.len(), 1, "expected exactly one transaction");
+    entries.remove(0)
+}
+
+/// Begin a transaction that fails at `point` and is NOT rolled back, leaving
+/// the journal and the live handle for an explicit `rollback` call.
+async fn begin_and_fail_commit(
+    root: &Path,
+    payload: &Path,
+    point: FaultPoint,
+) -> (transaction::Transaction, String, msvc_kit::MsvcKitError) {
+    let mut tx =
+        transaction::Transaction::begin(root, "plan", FaultHook::with_points(&[point])).unwrap();
+    let tx_id = tx.transaction_id().to_string();
+    let staged = tx
+        .stage_package(
+            PKG,
+            std::slice::from_ref(&payload.to_path_buf()),
+            &HashMap::new(),
+            |_| true,
+        )
+        .await
+        .unwrap();
+    let merged = tx.merge(std::slice::from_ref(&staged)).unwrap();
+    let error = tx.commit(&merged).await.unwrap_err();
+    (tx, tx_id, error)
+}
+
+fn read_journal(root: &Path, tx_id: &str) -> String {
+    std::fs::read_to_string(
+        root.join(".msvc-kit")
+            .join("transactions")
+            .join(tx_id)
+            .join("journal.jsonl"),
+    )
+    .unwrap()
+}
+
+/// P1 (v3): recovery runs after the crash and must re-check reparse points.
+/// A junction/symlink planted under the install root in the meantime must not
+/// redirect the restore outside the install boundary.
+#[tokio::test]
+async fn recovery_refuses_reparse_point_planted_after_crash() {
+    let fx = Fixture::new(&[(REL_FILE, b"new-bytes")]);
+    fx.make_legacy_with_conflicting_file(REL_FILE, b"original-bytes");
+
+    // Crash-equivalent: commit stops before the ownership write, no rollback.
+    let result = run_commit(
+        &fx.root,
+        &fx.payload,
+        FaultHook::with_points(&[FaultPoint::BeforeOwnershipWrite]),
+    )
+    .await;
+    assert!(result.is_err());
+    let tx_dir = single_transaction_dir(&fx.root);
+    let tx_id = tx_dir.file_name().unwrap().to_string_lossy().into_owned();
+
+    // Replace the installed tree with a directory reparse point aimed outside
+    // the root. The outside tree already holds a copy of the installed bytes,
+    // so the pre-fix code would "restore" over it through the link.
+    let outside = fx._guard.path().join("outside");
+    let leaked = outside.join("Tools").join("plan").join("file.txt");
+    std::fs::create_dir_all(leaked.parent().unwrap()).unwrap();
+    std::fs::write(&leaked, b"new-bytes").unwrap();
+    let vc = fx.root.join("VC");
+    std::fs::remove_dir_all(&vc).unwrap();
+    if !make_directory_link(&vc, &outside) {
+        eprintln!("SKIP: cannot create a directory reparse point");
+        return;
+    }
+
+    let report = transaction::recover_pending(&fx.root).await.unwrap();
+    assert!(report.rolled_back.is_empty(), "{report:?}");
+    assert_eq!(report.needs_recovery, vec![tx_id.clone()], "{report:?}");
+    assert_eq!(
+        std::fs::read(&leaked).unwrap(),
+        b"new-bytes",
+        "recovery must not write through the reparse point"
+    );
+    assert!(tx_dir.join("needs-recovery.json").exists());
+    assert!(
+        !read_journal(&fx.root, &tx_id).contains("rolled_back"),
+        "a refused rollback must not be journaled as successful"
+    );
+}
+
+/// P2 (v3): a created file whose hash cannot be read must leave the
+/// transaction in needs_recovery; it may not be recorded as rolled back.
+#[cfg(unix)]
+#[tokio::test]
+async fn rollback_fails_closed_when_created_file_cannot_be_hashed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fx = Fixture::new(&[(REL_FILE, b"ours")]);
+    let (tx, tx_id, _) =
+        begin_and_fail_commit(&fx.root, &fx.payload, FaultPoint::BeforeOwnershipWrite).await;
+    let target = fx.root.join(REL_FILE);
+    assert_eq!(std::fs::read(&target).unwrap(), b"ours");
+
+    let mut perms = std::fs::metadata(&target).unwrap().permissions();
+    perms.set_mode(0o000);
+    std::fs::set_permissions(&target, perms).unwrap();
+    if std::fs::read(&target).is_ok() {
+        // Running as root: the permission denial is not effective.
+        std::fs::set_permissions(&target, PermissionsExt::from_mode(0o600)).unwrap();
+        eprintln!("SKIP: running as root, read denial not effective");
+        return;
+    }
+
+    let error = tx.rollback("injected failure").await.unwrap_err();
+    assert!(
+        error.to_string().to_lowercase().contains("permission")
+            || error.to_string().to_lowercase().contains("denied"),
+        "the hash read failure must surface, got: {error}"
+    );
+
+    std::fs::set_permissions(&target, PermissionsExt::from_mode(0o600)).unwrap();
+    assert!(
+        std::fs::read(&target).is_ok(),
+        "an unreadable file must not be deleted on an unverified rollback"
+    );
+    let tx_dir = fx.root.join(".msvc-kit").join("transactions").join(&tx_id);
+    assert!(tx_dir.join("needs-recovery.json").exists());
+    assert!(
+        !read_journal(&fx.root, &tx_id).contains("rolled_back"),
+        "a failed rollback must not be journaled as successful"
+    );
+}
+
+/// P2 (v3): a created file modified by a third party after the failure is no
+/// longer ours to delete; the rollback must go to needs_recovery instead of
+/// deleting or silently ignoring it.
+#[tokio::test]
+async fn rollback_refuses_to_delete_created_file_modified_after_failure() {
+    let fx = Fixture::new(&[(REL_FILE, b"ours")]);
+    let (tx, tx_id, _) =
+        begin_and_fail_commit(&fx.root, &fx.payload, FaultPoint::BeforeOwnershipWrite).await;
+    let target = fx.root.join(REL_FILE);
+    std::fs::write(&target, b"third-party").unwrap();
+
+    let error = tx.rollback("injected failure").await.unwrap_err();
+    assert!(error.to_string().contains("Rollback conflict"), "{error}");
+    assert_eq!(std::fs::read(&target).unwrap(), b"third-party");
+    let tx_dir = fx.root.join(".msvc-kit").join("transactions").join(&tx_id);
+    assert!(tx_dir.join("needs-recovery.json").exists());
+    assert!(!read_journal(&fx.root, &tx_id).contains("rolled_back"));
+}
+
+/// P2 (v3): when the ownership index did not exist before the transaction,
+/// rollback must remove the index this transaction wrote; a removal failure
+/// (not NotFound) is not a clean rollback.
+#[tokio::test]
+async fn rollback_fails_closed_when_ownership_index_cannot_be_removed() {
+    let fx = Fixture::new(&[(REL_FILE, b"ours")]);
+    let (tx, tx_id, _) = begin_and_fail_commit(
+        &fx.root,
+        &fx.payload,
+        FaultPoint::BeforeInstalledManifestWrite,
+    )
+    .await;
+    let index = transaction::ownership_path(&fx.root);
+    assert!(
+        index.is_file(),
+        "the fault point follows the ownership-index write"
+    );
+    // Replace the index with a directory so remove_file must fail.
+    std::fs::remove_file(&index).unwrap();
+    std::fs::create_dir_all(&index).unwrap();
+
+    let error = tx.rollback("injected failure").await.unwrap_err();
+    assert!(error.to_string().contains("IO error"), "{error}");
+    let tx_dir = fx.root.join(".msvc-kit").join("transactions").join(&tx_id);
+    assert!(tx_dir.join("needs-recovery.json").exists());
+    assert!(!read_journal(&fx.root, &tx_id).contains("rolled_back"));
+}
+
+/// P2 (v3): a journal that says the previous ownership index was backed up
+/// must not silently skip the restore when that backup file is gone.
+#[tokio::test]
+async fn rollback_fails_closed_when_ownership_backup_is_missing() {
+    let fx = Fixture::new(&[(REL_FILE, b"same")]);
+
+    // First install creates the ownership index.
+    let mut tx = transaction::Transaction::begin(&fx.root, "first", FaultHook::none()).unwrap();
+    let staged = tx
+        .stage_package(
+            PKG,
+            std::slice::from_ref(&fx.payload),
+            &HashMap::new(),
+            |_| true,
+        )
+        .await
+        .unwrap();
+    let merged = tx.merge(std::slice::from_ref(&staged)).unwrap();
+    tx.commit(&merged).await.unwrap();
+    assert!(transaction::ownership_path(&fx.root).exists());
+
+    // Second install: the files are identical (skipped) but the ownership
+    // index is backed up; fail after that write, then delete its backup.
+    let (tx, tx_id, _) = begin_and_fail_commit(
+        &fx.root,
+        &fx.payload,
+        FaultPoint::BeforeInstalledManifestWrite,
+    )
+    .await;
+    let backup_dir = fx
+        .root
+        .join(".msvc-kit")
+        .join("transactions")
+        .join(&tx_id)
+        .join("backup");
+    let backups: Vec<PathBuf> = std::fs::read_dir(&backup_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(backups.len(), 1, "expected only the ownership backup");
+    std::fs::remove_file(&backups[0]).unwrap();
+
+    let error = tx.rollback("injected failure").await.unwrap_err();
+    assert!(error.to_string().contains("No backup found"), "{error}");
+    let tx_dir = fx.root.join(".msvc-kit").join("transactions").join(&tx_id);
+    assert!(tx_dir.join("needs-recovery.json").exists());
+    assert!(!read_journal(&fx.root, &tx_id).contains("rolled_back"));
+}

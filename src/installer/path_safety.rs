@@ -294,35 +294,52 @@ impl PathOccupancy {
 /// a reparse point (symlink/junction). Returns the first offending component.
 /// G-6 (R7): prevents a symlink placed inside the staging tree from
 /// redirecting writes outside the boundary (TOCTOU hardening).
+///
+/// Fail-closed: a path that is not lexically inside `root` (a `..` or an
+/// absolute component from an untrusted journal) is refused, and a metadata
+/// error other than "not found" is propagated instead of being treated as a
+/// clean component. On Windows, `FileType::is_symlink` is true for both
+/// symlinks and junctions (both reparse tags are name surrogates).
 pub(crate) fn check_no_reparse_within(
     root: &std::path::Path,
     path: &std::path::Path,
 ) -> std::result::Result<(), crate::MsvcKitError> {
     // G-6 (R7): check the root itself first (it may be a reparse point),
     // then every component from root down to the full path.
-    if let Ok(meta) = std::fs::symlink_metadata(root) {
-        if meta.file_type().is_symlink() {
+    check_not_reparse(root)?;
+    let relative = path.strip_prefix(root).map_err(|_| {
+        crate::MsvcKitError::Other(format!(
+            "Refusing path {:?}: it is outside the install root {:?}",
+            path, root
+        ))
+    })?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
             return Err(crate::MsvcKitError::Other(format!(
-                "Refusing to write through reparse point at {:?}",
-                root
+                "Refusing path {:?}: non-normal component in the path below the install root",
+                path
             )));
         }
-    }
-    let mut current = root.to_path_buf();
-    if let Ok(relative) = path.strip_prefix(root) {
-        for component in relative.components() {
-            current.push(component);
-            if let Ok(meta) = std::fs::symlink_metadata(&current) {
-                if meta.file_type().is_symlink() {
-                    return Err(crate::MsvcKitError::Other(format!(
-                        "Refusing to write through reparse point at {:?}",
-                        current
-                    )));
-                }
-            }
-        }
+        current.push(component);
+        check_not_reparse(&current)?;
     }
     Ok(())
+}
+
+/// Refuse a single path if it is a reparse point. A missing path is fine (it
+/// will be created/checked again later); any other metadata failure means the
+/// path state is unknown and is therefore refused.
+fn check_not_reparse(path: &std::path::Path) -> std::result::Result<(), crate::MsvcKitError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(crate::MsvcKitError::Other(format!(
+            "Refusing to write through reparse point at {:?}",
+            path
+        ))),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 #[cfg(test)]
@@ -556,5 +573,61 @@ mod tests {
         // A clean path (no symlink) is accepted.
         let clean = root.join("plain").join("file.txt");
         assert!(check_no_reparse_within(&root, &clean).is_ok());
+    }
+
+    /// P1 (v3): directories created as junctions (mount points) are reparse
+    /// points too. On Windows `FileType::is_symlink` treats their reparse tag
+    /// as a name surrogate, so the guard must refuse a path below one.
+    #[cfg(windows)]
+    #[test]
+    fn junction_is_treated_as_a_reparse_point() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let junction = root.join("junction");
+        // `mklink /J` needs no elevation, unlike a real directory symlink.
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&outside)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if !status.is_ok_and(|status| status.success()) {
+            eprintln!("junction test skipped: mklink /J unavailable");
+            return;
+        }
+        assert!(
+            std::fs::symlink_metadata(&junction)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "a junction must classify as a reparse point"
+        );
+        let err = check_no_reparse_within(&root, &junction.join("nested.txt")).unwrap_err();
+        assert!(err.to_string().contains("reparse point"), "{err}");
+    }
+
+    /// P1 (v3): a path that lexically escapes the root (an untrusted journal
+    /// could carry `..`) must be refused instead of silently being treated as
+    /// a clean path below the root.
+    #[test]
+    fn escaping_paths_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let parent = root.join("..").join("escape.txt");
+        let err = check_no_reparse_within(&root, &parent).unwrap_err();
+        assert!(err.to_string().contains("non-normal component"), "{err}");
+
+        let outside = dir.path().join("outside.txt");
+        let err = check_no_reparse_within(&root, &outside).unwrap_err();
+        assert!(
+            err.to_string().contains("outside the install root"),
+            "{err}"
+        );
     }
 }

@@ -975,17 +975,51 @@ impl Transaction {
     pub async fn rollback(mut self, reason: &str) -> Result<()> {
         match self.rollback_inner().await {
             Ok(()) => {
-                let _ = self.append_event(JournalEventKind::RolledBack, reason, None);
+                // P2 (v3): the RolledBack journal event is the durable proof
+                // that the root was restored. If it cannot be written, the
+                // rollback did not complete and must not be reported as a
+                // success; keep the transaction in needs_recovery instead.
+                if let Err(error) = self.append_event(JournalEventKind::RolledBack, reason, None) {
+                    let _ = self.mark_needs_recovery(&error.to_string());
+                    return Err(error);
+                }
                 Ok(())
             }
             Err(error) => {
-                self.mark_needs_recovery(&error.to_string())?;
+                if let Err(marker_error) = self.mark_needs_recovery(&error.to_string()) {
+                    return Err(MsvcKitError::Other(format!(
+                        "{error} (recording needs_recovery also failed: {marker_error})"
+                    )));
+                }
                 Err(error)
             }
         }
     }
 
+    /// P1 (v3): rollback and recovery can run in a later process, long after
+    /// the crash, so the install root may have changed in the meantime.
+    /// Re-validate the transaction workspace before reading or mutating
+    /// anything (mirrors the guard `commit` applies before it writes).
+    fn check_workspace_safety(&self) -> Result<()> {
+        for path in [&self.tx_dir, &self.journal_path, &self.backup_dir] {
+            super::path_safety::check_no_reparse_within(&self.root, path)?;
+        }
+        Ok(())
+    }
+
+    /// P1 (v3): resolve a backup file and refuse it when the resolved path
+    /// (or any directory leading to it) is a reparse point.
+    fn resolve_backup_checked(&self, key: &str, precise: Option<&str>) -> Result<PathBuf> {
+        let backup = resolve_backup(&self.backup_dir, key, precise)?;
+        super::path_safety::check_no_reparse_within(&self.root, &backup)?;
+        Ok(backup)
+    }
+
     async fn rollback_inner(&mut self) -> Result<()> {
+        // P1 (v3): never read the journal or restore files through a reparse
+        // point planted under the install root after the crash.
+        self.check_workspace_safety()?;
+
         let events = read_journal_events(&self.journal_path)?;
 
         // Group events per path (chronological). For each path, the journal
@@ -1035,6 +1069,11 @@ impl Transaction {
             } else {
                 self.root.join(&path)
             };
+            // P1 (v3): every path the journal asks recovery to touch must
+            // resolve inside the install root without crossing a reparse
+            // point. Checked immediately before the operation, matching the
+            // guard commit() applies before it starts writing.
+            super::path_safety::check_no_reparse_within(&self.root, &target)?;
 
             if is_metadata {
                 // Ownership index: a None old hash means the index did not
@@ -1042,14 +1081,19 @@ impl Transaction {
                 // holds the previous index bytes.
                 match (&plan.old_hash, plan.backup_done) {
                     (None, _) => {
-                        let _ = std::fs::remove_file(&target);
+                        // P2 (v3): NotFound is the desired end state; any
+                        // other failure means the original "no index" state
+                        // was not restored and must fail closed.
+                        match std::fs::remove_file(&target) {
+                            Ok(()) => {}
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                            Err(error) => return Err(error.into()),
+                        }
                     }
                     (Some(_), true) => {
-                        if let Ok(backup) =
-                            resolve_backup(&self.backup_dir, &path, plan.backup_name.as_deref())
-                        {
-                            std::fs::copy(&backup, &target)?;
-                        }
+                        let backup =
+                            self.resolve_backup_checked(&path, plan.backup_name.as_deref())?;
+                        std::fs::copy(&backup, &target)?;
                     }
                     (Some(_), false) => {}
                 }
@@ -1057,52 +1101,114 @@ impl Transaction {
             }
 
             match (&plan.old_hash, &plan.new_hash) {
-                // Created: remove it only if it still matches our bytes
-                // (someone may have modified the file after the failure).
+                // Created: remove it only if it still matches our bytes.
                 (None, Some(new_hash)) => {
-                    if let Ok(actual) = compute_file_hash(&target).await {
-                        if actual.eq_ignore_ascii_case(new_hash) {
-                            std::fs::remove_file(&target)?;
+                    // P2 (v3): a hash read failure is NOT proof that the file
+                    // is absent or foreign. Propagate it (and any metadata
+                    // error other than NotFound) so the transaction stays in
+                    // needs_recovery instead of being recorded as a clean
+                    // rollback with an unverified file left behind.
+                    let target_missing = match std::fs::symlink_metadata(&target) {
+                        Ok(meta) if meta.is_dir() || meta.file_type().is_symlink() => {
+                            return Err(rollback_conflict(
+                                &path,
+                                "the path is no longer a regular file installed by this transaction",
+                            ));
                         }
+                        Ok(_) => false,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                        Err(error) => return Err(error.into()),
+                    };
+                    if target_missing {
+                        // Already absent: the desired end state.
+                        continue;
+                    }
+                    let actual = compute_file_hash(&target).await?;
+                    if !actual.eq_ignore_ascii_case(new_hash) {
+                        // Someone modified the file after the failure. It is
+                        // no longer ours to delete, and the original "absent"
+                        // state cannot be restored without destroying their
+                        // bytes: manual resolution required.
+                        return Err(rollback_conflict(
+                            &path,
+                            &format!(
+                                "the installed file was modified after the transaction failed \
+                                 (expected {new_hash}, found {actual}); refusing to delete bytes \
+                                 this transaction does not own"
+                            ),
+                        ));
+                    }
+                    match std::fs::remove_file(&target) {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error.into()),
                     }
                 }
                 // Replaced: restore the backup. If the target no longer
-                // matches our installed digest either, a third party wrote to
-                // the path after the failure; refuse to guess and let the
-                // caller mark the transaction needs_recovery.
+                // matches our installed digest, a third party wrote to the
+                // path after the failure; refuse to guess and let the caller
+                // mark the transaction needs_recovery.
                 (Some(_), Some(new_hash)) => {
-                    let backup =
-                        resolve_backup(&self.backup_dir, &path, plan.backup_name.as_deref())?;
-                    let target_state = if target.exists() {
-                        compute_file_hash(&target).await.ok()
-                    } else {
-                        None
+                    let backup = self.resolve_backup_checked(&path, plan.backup_name.as_deref())?;
+                    let target_missing = match std::fs::symlink_metadata(&target) {
+                        Ok(meta) if meta.is_dir() || meta.file_type().is_symlink() => {
+                            return Err(rollback_conflict(
+                                &path,
+                                "the target path is no longer a regular file",
+                            ));
+                        }
+                        Ok(_) => false,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                        Err(error) => return Err(error.into()),
                     };
-                    let matches_installed = target_state
-                        .as_ref()
-                        .is_some_and(|actual| actual.eq_ignore_ascii_case(new_hash));
-                    let target_missing = !target.exists();
-                    if !matches_installed && !target_missing {
-                        return Err(MsvcKitError::Other(format!(
-                            "Rollback conflict for {path}: the file no longer matches the                              installed digest {new_hash} and the original bytes are in the                              transaction backup; manual resolution required"
-                        )));
-                    }
                     if target_missing {
                         std::fs::rename(&backup, &target)?;
                     } else {
+                        let actual = compute_file_hash(&target).await?;
+                        if !actual.eq_ignore_ascii_case(new_hash) {
+                            return Err(rollback_conflict(
+                                &path,
+                                &format!(
+                                    "the file no longer matches the installed digest {new_hash} \
+                                     and the original bytes are in the transaction backup"
+                                ),
+                            ));
+                        }
                         std::fs::copy(&backup, &target)?;
                         std::fs::remove_file(&backup)?;
                     }
                 }
-                // Backup intent without an install: the target still holds
-                // the original bytes (the rename never completed) unless the
-                // rename completed but the event was lost - in which case the
-                // backup file exists and must be restored.
-                (Some(_), None) => {
-                    if !target.exists() {
+                // Backup intent without an install event: the rename either
+                // never completed (target still holds the original bytes) or
+                // completed with its BackupDone event lost (target is absent
+                // and the backup must be restored).
+                (Some(old_hash), None) => {
+                    let target_missing = match std::fs::symlink_metadata(&target) {
+                        Ok(meta) if meta.is_dir() || meta.file_type().is_symlink() => {
+                            return Err(rollback_conflict(
+                                &path,
+                                "the target path is no longer a regular file",
+                            ));
+                        }
+                        Ok(_) => false,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                        Err(error) => return Err(error.into()),
+                    };
+                    if target_missing {
                         let backup =
-                            resolve_backup(&self.backup_dir, &path, plan.backup_name.as_deref())?;
+                            self.resolve_backup_checked(&path, plan.backup_name.as_deref())?;
                         std::fs::rename(&backup, &target)?;
+                    } else {
+                        let actual = compute_file_hash(&target).await?;
+                        if !actual.eq_ignore_ascii_case(old_hash) {
+                            return Err(rollback_conflict(
+                                &path,
+                                &format!(
+                                    "the target no longer holds the original digest {old_hash} \
+                                     and the backup was not installed"
+                                ),
+                            ));
+                        }
                     }
                 }
                 (None, None) => {}
@@ -1110,11 +1216,21 @@ impl Transaction {
         }
 
         // The installed manifest of a rolled-back transaction is void.
-        let _ = std::fs::remove_file(installed_manifest_path(&self.root, &self.tx_id));
+        let manifest = installed_manifest_path(&self.root, &self.tx_id);
+        super::path_safety::check_no_reparse_within(&self.root, &manifest)?;
+        match std::fs::remove_file(&manifest) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
         Ok(())
     }
 
     fn mark_needs_recovery(&mut self, reason: &str) -> Result<()> {
+        let marker_path = self.tx_dir.join(NEEDS_RECOVERY_FILE);
+        // P1 (v3): never write the recovery marker through a reparse point
+        // planted in the transaction workspace.
+        super::path_safety::check_no_reparse_within(&self.root, &marker_path)?;
         let marker = serde_json::json!({
             "schema": TRANSACTION_JOURNAL_SCHEMA,
             "transaction_id": self.tx_id,
@@ -1122,11 +1238,17 @@ impl Transaction {
             "reason": reason,
             "recorded_at": chrono::Utc::now(),
         });
-        atomic_write(
-            &self.tx_dir.join(NEEDS_RECOVERY_FILE),
-            serde_json::to_vec_pretty(&marker)?.as_slice(),
-        )
+        atomic_write(&marker_path, serde_json::to_vec_pretty(&marker)?.as_slice())
     }
+}
+
+/// Error for a rollback that cannot restore the pre-transaction state without
+/// guessing: the path was modified by a third party or no longer exists in a
+/// shape the journal can account for.
+fn rollback_conflict(path: &str, detail: &str) -> MsvcKitError {
+    MsvcKitError::Other(format!(
+        "Rollback conflict for {path}: {detail}; manual resolution required"
+    ))
 }
 
 /// Whether the journal already carries a Committed event (the point of no
@@ -1278,15 +1400,21 @@ pub async fn recover_pending(root: &Path) -> Result<RecoveryReport> {
     if !tx_root.is_dir() {
         return Ok(report);
     }
+    // P1 (v3): the transaction workspace is part of the install boundary;
+    // refuse to enumerate or clean it when a reparse point (a junction
+    // planted after the crash) redirects it elsewhere.
+    super::path_safety::check_no_reparse_within(root, &tx_root)?;
     for entry in std::fs::read_dir(&tx_root)? {
         let entry = entry?;
         let tx_dir = entry.path();
+        let tx_id = entry.file_name().to_string_lossy().into_owned();
+        super::path_safety::check_no_reparse_within(root, &tx_dir)?;
         if !tx_dir.is_dir() {
             continue;
         }
         report.transactions_examined += 1;
-        let tx_id = entry.file_name().to_string_lossy().into_owned();
         let journal = tx_dir.join(JOURNAL_FILE);
+        super::path_safety::check_no_reparse_within(root, &journal)?;
 
         if tx_dir.join(NEEDS_RECOVERY_FILE).exists() {
             report.needs_recovery.push(tx_id);
@@ -1318,6 +1446,9 @@ pub async fn recover_pending(root: &Path) -> Result<RecoveryReport> {
         if committed {
             // Only the backup directory may be cleaned.
             let backup = tx_dir.join("backup");
+            // P1 (v3): cleaning a committed transaction must not traverse a
+            // reparse point either.
+            super::path_safety::check_no_reparse_within(root, &backup)?;
             if backup.is_dir() {
                 let _ = std::fs::remove_dir_all(&backup);
             }
@@ -1351,9 +1482,19 @@ pub async fn recover_pending(root: &Path) -> Result<RecoveryReport> {
         };
         match tx.rollback_inner().await {
             Ok(()) => {
-                let _ = tx.append_event(JournalEventKind::RolledBack, "recovery", None);
-                let _ = std::fs::remove_dir_all(&tx_dir);
-                report.rolled_back.push(tx_id);
+                // P2 (v3): only report a clean rollback once the journal
+                // records it; otherwise leave the transaction for the next
+                // recovery run (with its data intact).
+                match tx.append_event(JournalEventKind::RolledBack, "recovery", None) {
+                    Ok(()) => {
+                        let _ = std::fs::remove_dir_all(&tx_dir);
+                        report.rolled_back.push(tx_id);
+                    }
+                    Err(error) => {
+                        let _ = tx.mark_needs_recovery(&error.to_string());
+                        report.needs_recovery.push(tx_id);
+                    }
+                }
             }
             Err(error) => {
                 let _ = tx.mark_needs_recovery(&error.to_string());
