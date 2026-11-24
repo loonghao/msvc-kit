@@ -413,7 +413,7 @@ impl Transaction {
         self.append_event_with_backup(kind, path, hash, None)
     }
 
-    /// Like [`append_event`] but records the exact backup file name (within
+    /// Like [`Self::append_event`] but records the exact backup file name (within
     /// this transaction's backup dir) that a WillBackup/BackupDone event took,
     /// so recovery can restore the precise file even when two distinct paths
     /// sanitize to the same human-readable suffix (P1: `a/b` vs `a__b`).
