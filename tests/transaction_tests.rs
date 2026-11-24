@@ -994,6 +994,47 @@ async fn rollback_fails_closed_when_created_file_cannot_be_hashed() {
     );
 }
 
+/// P2 (v3), Windows counterpart: hold the installed file open with no
+/// sharing, so the rollback cannot read (or even stat) it. The transaction
+/// must go to needs_recovery instead of being reported as rolled back.
+#[cfg(windows)]
+#[tokio::test]
+async fn rollback_fails_closed_when_created_file_is_locked() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let fx = Fixture::new(&[(REL_FILE, b"ours")]);
+    let (tx, tx_id, _) =
+        begin_and_fail_commit(&fx.root, &fx.payload, FaultPoint::BeforeOwnershipWrite).await;
+    let target = fx.root.join(REL_FILE);
+    assert_eq!(std::fs::read(&target).unwrap(), b"ours");
+
+    let locked = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&target)
+        .unwrap();
+
+    let error = tx.rollback("injected failure").await.unwrap_err();
+    assert!(
+        error.to_string().to_lowercase().contains("another process")
+            || error.to_string().to_lowercase().contains("sharing")
+            || error.to_string().contains("IO error"),
+        "the locked file must surface an I/O failure, got: {error}"
+    );
+
+    drop(locked);
+    assert!(
+        std::fs::read(&target).is_ok(),
+        "an unverifiable file must not be deleted on an unverified rollback"
+    );
+    let tx_dir = fx.root.join(".msvc-kit").join("transactions").join(&tx_id);
+    assert!(tx_dir.join("needs-recovery.json").exists());
+    assert!(
+        !read_journal(&fx.root, &tx_id).contains("rolled_back"),
+        "a failed rollback must not be journaled as successful"
+    );
+}
+
 /// P2 (v3): a created file modified by a third party after the failure is no
 /// longer ours to delete; the rollback must go to needs_recovery instead of
 /// deleting or silently ignoring it.
