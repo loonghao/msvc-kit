@@ -32,6 +32,7 @@ use super::contracts::{
 };
 use crate::downloader::hash::compute_file_hash;
 use crate::error::{MsvcKitError, Result};
+use crate::installer::path_safety::{ensure_safe_directory, real_dir_or_file};
 use crate::storage::atomic_write;
 
 pub(crate) const TRANSACTIONS_DIR: &str = "transactions";
@@ -278,25 +279,164 @@ fn official_digest_for(payload: &Path, digests: &HashMap<PathBuf, String>) -> Op
 /// Load the ownership index, or an empty one when the root predates it.
 fn load_ownership(root: &Path) -> Result<OwnershipIndexDocument> {
     let path = ownership_path(root);
-    if !path.exists() {
+    super::path_safety::check_no_reparse_within(root, &path)?;
+    let Some(meta) = real_dir_or_file(&path)? else {
         return Ok(OwnershipIndexDocument {
             schema: OWNERSHIP_INDEX_SCHEMA.to_string(),
             entries: Vec::new(),
         });
+    };
+    if !meta.is_file() {
+        return Err(MsvcKitError::Other(format!(
+            "Ownership index path is not a file: {:?}",
+            path
+        )));
     }
     let document: OwnershipIndexDocument = serde_json::from_slice(&std::fs::read(&path)?)?;
     Ok(document)
 }
 
-/// Whether the root carries evidence that msvc-kit managed it before the
-/// ownership index existed (legacy adoption path).
-fn root_has_legacy_management(root: &Path) -> bool {
+/// Legacy installation evidence, built only from *verifiable* credentials.
+///
+/// Historical msvc-kit receipts record download provenance (component,
+/// version, payload names/hashes) but no installed-tree paths, so they cannot
+/// yield a per-file ownership set. The only compatibility contract this
+/// version can honour is the root-level adoption used before the ownership
+/// index existed: a root with at least one *valid* legacy receipt or one valid
+/// v2 extraction marker is adopted wholesale, with every replaced file backed
+/// up in the transaction journal. A non-empty directory or a link to foreign
+/// data is NOT such evidence.
+#[derive(Debug, Default)]
+struct LegacyOwnership {
+    valid_evidence: bool,
+}
+
+/// Validate a legacy receipt's schema and fields without trusting its file
+/// name or path. Both schema versions written by historical msvc-kit releases
+/// are accepted; only a fully parsed, consistent record counts.
+fn valid_legacy_receipt(path: &Path) -> Result<bool> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct LegacyReceipt {
+        schema: String,
+        component: String,
+        version: String,
+        #[allow(dead_code)]
+        arch: crate::Architecture,
+        #[allow(dead_code)]
+        host_arch: crate::Architecture,
+        #[serde(default)]
+        #[allow(dead_code)]
+        vs_channel: Option<String>,
+        #[allow(dead_code)]
+        components: Vec<String>,
+        #[allow(dead_code)]
+        payloads: Vec<crate::toolchain_lock::LockedPayload>,
+    }
+
+    let Some(meta) = real_dir_or_file(path)? else {
+        return Ok(false);
+    };
+    if !meta.is_file() {
+        return Ok(false);
+    }
+    let bytes = std::fs::read(path)?;
+    let Ok(receipt) = serde_json::from_slice::<LegacyReceipt>(&bytes) else {
+        return Ok(false);
+    };
+    Ok(matches!(
+        receipt.schema.as_str(),
+        "msvc-kit.installation-receipt.v1" | "msvc-kit.installation-receipt.v2"
+    ) && !receipt.component.is_empty()
+        && !receipt.version.is_empty())
+}
+
+/// Validate a v2 extraction marker: name shape plus schema and source digest
+/// inside the file. v1 markers ("<name>-<16hex>.done") never validate, exactly
+/// as in `probe_extraction_marker`.
+fn valid_legacy_marker(path: &Path) -> Result<bool> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct LegacyMarker {
+        schema: String,
+        source_sha256: String,
+        #[allow(dead_code)]
+        source_name: String,
+    }
+
+    if !path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.contains("-v2-") && name.ends_with(".done"))
+    {
+        return Ok(false);
+    }
+    let Some(meta) = real_dir_or_file(path)? else {
+        return Ok(false);
+    };
+    if !meta.is_file() {
+        return Ok(false);
+    }
+    let bytes = std::fs::read(path)?;
+    let Ok(marker) = serde_json::from_slice::<LegacyMarker>(&bytes) else {
+        return Ok(false);
+    };
+    Ok(marker.schema == super::EXTRACTION_MARKER_SCHEMA && marker.source_sha256.len() == 64)
+}
+
+/// Detect legacy msvc-kit management without following links or swallowing
+/// errors. Every credential directory is checked component-by-component; a
+/// reparse point, an unexpected metadata error, or a malformed credential is
+/// never treated as ownership evidence.
+fn detect_legacy_ownership(root: &Path) -> Result<LegacyOwnership> {
+    super::path_safety::check_no_reparse_within(root, root)?;
+    let mut ownership = LegacyOwnership::default();
+
     let receipts = msvc_kit_dir(root).join("receipts");
+    super::path_safety::check_no_reparse_within(root, &receipts)?;
+    if let Some(meta) = real_dir_or_file(&receipts)? {
+        if !meta.is_dir() {
+            return Err(MsvcKitError::Other(format!(
+                "Legacy receipts path is not a directory: {:?}",
+                receipts
+            )));
+        }
+        for entry in std::fs::read_dir(&receipts)? {
+            let entry = entry?;
+            let path = entry.path();
+            super::path_safety::check_no_reparse_within(root, &path)?;
+            if valid_legacy_receipt(&path)? {
+                ownership.valid_evidence = true;
+                break;
+            }
+        }
+    }
+
+    if ownership.valid_evidence {
+        return Ok(ownership);
+    }
+
     let markers = root.join(".msvc-kit-extracted");
-    (receipts.is_dir()
-        && std::fs::read_dir(&receipts).is_ok_and(|mut entries| entries.next().is_some()))
-        || (markers.is_dir()
-            && std::fs::read_dir(&markers).is_ok_and(|mut entries| entries.next().is_some()))
+    super::path_safety::check_no_reparse_within(root, &markers)?;
+    if let Some(meta) = real_dir_or_file(&markers)? {
+        if !meta.is_dir() {
+            return Err(MsvcKitError::Other(format!(
+                "Legacy extraction-marker path is not a directory: {:?}",
+                markers
+            )));
+        }
+        for entry in std::fs::read_dir(&markers)? {
+            let entry = entry?;
+            let path = entry.path();
+            super::path_safety::check_no_reparse_within(root, &path)?;
+            if valid_legacy_marker(&path)? {
+                ownership.valid_evidence = true;
+                break;
+            }
+        }
+    }
+
+    Ok(ownership)
 }
 
 /// An active transaction. The caller must hold the install root lock.
@@ -322,12 +462,33 @@ impl Transaction {
     /// Callers must hold the install root lock; `recover_pending` must have
     /// been run (this constructor re-checks for `needs_recovery` markers).
     pub fn begin(root: &Path, plan_id: &str, faults: FaultHook) -> Result<Self> {
-        let tx_root = transactions_dir(root);
-        std::fs::create_dir_all(&tx_root)?;
-        // Refuse to start when any transaction is in needs-recovery.
+        // P1: establish a verified directory chain before *any* read or
+        // write. A junction/symlink at `.msvc-kit` or `transactions` would
+        // otherwise redirect journal creation outside the install root.
+        let ms_kit = ensure_safe_directory(root, Path::new(".msvc-kit"))?;
+        let tx_root = ensure_safe_directory(&ms_kit, Path::new(TRANSACTIONS_DIR))?;
+        // Refuse to start when any transaction is in needs-recovery. Entries
+        // are checked with symlink_metadata and never followed; an entry that
+        // is not a real directory is an unsafe workspace and refused.
         for entry in std::fs::read_dir(&tx_root)? {
             let entry = entry?;
-            if entry.path().join(NEEDS_RECOVERY_FILE).exists() {
+            let entry_path = entry.path();
+            super::path_safety::check_no_reparse_within(root, &entry_path)?;
+            let meta = real_dir_or_file(&entry_path)?.ok_or_else(|| {
+                MsvcKitError::Other(format!(
+                    "Transaction entry vanished during begin: {:?}",
+                    entry_path
+                ))
+            })?;
+            if !meta.is_dir() {
+                return Err(MsvcKitError::Other(format!(
+                    "Refusing non-directory entry in transactions: {:?}",
+                    entry_path
+                )));
+            }
+            let marker = entry_path.join(NEEDS_RECOVERY_FILE);
+            super::path_safety::check_no_reparse_within(root, &marker)?;
+            if real_dir_or_file(&marker)?.is_some() {
                 return Err(MsvcKitError::Other(format!(
                     "Transaction {} is in needs_recovery; run `msvc-kit recover --dir {}` \
                      before installing",
@@ -336,17 +497,28 @@ impl Transaction {
                 )));
             }
         }
+        // A secure random nonce makes collisions impossible even when the
+        // same process starts twice within one second with the same plan.
+        // `create_dir` (not `create_dir_all`) is the exclusive claim: an
+        // existing directory is never reused or overwritten.
+        use rand::RngCore as _;
+        let mut nonce = [0u8; 12];
+        rand::rng().fill_bytes(&mut nonce);
         let tx_id = format!(
-            "{}-{}",
+            "{}-{}-{}",
             chrono::Utc::now().format("%Y%m%dT%H%M%S"),
-            &sha256_hex(format!("{plan_id}|{}", std::process::id()).as_bytes())[..12]
+            &sha256_hex(format!("{plan_id}|{}", std::process::id()).as_bytes())[..12],
+            hex::encode(nonce)
         );
+        let tx_relative = Path::new(TRANSACTIONS_DIR).join(&tx_id);
         let tx_dir = tx_root.join(&tx_id);
-        let packages_dir = tx_dir.join("packages");
-        let backup_dir = tx_dir.join("backup");
+        // Exclusive creation: never reuse or overwrite an existing tx dir.
+        super::path_safety::check_no_reparse_within(root, &tx_dir)?;
+        std::fs::create_dir(&tx_dir)?;
+        let tx_dir = ensure_safe_directory(&ms_kit, &tx_relative)?;
+        let packages_dir = ensure_safe_directory(&tx_dir, Path::new("packages"))?;
+        let backup_dir = ensure_safe_directory(&tx_dir, Path::new("backup"))?;
         let journal_path = tx_dir.join(JOURNAL_FILE);
-        std::fs::create_dir_all(&packages_dir)?;
-        std::fs::create_dir_all(&backup_dir)?;
         faults.hit(FaultPoint::AfterWorkspaceCreated)?;
 
         let mut tx = Self {
@@ -384,6 +556,64 @@ impl Transaction {
 
     pub fn journal_path(&self) -> &Path {
         &self.journal_path
+    }
+
+    /// Re-check the full boundary immediately before a write and create any
+    /// missing parent directories one level at a time. This closes the
+    /// pre-pass/write TOCTOU gap: a junction planted after classification is
+    /// refused here rather than silently written through.
+    fn prepare_target(&self, target: &Path) -> Result<()> {
+        super::path_safety::check_no_reparse_within(&self.root, target)?;
+        if let Some(parent) = target.parent() {
+            let relative = parent.strip_prefix(&self.root).map_err(|_| {
+                MsvcKitError::Other(format!("Target outside install root: {:?}", target))
+            })?;
+            if !relative.as_os_str().is_empty() {
+                ensure_safe_directory(&self.root, relative)?;
+            }
+        }
+        // Final check after creation: the target itself must still be safe.
+        super::path_safety::check_no_reparse_within(&self.root, target)?;
+        match real_dir_or_file(target)? {
+            Some(meta) if meta.is_dir() => Err(MsvcKitError::Other(format!(
+                "Refusing to write file over a directory at {:?}",
+                target
+            ))),
+            _ => Ok(()),
+        }
+    }
+
+    /// Verify a classification recorded in the pre-pass is still true right
+    /// before the mutation. Returns the current hash (None = absent).
+    async fn current_hash(
+        &self,
+        target: &Path,
+        expected_prepass: Option<&str>,
+    ) -> Result<Option<String>> {
+        self.prepare_target(target)?;
+        let current = match real_dir_or_file(target)? {
+            Some(meta) => {
+                if !meta.is_file() {
+                    return Err(MsvcKitError::Other(format!(
+                        "Target is no longer a regular file: {:?}",
+                        target
+                    )));
+                }
+                Some(compute_file_hash(target).await?)
+            }
+            None => None,
+        };
+        match (current.as_deref(), expected_prepass) {
+            (None, None) => {}
+            (Some(a), Some(b)) if a.eq_ignore_ascii_case(b) => {}
+            _ => {
+                return Err(MsvcKitError::Other(format!(
+                    "Target changed between pre-check and write: {:?}",
+                    target
+                )))
+            }
+        }
+        Ok(current)
     }
 
     fn append_line(&mut self, line: &JournalLine) -> Result<()> {
@@ -465,8 +695,14 @@ impl Transaction {
         classify: impl Fn(&Path) -> bool,
     ) -> Result<StagedPackage> {
         let dir_name = safe_package_dir_name(package_id);
-        let package_dir = self.packages_dir.join(&dir_name);
-        std::fs::create_dir_all(&package_dir)?;
+        let package_dir = ensure_safe_directory(
+            &self.root,
+            &Path::new(".msvc-kit")
+                .join(TRANSACTIONS_DIR)
+                .join(&self.tx_id)
+                .join("packages")
+                .join(&dir_name),
+        )?;
 
         let marker_dir = self.root.join(".msvc-kit-extracted");
         let mut files = Vec::new();
@@ -644,7 +880,8 @@ impl Transaction {
 
         // ---- Pre-pass: classify every file before touching the root. ----
         let mut ownership = load_ownership(&self.root)?;
-        let legacy_managed = root_has_legacy_management(&self.root);
+        let legacy = detect_legacy_ownership(&self.root)?;
+        let legacy_managed = legacy.valid_evidence;
         let ownership_lookup: HashMap<String, OwnershipEntry> = ownership
             .entries
             .iter()
@@ -660,6 +897,7 @@ impl Transaction {
                 /// replaced file; recorded in the journal so recovery restores
                 /// the precise file even when two paths share a suffix (P1).
                 backup_file_name: String,
+                /// Digest observed in the pre-pass; re-verified before write.
                 old_hash: String,
             },
         }
@@ -761,15 +999,17 @@ impl Transaction {
             let target = self.root.join(&file.relative);
             match planned {
                 Planned::Create => {
+                    // TOCTOU: re-validate absence and the directory chain
+                    // immediately before writing (both before the journal
+                    // event and again after the fault hook).
+                    self.current_hash(&target, None).await?;
                     self.append_event(
                         JournalEventKind::WillInstall,
                         &journal_path,
                         Some(file.sha256.clone()),
                     )?;
                     self.faults.hit(FaultPoint::BeforeInstall)?;
-                    if let Some(parent) = target.parent() {
-                        std::fs::create_dir_all(parent)?;
-                    }
+                    self.current_hash(&target, None).await?;
                     std::fs::copy(&file.staging_path, &target)?;
                     let installed = compute_file_hash(&target).await?;
                     if !installed.eq_ignore_ascii_case(&file.sha256) {
@@ -798,7 +1038,9 @@ impl Transaction {
                     );
                 }
                 Planned::Skip => {
-                    // Bytes already correct: record ownership only.
+                    // Bytes already correct: re-verify before recording ownership.
+                    self.current_hash(&target, Some(&file.sha256)).await?;
+                    // record ownership only.
                     self.ownership_added.insert(
                         key.clone(),
                         OwnershipEntry {
@@ -815,8 +1057,10 @@ impl Transaction {
                     old_hash,
                 } => {
                     // P1: never back up / write through a reparse point along
-                    // the backup path either.
+                    // the backup path either. Re-check the target's pre-pass
+                    // digest immediately before the backup rename.
                     super::path_safety::check_no_reparse_within(&self.root, backup_path)?;
+                    self.current_hash(&target, Some(old_hash)).await?;
                     self.append_event_with_backup(
                         JournalEventKind::WillBackup,
                         &journal_path,
@@ -824,9 +1068,19 @@ impl Transaction {
                         Some(backup_file_name.clone()),
                     )?;
                     self.faults.hit(FaultPoint::BeforeBackup)?;
+                    self.current_hash(&target, Some(old_hash)).await?;
                     if let Some(parent) = backup_path.parent() {
-                        std::fs::create_dir_all(parent)?;
+                        ensure_safe_directory(
+                            &self.root,
+                            parent.strip_prefix(&self.root).map_err(|_| {
+                                MsvcKitError::Other(format!(
+                                    "Backup outside install root: {:?}",
+                                    backup_path
+                                ))
+                            })?,
+                        )?;
                     }
+                    super::path_safety::check_no_reparse_within(&self.root, &target)?;
                     std::fs::rename(&target, backup_path)?;
                     self.faults.hit(FaultPoint::AfterBackup)?;
                     self.append_event_with_backup(
@@ -841,9 +1095,9 @@ impl Transaction {
                         Some(file.sha256.clone()),
                     )?;
                     self.faults.hit(FaultPoint::BeforeInstall)?;
-                    if let Some(parent) = target.parent() {
-                        std::fs::create_dir_all(parent)?;
-                    }
+                    // The rename removed the original: re-confirm absence and
+                    // a clean directory chain before installing new bytes.
+                    self.current_hash(&target, None).await?;
                     std::fs::copy(&file.staging_path, &target)?;
                     let installed = compute_file_hash(&target).await?;
                     if !installed.eq_ignore_ascii_case(&file.sha256) {
@@ -881,15 +1135,24 @@ impl Transaction {
         let ownership_backup = self.backup_dir.join(&ownership_backup_name);
         // P1: never back up through a reparse point on the metadata path either.
         super::path_safety::check_no_reparse_within(&self.root, &ownership_backup)?;
+        super::path_safety::check_no_reparse_within(&self.root, &ownership_target)?;
+        ensure_safe_directory(&self.root, Path::new(".msvc-kit"))?;
         // Journal the metadata transition: a None hash means "did not exist
         // before this transaction" so rollback removes the file; a digest
         // means "existed" and rollback restores the backup bytes.
-        let prior_ownership_hash = if ownership_target.exists() {
-            let hash = compute_file_hash(&ownership_target).await?;
-            std::fs::copy(&ownership_target, &ownership_backup)?;
-            Some(hash)
-        } else {
-            None
+        let prior_ownership_hash = match real_dir_or_file(&ownership_target)? {
+            Some(meta) if meta.is_file() => {
+                let hash = compute_file_hash(&ownership_target).await?;
+                std::fs::copy(&ownership_target, &ownership_backup)?;
+                Some(hash)
+            }
+            Some(_) => {
+                return Err(MsvcKitError::Other(format!(
+                    "Ownership index is not a regular file: {:?}",
+                    ownership_target
+                )))
+            }
+            None => None,
         };
         self.append_event_with_backup(
             JournalEventKind::WillBackup,
@@ -946,7 +1209,10 @@ impl Transaction {
                 .collect(),
         };
         let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
-        std::fs::create_dir_all(msvc_kit_dir(&self.root).join(INSTALLED_MANIFESTS_DIR))?;
+        ensure_safe_directory(
+            &self.root,
+            &Path::new(".msvc-kit").join(INSTALLED_MANIFESTS_DIR),
+        )?;
         atomic_write(
             &installed_manifest_path(&self.root, &self.tx_id),
             &manifest_bytes,
@@ -1315,7 +1581,7 @@ fn read_journal_events(journal: &Path) -> Result<Vec<JournalEvent>> {
 fn resolve_backup(backup_dir: &Path, key: &str, precise: Option<&str>) -> Result<PathBuf> {
     if let Some(name) = precise {
         let candidate = backup_dir.join(name);
-        if candidate.exists() {
+        if real_dir_or_file(&candidate)?.is_some() {
             return Ok(candidate);
         }
     }
@@ -1397,8 +1663,14 @@ fn compute_file_hash_sync(path: &Path) -> Result<String> {
 pub async fn recover_pending(root: &Path) -> Result<RecoveryReport> {
     let mut report = RecoveryReport::default();
     let tx_root = transactions_dir(root);
-    if !tx_root.is_dir() {
+    let Some(tx_root_meta) = real_dir_or_file(&tx_root)? else {
         return Ok(report);
+    };
+    if !tx_root_meta.is_dir() {
+        return Err(MsvcKitError::Other(format!(
+            "Transactions path is not a directory: {:?}",
+            tx_root
+        )));
     }
     // P1 (v3): the transaction workspace is part of the install boundary;
     // refuse to enumerate or clean it when a reparse point (a junction
@@ -1409,18 +1681,28 @@ pub async fn recover_pending(root: &Path) -> Result<RecoveryReport> {
         let tx_dir = entry.path();
         let tx_id = entry.file_name().to_string_lossy().into_owned();
         super::path_safety::check_no_reparse_within(root, &tx_dir)?;
-        if !tx_dir.is_dir() {
-            continue;
+        let Some(tx_meta) = real_dir_or_file(&tx_dir)? else {
+            return Err(MsvcKitError::Other(format!(
+                "Transaction entry vanished during recovery: {:?}",
+                tx_dir
+            )));
+        };
+        if !tx_meta.is_dir() {
+            return Err(MsvcKitError::Other(format!(
+                "Refusing non-directory transaction entry: {:?}",
+                tx_dir
+            )));
         }
         report.transactions_examined += 1;
         let journal = tx_dir.join(JOURNAL_FILE);
         super::path_safety::check_no_reparse_within(root, &journal)?;
-
-        if tx_dir.join(NEEDS_RECOVERY_FILE).exists() {
+        let marker = tx_dir.join(NEEDS_RECOVERY_FILE);
+        super::path_safety::check_no_reparse_within(root, &marker)?;
+        if real_dir_or_file(&marker)?.is_some() {
             report.needs_recovery.push(tx_id);
             continue;
         }
-        if !journal.exists() {
+        if real_dir_or_file(&journal)?.is_none() {
             // No journal: nothing was decided; safe to clean staging.
             let _ = std::fs::remove_dir_all(&tx_dir);
             report.cleaned_staging.push(tx_id);
@@ -1449,7 +1731,7 @@ pub async fn recover_pending(root: &Path) -> Result<RecoveryReport> {
             // P1 (v3): cleaning a committed transaction must not traverse a
             // reparse point either.
             super::path_safety::check_no_reparse_within(root, &backup)?;
-            if backup.is_dir() {
+            if real_dir_or_file(&backup)?.is_some_and(|meta| meta.is_dir()) {
                 let _ = std::fs::remove_dir_all(&backup);
             }
             report.cleaned_backups.push(tx_id);

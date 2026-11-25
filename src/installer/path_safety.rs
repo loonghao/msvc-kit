@@ -327,6 +327,86 @@ pub(crate) fn check_no_reparse_within(
     Ok(())
 }
 
+/// Classify an existing path without ever following a symlink/junction.
+///
+/// Returns the metadata when the path is a real directory or file, `Ok(None)`
+/// when it does not exist, and an error for any other metadata failure or for
+/// any reparse point (which may be a symlink, a Windows junction, or another
+/// name-surrogate reparse tag). Security decisions must use this instead of
+/// `Path::is_dir`/`is_file`/`exists`, which follow links and swallow errors.
+pub(crate) fn real_dir_or_file(
+    path: &std::path::Path,
+) -> std::result::Result<Option<std::fs::Metadata>, crate::MsvcKitError> {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if meta.file_type().is_symlink() {
+        return Err(crate::MsvcKitError::Other(format!(
+            "Refusing reparse point at {:?}",
+            path
+        )));
+    }
+    Ok(Some(meta))
+}
+
+/// Ensure a directory exists under `root` as a chain of real directories.
+///
+/// The relative path must be non-empty and contain only normal components;
+/// no absolute paths or `..` are accepted. Every existing component is
+/// checked with [`check_no_reparse_within`] before it is used, each directory
+/// is created one level at a time (never a recursive traversal through an
+/// unknown path), and every created level is re-checked to be a real
+/// directory. Suspicious paths are reported, never repaired or removed.
+pub(crate) fn ensure_safe_directory(
+    root: &std::path::Path,
+    relative: &std::path::Path,
+) -> std::result::Result<std::path::PathBuf, crate::MsvcKitError> {
+    if relative.as_os_str().is_empty() {
+        return Err(crate::MsvcKitError::Other(
+            "Refusing empty relative directory path".to_string(),
+        ));
+    }
+    let mut current = root.to_path_buf();
+    check_no_reparse_within(root, &current)?;
+    for component in relative.components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            return Err(crate::MsvcKitError::Other(format!(
+                "Refusing unsafe directory component in {:?}",
+                relative
+            )));
+        }
+        current.push(component);
+        check_no_reparse_within(root, &current)?;
+        match real_dir_or_file(&current)? {
+            Some(meta) if meta.is_dir() => {}
+            Some(_) => {
+                return Err(crate::MsvcKitError::Other(format!(
+                    "Refusing non-directory at {:?}",
+                    current
+                )))
+            }
+            None => {
+                std::fs::create_dir(&current)?;
+                // Re-validate after creation: the component must be a real
+                // directory and must not have become a reparse point.
+                match real_dir_or_file(&current)? {
+                    Some(meta) if meta.is_dir() => {}
+                    other => {
+                        return Err(crate::MsvcKitError::Other(format!(
+                            "Unexpected state {:?} after creating directory {:?}",
+                            other.map(|meta| meta.file_type().is_dir()),
+                            current
+                        )))
+                    }
+                }
+            }
+        }
+    }
+    Ok(current)
+}
+
 /// Refuse a single path if it is a reparse point. A missing path is fine (it
 /// will be created/checked again later); any other metadata failure means the
 /// path state is unknown and is therefore refused.

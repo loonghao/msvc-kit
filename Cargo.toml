@@ -82,6 +82,9 @@ hex = "0.4"
 base64 = "0.23"
 tempfile = "3.25"
 
+# Unique transaction IDs (secure random nonce)
+rand = "0.9"
+
 # Self-update via axoupdater (optional, compatible with cargo-dist releases)
 axoupdater = { version = "0.10", default-features = false, features = ["github_releases"], optional = true }
 
