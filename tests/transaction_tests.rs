@@ -1415,15 +1415,19 @@ async fn transactions_have_unique_ids_for_same_plan() {
     assert!(second.journal_path().is_file());
 }
 
-/// P1-C: a junction planted *between* the pre-pass and the write must be
+/// P1-C: a junction planted *before the final pre-write re-check* must be
 /// refused at the write; no bytes may leak outside the install root.
 ///
 /// This is a deterministic TOCTOU race injection: `FaultHook::with_action`
 /// swaps the target's parent directory (`root/VC`) for a reparse point aimed
-/// at an outside directory at the exact transaction boundary between the
-/// pre-write re-check and `std::fs::copy`. No sleeps or timing are involved —
-/// the hook runs synchronously at the fault point, so the race is reproduced
-/// every run (or skipped when the platform cannot create a reparse point).
+/// at an outside directory after the first pre-write re-check and before the
+/// second one. No sleeps or timing are involved — the hook runs synchronously
+/// at the fault point, so the race is reproduced every run (or skipped when
+/// the platform cannot create a reparse point).
+///
+/// Scope: this proves the *re-check* catches a swap that happens before it.
+/// It does **not** prove the final check-to-use window is closed — see
+/// `toctou_create_final_window_is_documented_residual_risk`.
 #[tokio::test]
 async fn commit_rechecks_target_before_write() {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1508,9 +1512,14 @@ async fn commit_rechecks_target_before_write() {
     );
 }
 
-/// P1-C (replace path): a junction planted before the backup rename must be
-/// refused, so neither the backup nor the install traverses the reparse
-/// point. The outside tree (and the original file it mirrors) stays intact.
+/// P1-C (replace path): a junction planted before the final pre-backup
+/// re-check must be refused, so neither the backup nor the install traverses
+/// the reparse point. The outside tree (and the original file it mirrors)
+/// stays intact.
+///
+/// Scope: like the create-path test above, this covers a swap that lands
+/// *before* the re-check. The final check-to-use window is pinned separately
+/// by `toctou_replace_final_window_is_documented_residual_risk`.
 #[tokio::test]
 async fn commit_rechecks_replace_target_before_backup() {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1592,5 +1601,155 @@ async fn commit_rechecks_replace_target_before_backup() {
     assert!(
         report.rolled_back.is_empty() && report.cleaned_staging.is_empty(),
         "a refused rollback must not be reported as success: {report:?}"
+    );
+}
+
+/// Residual TOCTOU window — create path: the junction is planted *after* the
+/// final `current_hash`/`prepare_target` check has passed and immediately
+/// before `std::fs::copy`. There is no further path validation in between in
+/// the current implementation, so the copy follows the swapped path. This
+/// test pins that reality rather than pretending the check closes the race.
+///
+/// Closing it requires handle-relative operations (a directory handle plus
+/// `openat`/`NtCreateFile`-style calls), which the current `std::fs` code does
+/// not use. See the "Residual TOCTOU risk" section in the transaction module.
+#[tokio::test]
+async fn toctou_create_final_window_is_documented_residual_risk() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let fx = Fixture::new(&[(REL_FILE, b"content")]);
+    let outside = fx._guard.path().join("outside-create-final");
+    // The copy must have a destination inside the swapped-in tree; otherwise
+    // it would fail for "directory missing" and prove nothing about the race.
+    std::fs::create_dir_all(outside.join("Tools").join("plan")).unwrap();
+    std::fs::write(outside.join("sentinel.txt"), b"keep").unwrap();
+
+    let root = fx.root.clone();
+    let outside_for_action = outside.clone();
+    let swapped = Arc::new(AtomicBool::new(false));
+    let swapped_for_action = Arc::clone(&swapped);
+    let hooks = FaultHook::with_action(FaultPoint::AfterInstallCheck, move || {
+        let vc = root.join("VC");
+        let _ = std::fs::remove_dir_all(&vc);
+        let ok = make_directory_link(&vc, &outside_for_action);
+        swapped_for_action.store(ok, Ordering::SeqCst);
+    });
+
+    let mut tx = transaction::Transaction::begin(&fx.root, "plan", hooks).unwrap();
+    let staged = tx
+        .stage_package(
+            PKG,
+            std::slice::from_ref(&fx.payload),
+            &HashMap::new(),
+            |_| true,
+        )
+        .await
+        .unwrap();
+    let merged = tx.merge(std::slice::from_ref(&staged)).unwrap();
+
+    let outcome = tx.commit(&merged).await;
+    if !swapped.load(Ordering::SeqCst) {
+        eprintln!("SKIP: cannot create a directory reparse point");
+        return;
+    }
+
+    // The final check-to-use window is real: the write succeeds *through* the
+    // link planted after the last validation. This is the residual risk; the
+    // test deliberately asserts it instead of claiming the window is closed.
+    outcome.expect("copy after the final check must follow the swapped path");
+    assert_eq!(
+        std::fs::read(outside.join("Tools").join("plan").join("file.txt")).unwrap(),
+        b"content",
+        "the file was written through the junction planted after the final check"
+    );
+    assert_eq!(
+        std::fs::read(outside.join("sentinel.txt")).unwrap(),
+        b"keep"
+    );
+}
+
+/// Residual TOCTOU window — replace path: the junction is planted *after*
+/// the final `current_hash` + backup-path reparse guard and immediately
+/// before `std::fs::rename`. The backup rename follows the link and moves a
+/// file from outside the root into the transaction backup directory; the
+/// following install copy is refused by its own fresh re-check, so the commit
+/// fails, but the boundary violation already happened. Same conclusion as
+/// above: repeated path checks narrow but do not eliminate the check-to-use
+/// race.
+#[tokio::test]
+async fn toctou_replace_final_window_is_documented_residual_risk() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let fx = Fixture::new(&[(REL_FILE, b"new-bytes")]);
+    fx.make_legacy_with_conflicting_file(REL_FILE, b"old-bytes");
+    let outside = fx._guard.path().join("outside-replace-final");
+    let outside_file = outside.join("Tools").join("plan").join("file.txt");
+    std::fs::create_dir_all(outside_file.parent().unwrap()).unwrap();
+    std::fs::write(&outside_file, b"old-bytes").unwrap();
+    std::fs::write(outside.join("sentinel.txt"), b"keep").unwrap();
+
+    let root = fx.root.clone();
+    let outside_for_action = outside.clone();
+    let swapped = Arc::new(AtomicBool::new(false));
+    let swapped_for_action = Arc::clone(&swapped);
+    let hooks = FaultHook::with_action(FaultPoint::AfterBackupCheck, move || {
+        let vc = root.join("VC");
+        let _ = std::fs::remove_dir_all(&vc);
+        let ok = make_directory_link(&vc, &outside_for_action);
+        swapped_for_action.store(ok, Ordering::SeqCst);
+    });
+
+    let mut tx = transaction::Transaction::begin(&fx.root, "plan", hooks).unwrap();
+    let staged = tx
+        .stage_package(
+            PKG,
+            std::slice::from_ref(&fx.payload),
+            &HashMap::new(),
+            |_| true,
+        )
+        .await
+        .unwrap();
+    let merged = tx.merge(std::slice::from_ref(&staged)).unwrap();
+
+    let outcome = tx.commit(&merged).await;
+    if !swapped.load(Ordering::SeqCst) {
+        eprintln!("SKIP: cannot create a directory reparse point");
+        return;
+    }
+
+    // The backup rename followed the link planted after the final validation:
+    // the outside file was moved into this transaction's backup directory. The
+    // install copy that follows is then refused by its own fresh re-check, so
+    // the commit fails — but the boundary violation already happened. That is
+    // exactly the residual risk this test pins.
+    assert!(
+        outcome.is_err(),
+        "the later install re-check should stop the commit after the rename: {outcome:?}"
+    );
+    let error = outcome.unwrap_err();
+    assert!(
+        error.to_string().contains("reparse point"),
+        "expected the install re-check to refuse the swapped path, got: {error}"
+    );
+    assert!(
+        !outside_file.exists(),
+        "the backup rename moved the outside file through the junction"
+    );
+    let backup_dir = single_transaction_dir(&fx.root).join("backup");
+    let backups: Vec<PathBuf> = std::fs::read_dir(&backup_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(backups.len(), 1, "expected one backup file: {backups:?}");
+    assert_eq!(
+        std::fs::read(&backups[0]).unwrap(),
+        b"old-bytes",
+        "the outside file's bytes were moved into the backup directory"
+    );
+    assert_eq!(
+        std::fs::read(outside.join("sentinel.txt")).unwrap(),
+        b"keep"
     );
 }

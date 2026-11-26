@@ -16,6 +16,29 @@
 //! - a failed transaction either rolls back to the previous bytes or
 //!   persists a `needs_recovery` state that refuses new transactions until
 //!   `recover_pending` resolves it (idempotently).
+//!
+//! # Residual TOCTOU risk (documented, not eliminated)
+//!
+//! Every mutation re-validates the target path immediately before the write
+//! (`current_hash` → `prepare_target` → `check_no_reparse_within`), which
+//! catches a path swap that happens between the pre-pass and that final
+//! validation. It does **not** close the last check-to-use window: a
+//! directory in the target chain can still be replaced with a reparse point
+//! (junction/symlink) after the final validation returns and before
+//! `std::fs::copy`/`std::fs::rename` executes. All of these operations are
+//! path-based; `std::fs` offers no handle-relative (`openat`-style,
+//! `FILE_FLAG_OPEN_REPARSE_POINT` + `NtCreateFile` with a root directory
+//! handle) primitive that would bind validation and mutation to the same
+//! directory object. Closing that window therefore requires a platform
+//! specific handle-based rewrite and is out of scope here.
+//!
+//! The window is pinned by deterministic tests
+//! (`toctou_*_final_window_is_documented_residual_risk` in
+//! `tests/transaction_tests.rs`), which inject the swap **after** the final
+//! validation via [`FaultPoint::AfterInstallCheck`] /
+//! [`FaultPoint::AfterBackupCheck`] and assert the write follows the swapped
+//! path. Do not describe the repeated checks as "closing" TOCTOU: they
+//! narrow the window, they do not eliminate it.
 
 use std::collections::HashMap;
 use std::io::Write as _;
@@ -53,6 +76,16 @@ pub enum FaultPoint {
     AfterBackup,
     BeforeInstall,
     AfterInstall,
+    /// Fires after the final pre-write validation of a file install and
+    /// immediately before `std::fs::copy`. This is the residual
+    /// check-to-use window: a path swap injected here is *not* re-validated
+    /// and the copy follows it (see the module docs).
+    AfterInstallCheck,
+    /// Fires after the final pre-rename validation (including the backup-path
+    /// reparse guard) and immediately before `std::fs::rename` in the
+    /// replace path. Same residual check-to-use window as
+    /// [`FaultPoint::AfterInstallCheck`].
+    AfterBackupCheck,
     BeforeOwnershipWrite,
     BeforeInstalledManifestWrite,
     BeforeCommittedMarker,
@@ -71,6 +104,10 @@ type FaultAction = Arc<dyn Fn() + Send + Sync>;
 /// side effect at a point (used to deterministically change the file system
 /// *between* a transaction's pre-write re-check and the write itself, to
 /// reproduce TOCTOU races). Production code always uses [`FaultHook::none`].
+///
+/// This type is part of the public API only because `Transaction::begin`
+/// accepts it; the action-registration entry point is hidden from the
+/// generated docs and is not covered by semver (test-only).
 #[derive(Clone, Default)]
 pub struct FaultHook {
     points: Arc<Mutex<Vec<FaultPoint>>>,
@@ -105,6 +142,10 @@ impl FaultHook {
     /// an exact transaction boundary (e.g. swapping a target's parent
     /// directory for a reparse point between the pre-write re-check and the
     /// write), so a TOCTOU race is reproduced without sleeps or timing.
+    ///
+    /// Test-only and hidden from the generated docs: this is not a supported
+    /// public API and may change without notice.
+    #[doc(hidden)]
     pub fn with_action(point: FaultPoint, action: impl Fn() + Send + Sync + 'static) -> Self {
         Self {
             points: Arc::new(Mutex::new(Vec::new())),
@@ -600,9 +641,11 @@ impl Transaction {
     }
 
     /// Re-check the full boundary immediately before a write and create any
-    /// missing parent directories one level at a time. This closes the
-    /// pre-pass/write TOCTOU gap: a junction planted after classification is
-    /// refused here rather than silently written through.
+    /// missing parent directories one level at a time. This narrows the
+    /// pre-pass/write TOCTOU gap: a junction planted before this check is
+    /// refused rather than silently written through. It does not close the
+    /// final check-to-use window — see the module-level "Residual TOCTOU
+    /// risk" section.
     fn prepare_target(&self, target: &Path) -> Result<()> {
         super::path_safety::check_no_reparse_within(&self.root, target)?;
         if let Some(parent) = target.parent() {
@@ -1051,6 +1094,9 @@ impl Transaction {
                     )?;
                     self.faults.hit(FaultPoint::BeforeInstall)?;
                     self.current_hash(&target, None).await?;
+                    // Residual check-to-use window: nothing re-validates the
+                    // path between this point and the copy (module docs).
+                    self.faults.hit(FaultPoint::AfterInstallCheck)?;
                     std::fs::copy(&file.staging_path, &target)?;
                     let installed = compute_file_hash(&target).await?;
                     if !installed.eq_ignore_ascii_case(&file.sha256) {
@@ -1122,6 +1168,10 @@ impl Transaction {
                         )?;
                     }
                     super::path_safety::check_no_reparse_within(&self.root, &target)?;
+                    // Residual check-to-use window: nothing re-validates the
+                    // target chain between this point and the rename
+                    // (module docs).
+                    self.faults.hit(FaultPoint::AfterBackupCheck)?;
                     std::fs::rename(&target, backup_path)?;
                     self.faults.hit(FaultPoint::AfterBackup)?;
                     self.append_event_with_backup(
@@ -1139,6 +1189,8 @@ impl Transaction {
                     // The rename removed the original: re-confirm absence and
                     // a clean directory chain before installing new bytes.
                     self.current_hash(&target, None).await?;
+                    // Residual check-to-use window (module docs).
+                    self.faults.hit(FaultPoint::AfterInstallCheck)?;
                     std::fs::copy(&file.staging_path, &target)?;
                     let installed = compute_file_hash(&target).await?;
                     if !installed.eq_ignore_ascii_case(&file.sha256) {
