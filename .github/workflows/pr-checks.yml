@@ -397,12 +397,14 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
 
-  # Non-Windows compilation guard. See ci.yml: MsiexecBackend is cfg(windows)
-  # and a shared-module import must not assume a Windows target.
+  # Non-Windows guard. See ci.yml: MsiexecBackend is cfg(windows) and a
+  # shared-module import must not assume a Windows target. The full Linux
+  # test suite runs here too — `cargo check` alone never executes path-
+  # handling code, which is exactly what silently breaks on non-Windows.
   linux-check:
-    name: Linux cargo check
+    name: Linux check + tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -424,6 +426,9 @@ jobs:
 
       - name: Cargo check (Linux)
         run: vx just check-workspace
+
+      - name: Cargo test (Linux)
+        run: vx cargo test --all-features --no-fail-fast
 
 
   # Final gate

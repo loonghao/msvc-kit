@@ -209,7 +209,10 @@ pub async fn verify_installed_tree(
 
     for entry in &manifest.files {
         manifest_paths.insert(entry.path.clone());
-        let absolute = root.join(entry.path.replace('/', "\\"));
+        // Manifest paths are stored with '/'; join them with the platform's
+        // own separator. Hard-coding '\\' makes every lookup miss on
+        // non-Windows hosts (the whole path becomes one filename on Linux).
+        let absolute = root.join(entry.path.replace('/', std::path::MAIN_SEPARATOR_STR));
         if !absolute.is_file() {
             diffs.push(InstalledDiff::Missing {
                 path: entry.path.clone(),
