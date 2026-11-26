@@ -393,7 +393,7 @@ fn valid_legacy_receipt(path: &Path) -> Result<bool> {
 }
 
 /// Validate a v2 extraction marker: name shape plus schema and source digest
-/// inside the file. v1 markers ("<name>-<16hex>.done") never validate, exactly
+/// inside the file. v1 markers ("&lt;name&gt;-&lt;16hex&gt;.done") never validate, exactly
 /// as in `probe_extraction_marker`.
 fn valid_legacy_marker(path: &Path) -> Result<bool> {
     #[derive(serde::Deserialize)]
