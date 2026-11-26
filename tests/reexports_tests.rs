@@ -49,6 +49,7 @@ fn test_install_info_reexport() {
         install_path: PathBuf::new(),
         downloaded_files: vec![],
         arch: msvc_kit::Architecture::X64,
+        payload_sha256: Default::default(),
     };
 }
 
@@ -84,6 +85,7 @@ fn test_download_functions_exist() {
             install_path: std::path::PathBuf::new(),
             downloaded_files: vec![],
             arch: msvc_kit::Architecture::X64,
+            payload_sha256: Default::default(),
         })
     };
 }

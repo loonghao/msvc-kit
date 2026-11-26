@@ -75,6 +75,9 @@ impl InstallationReceipt {
     pub const SCHEMA: &'static str = "msvc-kit.installation-receipt.v2";
 }
 
+/// Toolchain lock v2 schema identifier (see installer::lock_v2).
+pub const LOCK_V2_SCHEMA: &str = "msvc-kit.toolchain-lock.v2";
+
 /// Exact installed versions plus optional source provenance from msvc-kit downloads.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

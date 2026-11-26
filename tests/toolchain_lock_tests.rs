@@ -53,6 +53,7 @@ async fn receipt_rejects_unverified_or_changed_payloads_without_replacing_previo
             arch: Architecture::X64,
             install_path: temp.path().into(),
             downloaded_files: if case == "empty" { vec![] } else { vec![file] },
+            payload_sha256: Default::default(),
         };
         let receipt = temp
             .path()
@@ -105,6 +106,7 @@ async fn receipt_accepts_full_official_sha_with_stale_size_and_uses_actual_size(
         arch: Architecture::X64,
         install_path: temp.path().into(),
         downloaded_files: vec![file],
+        payload_sha256: Default::default(),
     };
     record_installation(
         &info,
@@ -226,6 +228,7 @@ async fn locked_sources_reject_modified_bytes_and_source_urls_before_extraction(
         arch: lock.arch,
         install_path: temp.path().into(),
         downloaded_files: vec![file.clone()],
+        payload_sha256: Default::default(),
     };
     lock.verify_download(&info).await.unwrap();
     let mut legacy = lock.clone();
@@ -276,6 +279,7 @@ async fn recorded_receipts_capture_exact_selection_and_missing_provenance_fails(
         arch: selection.arch,
         install_path: install.clone(),
         downloaded_files: vec![source],
+        payload_sha256: Default::default(),
     };
     record_installation(
         &info,

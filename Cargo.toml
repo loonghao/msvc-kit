@@ -70,6 +70,9 @@ anyhow = "1.0.101"
 directories = "6.0"
 async-trait = "0.1.89"
 
+# Unicode NFC normalization for archive path collision keys
+unicode-normalization = "0.1"
+
 # Async utilities
 futures = "0.3"
 
@@ -78,6 +81,9 @@ sha2 = "0.11"
 hex = "0.4"
 base64 = "0.23"
 tempfile = "3.25"
+
+# Unique transaction IDs (secure random nonce)
+rand = "0.9"
 
 # Self-update via axoupdater (optional, compatible with cargo-dist releases)
 axoupdater = { version = "0.10", default-features = false, features = ["github_releases"], optional = true }
@@ -92,7 +98,7 @@ askama = "0.16.0"
 # Windows registry (Windows only)
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 rstest = "0.28"

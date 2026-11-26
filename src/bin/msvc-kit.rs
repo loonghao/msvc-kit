@@ -20,6 +20,16 @@ use msvc_kit::{
     ScriptContext, ShellType,
 };
 
+/// The blob store root lives next to the manifest cache under the
+/// configured cache directory.
+fn blob_store_root(config: &MsvcKitConfig) -> std::path::PathBuf {
+    config
+        .manifest_cache_dir()
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("msvc-kit-cache"))
+}
+
 /// Resolve the Visual Studio channel for a command.
 ///
 /// Precedence: command line flag > `MSVC_KIT_VS_CHANNEL` > config file > auto.
@@ -267,6 +277,28 @@ impl ToolchainArgs {
 }
 
 #[derive(Subcommand)]
+enum CacheAction {
+    /// Import files into the content-addressed blob store (re-runnable)
+    Import {
+        /// Files to import
+        #[arg(value_name = "FILE")]
+        files: Vec<PathBuf>,
+    },
+    /// Verify blobs (re-hash; quarantine mismatches)
+    Verify {
+        /// Digests to verify; default: all blobs in the store
+        #[arg(value_name = "DIGEST")]
+        digests: Vec<String>,
+    },
+    /// Garbage-collect unreferenced blobs
+    Gc {
+        /// Report what would be removed without deleting anything
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum Commands {
     /// Download MSVC and/or Windows SDK components
     Download {
@@ -323,6 +355,98 @@ enum Commands {
         /// Visual Studio channel to discover packages from (18/2026/17/2022, default: auto)
         #[arg(long, value_name = "CHANNEL")]
         vs_channel: Option<String>,
+
+        /// Pruning profile applied to the staged tree before commit (full, portable, minimal, custom)
+        #[arg(long, value_name = "PROFILE", default_value = "full")]
+        prune_profile: String,
+    },
+
+    /// Preview what an install would do, without downloading payloads or writing the target
+    Plan {
+        /// MSVC version to plan (default: latest)
+        #[arg(long)]
+        msvc_version: Option<String>,
+
+        /// Windows SDK version to plan (default: latest)
+        #[arg(long)]
+        sdk_version: Option<String>,
+
+        /// Target directory for installation
+        #[arg(short = 't', long, visible_short_alias = 'd', visible_alias = "dir")]
+        target: Option<PathBuf>,
+
+        /// Target architecture (x64, x86, arm64)
+        #[arg(short, long)]
+        arch: Option<String>,
+
+        /// Compiler host architecture (default: current machine)
+        #[arg(long)]
+        host_arch: Option<String>,
+
+        /// Skip MSVC planning
+        #[arg(long)]
+        no_msvc: bool,
+
+        /// Skip Windows SDK planning
+        #[arg(long)]
+        no_sdk: bool,
+
+        /// Include optional MSVC components (spectre, mfc, atl, asan, uwp, custom:<pattern>)
+        /// Can be specified multiple times
+        #[arg(long = "include-component", value_name = "COMPONENT")]
+        include_components: Vec<String>,
+
+        /// Exclude packages matching pattern (case-insensitive substring match)
+        /// Can be specified multiple times
+        #[arg(long = "exclude-pattern", value_name = "PATTERN")]
+        exclude_patterns: Vec<String>,
+
+        /// Visual Studio channel to discover packages from (18/2026/17/2022, default: auto)
+        #[arg(long, value_name = "CHANNEL")]
+        vs_channel: Option<String>,
+
+        /// Build profile driving the dependency-resolved package set
+        /// (c-native, cpp-native, cpp-desktop, cpp-mfc, cpp-spectre, cross-arm64)
+        #[arg(long, value_name = "PROFILE")]
+        profile: Option<String>,
+
+        /// Output format: text (human) or json (machine, stdout only)
+        #[arg(long, default_value = "text")]
+        format: String,
+
+        /// Write the plan document to this file instead of stdout
+        #[arg(long, value_name = "FILE")]
+        output: Option<PathBuf>,
+
+        /// Bypass the persistent manifest cache: fetch manifests into a fresh
+        /// temp directory and never read or write the normal cache location.
+        #[arg(long)]
+        no_cache: bool,
+    },
+
+    /// Apply an install plan produced by `msvc-kit plan`
+    ///
+    /// The plan's identity and observations are verified first; a plan with
+    /// blocking conflicts is refused, and a plan whose manifest snapshot,
+    /// cached payloads or free space no longer match is reported as stale.
+    Apply {
+        /// Path to the plan JSON file
+        #[arg(value_name = "PLAN_FILE")]
+        plan_file: PathBuf,
+
+        /// Verify the plan and its observations without installing
+        #[arg(long)]
+        check_only: bool,
+
+        /// Pruning profile applied to the staged tree before commit (full, portable, minimal, custom)
+        #[arg(long, value_name = "PROFILE", default_value = "full")]
+        prune_profile: String,
+    },
+
+    /// Content-addressed blob cache operations (import, verify, gc)
+    Cache {
+        #[command(subcommand)]
+        action: CacheAction,
     },
 
     /// Setup environment variables for MSVC toolchain
@@ -620,8 +744,10 @@ async fn main() -> anyhow::Result<()> {
             include_components,
             exclude_patterns,
             vs_channel,
+            prune_profile,
         } => {
             let target_dir = target.unwrap_or_else(|| config.install_dir.clone());
+            let prune = msvc_kit::PruningProfile::parse(&prune_profile)?;
             let locked = lockfile.as_deref().map(ToolchainLock::load).transpose()?;
             let selection = ToolchainArgs {
                 dir: Some(target_dir.clone()),
@@ -716,7 +842,7 @@ async fn main() -> anyhow::Result<()> {
                     lock.verify_download(&msvc_info).await?;
                 }
                 println!("Extracting MSVC packages...");
-                msvc_kit::extract_and_finalize_msvc(&mut msvc_info).await?;
+                msvc_kit::extract_and_finalize_msvc_with_profile(&mut msvc_info, prune).await?;
                 if request.msvc_version.as_ref().is_some_and(|version| {
                     version.split('.').count() >= 3 && *version != msvc_info.version
                 }) {
@@ -755,8 +881,8 @@ async fn main() -> anyhow::Result<()> {
                 if let Some(lock) = &locked {
                     lock.verify_download(&sdk_info).await?;
                 }
-                println!("Extracting SDK packages...");
-                msvc_kit::extract_and_finalize_sdk(&sdk_info).await?;
+                println!("Extracting Windows SDK packages...");
+                msvc_kit::extract_and_finalize_sdk_with_profile(&sdk_info, prune).await?;
                 record_installation(
                     &sdk_info,
                     &target_dir,
@@ -779,6 +905,351 @@ async fn main() -> anyhow::Result<()> {
                 target_dir.display()
             );
         }
+
+        Commands::Plan {
+            msvc_version,
+            sdk_version,
+            target,
+            arch,
+            host_arch,
+            no_msvc,
+            no_sdk,
+            include_components,
+            exclude_patterns,
+            vs_channel,
+            profile,
+            format,
+            output,
+            no_cache,
+        } => {
+            let target_dir = target.unwrap_or_else(|| config.install_dir.clone());
+            let host_arch = host_arch
+                .as_ref()
+                .map(|arch| arch.parse::<Architecture>())
+                .transpose()
+                .map_err(anyhow::Error::msg)?;
+            let build_profile_for_arch: Option<msvc_kit::BuildProfile> = profile
+                .as_deref()
+                .and_then(|value| msvc_kit::BuildProfile::parse(value).ok());
+            let arch = match arch
+                .as_ref()
+                .map(|arch| arch.parse::<Architecture>())
+                .transpose()
+                .map_err(anyhow::Error::msg)?
+            {
+                Some(arch) => arch,
+                None => build_profile_for_arch
+                    .and_then(|profile| profile.target_override())
+                    .unwrap_or(config.default_arch),
+            };
+            let components = include_components
+                .iter()
+                .filter_map(|s| s.parse::<MsvcComponent>().ok())
+                .collect();
+            // G-8 (R6): `--no-cache` must bypass the persistent manifest cache
+            // entirely. We point the manifest cache dir at a fresh temp
+            // directory that is deleted when this scope ends, so nothing is
+            // read from or written to the normal cache location.
+            let no_cache_temp: Option<tempfile::TempDir> = if no_cache {
+                Some(tempfile::tempdir()?)
+            } else {
+                None
+            };
+            let manifest_cache_dir = match &no_cache_temp {
+                Some(dir) => dir.path().to_path_buf(),
+                None => config.manifest_cache_dir(),
+            };
+            let plan_options = msvc_kit::PlanOptions {
+                msvc_version: msvc_version.or_else(|| config.default_msvc_version.clone()),
+                sdk_version: sdk_version.or_else(|| config.default_sdk_version.clone()),
+                target_dir: target_dir.clone(),
+                arch,
+                host_arch,
+                vs_channel: resolve_vs_channel(vs_channel, &config)?,
+                include_components: components,
+                exclude_patterns,
+                manifest_cache_dir,
+                include_msvc: !no_msvc,
+                include_sdk: !no_sdk,
+            };
+            let build_profile: Option<msvc_kit::BuildProfile> = profile
+                .as_deref()
+                .map(msvc_kit::BuildProfile::parse)
+                .transpose()
+                .map_err(anyhow::Error::msg)?;
+            // Large futures are boxed: the main async block's state machine
+            // lives on the 1 MB main-thread stack on Windows, and embedding
+            // create_install_plan_with_profile's state machine inline pushes
+            // it past that limit (stack overflow at startup, even for
+            // --version, because main's frame is allocated at entry).
+            let plan = match &build_profile {
+                Some(profile) => {
+                    Box::pin(msvc_kit::create_install_plan_with_profile(
+                        &plan_options,
+                        profile,
+                    ))
+                    .await?
+                }
+                None => Box::pin(msvc_kit::create_install_plan(&plan_options)).await?,
+            };
+            if !plan.blocking_conflicts.is_empty() {
+                eprintln!(
+                    "The plan has {} blocking conflict(s):",
+                    plan.blocking_conflicts.len()
+                );
+                for conflict in &plan.blocking_conflicts {
+                    eprintln!("  - {conflict}");
+                }
+                eprintln!("Resolve them and rerun `msvc-kit plan`; apply will refuse this plan.");
+            }
+            match format.as_str() {
+                "json" => {
+                    let text = serde_json::to_string_pretty(&plan)?;
+                    if let Some(out) = &output {
+                        std::fs::write(out, text)?;
+                        eprintln!("Plan written to {}", out.display());
+                    } else {
+                        println!("{text}");
+                    }
+                }
+                _ => {
+                    if let Some(out) = &output {
+                        let text = serde_json::to_string_pretty(&plan)?;
+                        std::fs::write(out, text)?;
+                        println!("Plan written to {}", out.display());
+                    }
+                    println!("{}", plan.summarize());
+                    println!("plan_id: {}", plan.plan_id);
+                    println!("target: {}", plan.observations.target_root);
+                    for warning in &plan.warnings {
+                        println!("warning: {warning}");
+                    }
+                    for conflict in &plan.blocking_conflicts {
+                        println!("conflict: {conflict}");
+                    }
+                    for action in &plan.actions {
+                        println!(
+                            "  [{}] {} {}{}",
+                            action.kind.as_str(),
+                            action.id,
+                            action.package_id.as_deref().unwrap_or("-"),
+                            action
+                                .path
+                                .as_deref()
+                                .map(|path| format!(" -> {path}"))
+                                .unwrap_or_default()
+                        );
+                    }
+                }
+            }
+        }
+
+        Commands::Apply {
+            plan_file,
+            check_only,
+            prune_profile,
+        } => {
+            let prune = msvc_kit::PruningProfile::parse(&prune_profile)?;
+            let plan = msvc_kit::load_and_verify_plan(&plan_file)?;
+            println!("Plan {}: {}", plan.plan_id, plan.summarize());
+
+            if !plan.blocking_conflicts.is_empty() {
+                anyhow::bail!(
+                    "Plan {} has {} blocking conflict(s); apply refused. Rerun `msvc-kit plan` \
+                     after resolving them:\n{}",
+                    plan.plan_id,
+                    plan.blocking_conflicts.len(),
+                    plan.blocking_conflicts
+                        .iter()
+                        .map(|conflict| format!("  - {conflict}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+            }
+
+            let revalidation =
+                msvc_kit::revalidate_plan(&plan, &config.manifest_cache_dir()).await?;
+            if revalidation.is_stale() {
+                anyhow::bail!(
+                    "StaleInstallPlan: plan {} no longer matches the current state:\n{}",
+                    plan.plan_id,
+                    revalidation
+                        .stale_reasons
+                        .iter()
+                        .map(|reason| format!("  - {reason}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+            }
+            if check_only {
+                println!("Plan is up to date; nothing applied (check-only).");
+                return Ok(());
+            }
+
+            // Execute the plan with its pinned selection: no re-resolution of
+            // latest, no new payloads beyond the plan (spec 04 section 6).
+            let target_dir = std::path::PathBuf::from(&plan.observations.target_root);
+            let arch = plan
+                .request
+                .target_arches
+                .first()
+                .map(|arch| arch.parse::<Architecture>())
+                .transpose()
+                .map_err(anyhow::Error::msg)?
+                .unwrap_or(config.default_arch);
+            let host_arch = plan
+                .request
+                .host_arch
+                .parse::<Architecture>()
+                .map_err(anyhow::Error::msg)?;
+            let components = plan
+                .request
+                .include_components
+                .iter()
+                .filter_map(|s| s.parse::<MsvcComponent>().ok())
+                .collect();
+            let options = DownloadOptions {
+                msvc_version: plan.request.msvc_version.clone(),
+                sdk_version: plan.request.sdk_version.clone(),
+                target_dir: target_dir.clone(),
+                arch,
+                host_arch: Some(host_arch),
+                verify_hashes: true,
+                parallel_downloads: config.parallel_downloads,
+                http_client: None,
+                progress_handler: None,
+                cache_manager: None,
+                vs_channel: resolve_vs_channel(plan.request.vs_channel.clone(), &config)?,
+                manifest_cache_dir: Some(config.manifest_cache_dir()),
+                dry_run: false,
+                include_components: components,
+                exclude_patterns: plan.request.exclude_patterns.clone(),
+            };
+
+            let _installation_lock = msvc_kit::toolchain_lock::lock_installation(&target_dir)?;
+
+            if plan.request.include_msvc {
+                println!("Applying plan: downloading MSVC payloads...");
+                let mut msvc_info = download_msvc(&options).await?;
+                msvc_kit::verify_downloaded_against_plan(
+                    "msvc",
+                    &msvc_info.downloaded_files,
+                    &plan,
+                )
+                .await?;
+                println!("Extracting MSVC packages...");
+                msvc_kit::extract_and_finalize_msvc_with_profile(&mut msvc_info, prune).await?;
+                if let Some(resolved) = &plan.resolved.msvc_version {
+                    let prefix = format!("{resolved}.");
+                    if msvc_info.version != *resolved && !msvc_info.version.starts_with(&prefix) {
+                        anyhow::bail!(
+                            "Extracted MSVC {} does not match planned version {}",
+                            msvc_info.version,
+                            resolved
+                        );
+                    }
+                }
+                record_installation(
+                    &msvc_info,
+                    &target_dir,
+                    host_arch,
+                    options.vs_channel.clone(),
+                    plan.request.include_components.clone(),
+                )
+                .await?;
+                println!(
+                    "MSVC {} installed to {}",
+                    msvc_info.version,
+                    target_dir.display()
+                );
+            }
+
+            if plan.request.include_sdk {
+                println!("Applying plan: downloading Windows SDK payloads...");
+                let sdk_info = download_sdk(&options).await?;
+                msvc_kit::verify_downloaded_against_plan("sdk", &sdk_info.downloaded_files, &plan)
+                    .await?;
+                println!("Extracting Windows SDK packages...");
+                msvc_kit::extract_and_finalize_sdk_with_profile(&sdk_info, prune).await?;
+                record_installation(
+                    &sdk_info,
+                    &target_dir,
+                    host_arch,
+                    options.vs_channel.clone(),
+                    vec![],
+                )
+                .await?;
+                println!(
+                    "Windows SDK {} installed to {}",
+                    sdk_info.version,
+                    target_dir.display()
+                );
+            }
+
+            println!("\nPlan {} applied successfully.", plan.plan_id);
+        }
+
+        Commands::Cache { action } => match action {
+            CacheAction::Import { files } => {
+                let store = msvc_kit::BlobStore::open(&blob_store_root(&config))?;
+                for file in &files {
+                    match store.import_file(file).await? {
+                        msvc_kit::ImportOutcome::Imported { digest, size } => {
+                            println!("imported {file:?} as {digest} ({size} bytes)");
+                        }
+                        msvc_kit::ImportOutcome::AlreadyPresent { digest, .. } => {
+                            println!("already present: {file:?} -> {digest}");
+                        }
+                    }
+                }
+            }
+            CacheAction::Verify { digests } => {
+                let store = msvc_kit::BlobStore::open(&blob_store_root(&config))?;
+                let digests = if digests.is_empty() {
+                    store
+                        .list_blobs()?
+                        .into_iter()
+                        .map(|(digest, _)| digest)
+                        .collect()
+                } else {
+                    digests
+                };
+                let mut intact = 0usize;
+                for digest in &digests {
+                    if store.verify_blob(digest).await? {
+                        intact += 1;
+                    } else {
+                        println!("quarantined corrupted blob {digest}");
+                    }
+                }
+                println!("{}/{} blobs intact", intact, digests.len());
+            }
+            CacheAction::Gc { dry_run } => {
+                let store = msvc_kit::BlobStore::open(&blob_store_root(&config))?;
+                let report = store.gc(dry_run).await?;
+                if dry_run {
+                    println!("dry run - nothing deleted");
+                }
+                for (digest, size) in &report.swept {
+                    println!("swept {digest} ({size} bytes)");
+                }
+                for (digest, size) in &report.retained_young {
+                    println!("retained (young) {digest} ({size} bytes)");
+                }
+                for digest in &report.needs_recovery {
+                    println!("needs recovery: {digest}");
+                }
+                for error in &report.errors {
+                    println!("error: {error}");
+                }
+                println!(
+                    "{} swept, {} retained, {} errors",
+                    report.swept.len(),
+                    report.retained_young.len(),
+                    report.errors.len()
+                );
+            }
+        },
 
         Commands::Setup {
             selection,

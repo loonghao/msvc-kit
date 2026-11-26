@@ -118,6 +118,7 @@ impl MsvcDownloader {
                 install_path: self.downloader.options.target_dir.clone(),
                 downloaded_files: vec![],
                 arch: self.downloader.options.arch,
+                payload_sha256: Default::default(),
             });
         }
 
@@ -217,6 +218,10 @@ impl MsvcDownloader {
             .downloader
             .download_packages(&packages, &download_dir, "MSVC")
             .await?;
+        // Official digests travel with the install info so the extraction step
+        // can re-verify an MSI right before the installer runs (G-4 / R3).
+        let payload_sha256 =
+            crate::downloader::common::official_digests_by_path(&packages, &download_dir)?;
 
         tracing::info!("Downloaded {} MSVC packages", downloaded_files.len());
 
@@ -227,6 +232,7 @@ impl MsvcDownloader {
             version: version.clone(),
             install_path: self.downloader.options.target_dir.clone(),
             downloaded_files,
+            payload_sha256,
             arch: self.downloader.options.arch,
         })
     }

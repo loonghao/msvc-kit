@@ -271,7 +271,7 @@ impl CommonDownloader {
 /// downstream consumer (download location, extraction, msiexec) receives a
 /// canonical path. Backslash payload names are left untouched, preserving the
 /// behaviour of channels that already use them.
-fn payload_path(download_dir: &Path, name: &str) -> Result<PathBuf> {
+pub(crate) fn payload_path(download_dir: &Path, name: &str) -> Result<PathBuf> {
     // A forward slash is never valid inside a single path component on any
     // supported platform, so this replacement is a lossless normalization.
     let normalized = name.replace('/', std::path::MAIN_SEPARATOR_STR);
@@ -296,6 +296,29 @@ fn same_source(entry: &IndexEntry, payload: &PackagePayload) -> bool {
             (None, None) => true,
             _ => false,
         }
+}
+
+/// Map every payload of the given packages to its *official* SHA256.
+///
+/// The returned map is keyed by the payload's path inside `download_dir`
+/// (the same path [`payload_path`] produces, and therefore the same path
+/// `download_packages` writes to). Payloads without an official digest are
+/// omitted: the caller decides whether their absence is fatal.
+pub(crate) fn official_digests_by_path(
+    packages: &[Package],
+    download_dir: &Path,
+) -> Result<std::collections::HashMap<PathBuf, String>> {
+    let mut digests = std::collections::HashMap::new();
+    for payload in packages.iter().flat_map(|package| &package.payloads) {
+        let Some(digest) = payload.sha256.as_ref() else {
+            continue;
+        };
+        digests.insert(
+            payload_path(download_dir, &payload.file_name)?,
+            digest.clone(),
+        );
+    }
+    Ok(digests)
 }
 
 /// Cached bytes are evidence only after checking current source identity and disk contents.

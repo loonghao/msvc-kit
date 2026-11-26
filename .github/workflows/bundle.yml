@@ -41,6 +41,14 @@ jobs:
     timeout-minutes: 90
     env:
       BUNDLE_ARCH: ${{ inputs.arch || 'x64' }}
+      # Short output root on purpose: SDK 28000 contains deep
+      # `Windows Kits\10\References\...` paths, and Windows Installer
+      # (/a administrative extraction) is limited to MAX_PATH 260. The
+      # runner's default workspace (D:\a\<repo>\<repo>) plus the transaction
+      # staging prefix would push those files past 260 (measured 282) and
+      # msiexec would fail with Error 1304 -> 1603. The activation contract
+      # test extracts these steps and overrides BUNDLE_DIR for its fixtures.
+      BUNDLE_DIR: D:\b
     steps:
       - uses: actions/checkout@v7
 
@@ -95,7 +103,7 @@ jobs:
       - name: Create bundle with msvc-kit
         shell: pwsh
         run: |
-          $bundleDir = Join-Path $env:GITHUB_WORKSPACE "test-bundle"
+          $bundleDir = $env:BUNDLE_DIR
           & ".\target\release\msvc-kit.exe" bundle `
             --accept-license `
             --arch $env:BUNDLE_ARCH `
@@ -119,10 +127,25 @@ jobs:
           
           Write-Host "✅ Bundle structure validated"
 
+      # On failure, collect the msiexec verbose logs the CLI writes beside each
+      # source MSI (`msvc-kit-<name>.log`). They are the only reliable evidence
+      # for why `msiexec /a` returned 1603, and the runner is discarded after
+      # the job, so they must be uploaded before the job ends.
+      - name: Collect msiexec verbose logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: msiexec-verbose-logs-${{ inputs.arch || 'x64' }}
+          path: |
+            D:/b/downloads/**/msvc-kit-*.log
+            D:/b/.msvc-kit/transactions/**/journal.jsonl
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Validate extracted toolchain selection and compilation
         shell: pwsh
         run: |
-          $bundleDir = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'test-bundle'))
+          $bundleDir = $env:BUNDLE_DIR
           $selection = @('--dir', $bundleDir, '--arch', $env:BUNDLE_ARCH, '--host-arch', 'x64')
           $queryJson = & .\target\release\msvc-kit.exe query @selection --format json | Out-String
           if ($LASTEXITCODE -ne 0) { throw 'Bundle toolchain query failed' }
@@ -149,7 +172,7 @@ jobs:
       - name: Validate setup.bat activates environment
         shell: cmd
         run: |
-          cd /d "%GITHUB_WORKSPACE%\test-bundle"
+          cd /d "%BUNDLE_DIR%"
           if not "%errorlevel%"=="0" exit /b %errorlevel%
           call setup.bat
           if not "%errorlevel%"=="0" exit /b %errorlevel%
@@ -165,7 +188,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Set-Location test-bundle
+          Set-Location $env:BUNDLE_DIR
           . .\setup.ps1
           if ($env:VSCMD_ARG_HOST_ARCH -ne 'x64' -or $env:VSCMD_ARG_TGT_ARCH -ne $env:BUNDLE_ARCH) {
             throw 'PowerShell activation selected incorrect architectures'
@@ -182,7 +205,7 @@ jobs:
       - name: Test simple compilation
         shell: cmd
         run: |
-          cd /d "%GITHUB_WORKSPACE%\test-bundle"
+          cd /d "%BUNDLE_DIR%"
           if not "%errorlevel%"=="0" exit /b %errorlevel%
           call setup.bat
           if not "%errorlevel%"=="0" exit /b %errorlevel%

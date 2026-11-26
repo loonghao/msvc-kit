@@ -1,5 +1,6 @@
 //! File extraction utilities for VSIX, MSI, and CAB files
 
+use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -7,16 +8,18 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+use sha2::Digest;
 
+#[cfg(windows)]
+use super::msi::{MsiexecBackend, SystemRunner};
+use super::path_safety::{
+    oversized_archive_error, oversized_entry_error, unsafe_entry_error, PathOccupancy,
+    SafeRelativePath, MAX_ARCHIVE_OUTPUT_BYTES, MAX_ENTRY_BYTES,
+};
 use crate::constants::{extraction as ext_const, progress as progress_const};
 use crate::error::{MsvcKitError, Result};
 
-/// Maximum retries for MSI extraction when encountering error 1618
-const MSI_MAX_RETRIES: u32 = 5;
-/// Delay between retries in milliseconds
-const MSI_RETRY_DELAY_MS: u64 = 2000;
-
-fn explain_windows_installer_code(code: Option<i32>) -> &'static str {
+pub(crate) fn explain_windows_installer_code(code: Option<i32>) -> &'static str {
     match code {
         Some(1603) => {
             "Windows Installer error 1603 is a generic fatal install/extract failure. For Windows SDK administrative extraction this is often caused by optional SDK MSI payloads, path length limits, or a locked target directory."
@@ -34,6 +37,7 @@ fn explain_windows_installer_code(code: Option<i32>) -> &'static str {
     }
 }
 
+#[cfg(windows)]
 fn prefer_shorter_path(original: &Path, candidate: Option<PathBuf>) -> PathBuf {
     candidate
         .filter(|path| path.as_os_str().len() < original.as_os_str().len())
@@ -74,7 +78,7 @@ fn windows_short_path(path: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-fn msiexec_path_arg(path: &Path) -> String {
+pub(crate) fn msiexec_path_arg(path: &Path) -> String {
     let selected = prefer_shorter_path(path, windows_short_path(path));
     if selected != path {
         tracing::debug!(
@@ -90,41 +94,6 @@ fn msiexec_path_arg(path: &Path) -> String {
     // fallback above is not sufficient on its own. Normalize the final argument
     // to backslashes so both the package path and TARGETDIR are always openable.
     selected.to_string_lossy().replace('/', "\\")
-}
-
-#[cfg(windows)]
-fn format_msiexec_failure(
-    status: std::process::ExitStatus,
-    file_name: &str,
-    msi_path: &Path,
-    target_dir: &Path,
-) -> String {
-    let code = status.code();
-    let mut message = format!(
-        "msiexec failed with status: {} for {}\n{}\nSource MSI: {}\nTarget directory: {}",
-        status,
-        file_name,
-        explain_windows_installer_code(code),
-        msi_path.display(),
-        target_dir.display()
-    );
-
-    match code {
-        Some(1603) => message.push_str(
-            "\nNext steps: retry with a shorter --target-dir such as C:\\msvc-kit, make sure antivirus or another installer is not locking the target directory, then rerun the command.",
-        ),
-        Some(1619) => message.push_str(
-            "\nNext steps: delete the downloads/sdk cache for this SDK version and rerun so the MSI and its adjacent CAB source files are downloaded together.",
-        ),
-        Some(1618) => message.push_str(
-            "\nNext steps: wait for Windows Update or another installer to finish, then rerun msvc-kit.",
-        ),
-        _ => message.push_str(
-            "\nNext steps: rerun with RUST_LOG=debug for more context, or try a shorter target directory and a fresh download cache.",
-        ),
-    }
-
-    message
 }
 
 pub(crate) fn inner_progress_enabled() -> bool {
@@ -174,21 +143,104 @@ pub async fn extract_vsix(vsix_path: &Path, target_dir: &Path) -> Result<()> {
     extract_vsix_with_progress(vsix_path, target_dir, inner_progress_enabled()).await
 }
 
+/// A validated VSIX/ZIP entry ready to be written.
+struct PlannedVsixEntry {
+    index: usize,
+    safe: SafeRelativePath,
+}
+
 fn extract_vsix_sync(vsix_path: &Path, target_dir: &Path, show_progress: bool) -> Result<()> {
-    // Pre-compute total bytes for progress bar (skip metadata files)
-    let total_bytes = {
+    // G-6 (R7): the staging root itself must not be (or contain, at its
+    // immediate path) a reparse point — otherwise every write below would
+    // be redirected through it.
+    super::path_safety::check_no_reparse_within(target_dir, target_dir)?;
+    // Pass 1: resolve and validate every entry name, symlink mode and size
+    // limit, detect file/directory conflicts, and hash each entry's content
+    // before anything is written. A rejected archive therefore leaves the
+    // target tree untouched, and duplicate collision keys are resolved
+    // upfront: equal bytes deduplicate, differing bytes are a hard conflict.
+    // (Byte-identical duplicate names are already refused by the zip reader.)
+    let (total_bytes, planned_dirs, planned_files) = {
         let file = File::open(vsix_path)?;
         let mut archive = zip::ZipArchive::new(file)?;
         let mut total = 0u64;
-        for i in 0..archive.len() {
-            let file = archive.by_index(i)?;
-            let name = file.name()?;
-            if name.starts_with('[') || name == "extension.vsixmanifest" || file.is_dir() {
+        let mut occupancy = PathOccupancy::default();
+        let mut seen: HashMap<String, (String, String)> = HashMap::new();
+        let mut planned_dirs = Vec::new();
+        let mut planned_files = Vec::new();
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index)?;
+            let name = entry.name()?.to_string();
+
+            // Skip metadata files
+            if name.starts_with('[') || name == "extension.vsixmanifest" {
                 continue;
             }
-            total = total.saturating_add(file.size());
+
+            // Remove "Contents/" prefix if present
+            let stripped = name.strip_prefix("Contents/").unwrap_or(&name);
+            let is_dir = entry.is_dir() || stripped.ends_with('/') || stripped.ends_with('\\');
+            let relative = super::path_safety::strip_one_trailing_separator(stripped);
+            let safe = SafeRelativePath::resolve(relative)
+                .map_err(|error| unsafe_entry_error(&name, &error))?;
+
+            if entry.is_symlink() {
+                return Err(MsvcKitError::Other(format!(
+                    "Refusing archive entry {name:?}: symlink entries are not extracted"
+                )));
+            }
+
+            if is_dir {
+                occupancy.register_dir(&safe).map_err(|conflict| {
+                    MsvcKitError::Other(format!(
+                        "Refusing archive entry {name:?}: file/directory path conflict with {conflict:?}"
+                    ))
+                })?;
+                planned_dirs.push(safe);
+                continue;
+            }
+
+            let size = entry.size();
+            if size > MAX_ENTRY_BYTES {
+                return Err(oversized_entry_error(&name, size));
+            }
+
+            occupancy.register_file(&safe).map_err(|conflict| {
+                MsvcKitError::Other(format!(
+                    "Refusing archive entry {name:?}: file/directory path conflict with {conflict:?}"
+                ))
+            })?;
+
+            // Hash the full entry content before any file is written.
+            let mut hasher = sha2::Sha256::new();
+            let mut buffer = [0u8; ext_const::EXTRACT_BUFFER_SIZE];
+            loop {
+                let n = entry.read(&mut buffer)?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..n]);
+            }
+            let hash = hex::encode(hasher.finalize());
+
+            let key = safe.collision_key();
+            if let Some((first_path, existing_hash)) = seen.get(&key) {
+                if existing_hash == &hash {
+                    continue;
+                }
+                return Err(MsvcKitError::Other(format!(
+                    "Archive entry collision: {first_path:?} and {name:?} resolve to the same path with different content"
+                )));
+            }
+            seen.insert(key, (safe.display(), hash));
+
+            total = total.saturating_add(size);
+            if total > MAX_ARCHIVE_OUTPUT_BYTES {
+                return Err(oversized_archive_error(total));
+            }
+            planned_files.push(PlannedVsixEntry { index, safe });
         }
-        total
+        (total, planned_dirs, planned_files)
     };
 
     let pb = if show_progress {
@@ -206,31 +258,31 @@ fn extract_vsix_sync(vsix_path: &Path, target_dir: &Path, show_progress: bool) -
         None
     };
 
+    // Pass 2: write. Only entries that survived pass-1 deduplication remain,
+    // so every write is a first occurrence and nothing is overwritten.
     let file = File::open(vsix_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
 
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i)?;
-        let name = file.name()?.to_string();
+    for safe in &planned_dirs {
+        let out_path = target_dir.join(safe.to_path_buf());
+        // G-6 (R7): refuse to create a directory through a pre-existing
+        // reparse point; otherwise create_dir_all would follow it.
+        super::path_safety::check_no_reparse_within(target_dir, &out_path)?;
+        std::fs::create_dir_all(&out_path)?;
+    }
 
-        // Skip metadata files
-        if name.starts_with('[') || name == "extension.vsixmanifest" {
-            continue;
-        }
-
-        // Remove "Contents/" prefix if present
-        let relative_path = name.strip_prefix("Contents/").unwrap_or(&name);
-        let out_path = target_dir.join(relative_path);
+    for planned in planned_files {
+        let mut entry = archive.by_index(planned.index)?;
 
         if let Some(pb) = pb.as_ref() {
-            pb.set_message(relative_path.to_string());
+            pb.set_message(planned.safe.display());
         }
 
-        if file.is_dir() {
-            std::fs::create_dir_all(&out_path)?;
-            continue;
-        }
-
+        let out_path = target_dir.join(planned.safe.to_path_buf());
+        // G-6 (R7): check the full out_path (not just its parent) so that a
+        // pre-existing symlink at the file path itself is rejected before
+        // File::create would follow it (TOCTOU hardening).
+        super::path_safety::check_no_reparse_within(target_dir, &out_path)?;
         if let Some(parent) = out_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -238,7 +290,7 @@ fn extract_vsix_sync(vsix_path: &Path, target_dir: &Path, show_progress: bool) -
         let mut out_file = File::create(&out_path)?;
         let mut buffer = [0u8; ext_const::EXTRACT_BUFFER_SIZE];
         loop {
-            let n = file.read(&mut buffer)?;
+            let n = entry.read(&mut buffer)?;
             if n == 0 {
                 break;
             }
@@ -258,26 +310,130 @@ fn extract_vsix_sync(vsix_path: &Path, target_dir: &Path, show_progress: bool) -
 /// Extract an MSI file
 ///
 /// On Windows, uses msiexec. On other platforms, attempts to use msitools.
+///
+/// `expected_sha256` is the *official* digest of the MSI payload. When it is
+/// supplied, the file is re-hashed immediately before the installer runs and
+/// a mismatch aborts the extraction. G-4 (R3) requires the production install
+/// path to always supply it: the download-time verification and the msiexec
+/// invocation are separate moments, and a payload replaced in between must
+/// not reach the installer.
 pub(crate) async fn extract_msi_with_progress(
     msi_path: &Path,
     target_dir: &Path,
     show_progress: bool,
+    expected_sha256: Option<&str>,
 ) -> Result<()> {
     let msi_path = msi_path.to_path_buf();
     let target_dir = target_dir.to_path_buf();
+    let expected_sha256 = expected_sha256.map(str::to_string);
 
-    tokio::task::spawn_blocking(move || extract_msi_sync(&msi_path, &target_dir, show_progress))
-        .await
-        .map_err(|e| MsvcKitError::Other(format!("Task join error: {}", e)))??;
+    tokio::task::spawn_blocking(move || {
+        extract_msi_sync(
+            &msi_path,
+            &target_dir,
+            show_progress,
+            expected_sha256.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| MsvcKitError::Other(format!("Task join error: {}", e)))??;
 
     Ok(())
 }
 
 pub async fn extract_msi(msi_path: &Path, target_dir: &Path) -> Result<()> {
-    extract_msi_with_progress(msi_path, target_dir, inner_progress_enabled()).await
+    extract_msi_with_progress(msi_path, target_dir, inner_progress_enabled(), None).await
 }
 
-fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> Result<()> {
+/// Rust `std::fs` supports long paths on Windows (it uses the verbatim
+/// `\\?\` form internally), but `msiexec` does not: Windows Installer
+/// cannot create files beyond MAX_PATH (260). SDK 10.0.28000 contains
+/// WinMD Reference payloads ~187 characters deep, so extraction under a
+/// deep staging root (`.msvc-kit/transactions/<id>/packages/<pkg>`) fails
+/// with Error 1304 -> 1603.
+///
+/// When the target path is long enough for the deepest known payload to
+/// overflow, extract into a short temp root first and move the tree into
+/// place with `std::fs` (long-path safe). Threshold 70 leaves ~12 chars of
+/// headroom for a 187-character payload.
+#[cfg(windows)]
+const MSI_LONG_PATH_THRESHOLD: usize = 70;
+
+/// Conservative upper bound for SDK 28000's deepest payload path
+/// (`Windows Kits\10\References\10.0.28000.0\<Contract>\<version>\<winmd>`).
+#[cfg(windows)]
+const MSI_MAX_DEEP_PAYLOAD: usize = 200;
+
+#[cfg(windows)]
+fn needs_short_msi_root(target_dir: &Path) -> bool {
+    target_dir.to_string_lossy().len() > MSI_LONG_PATH_THRESHOLD
+}
+
+/// Pick a short extraction root for msiexec when the real target is too
+/// deep for Windows Installer. Prefer the target volume's root (`D:\mk…`):
+/// a short name on the same volume makes the later relocation a rename
+/// instead of a cross-volume copy. Fall back to the system temp dir when
+/// the volume root is not writable (standard users on the system drive).
+#[cfg(windows)]
+fn short_msi_root(target_dir: &Path) -> Option<PathBuf> {
+    if !needs_short_msi_root(target_dir) {
+        return None;
+    }
+    let stamp = format!(
+        "mk{}-{:x}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default()
+    );
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(volume_root) = target_dir.ancestors().last() {
+        candidates.push(volume_root.join(&stamp));
+    }
+    candidates.push(std::env::temp_dir().join(&stamp));
+    for candidate in candidates {
+        // Leave headroom for the deepest payload plus a separator.
+        if candidate.to_string_lossy().len() + MSI_MAX_DEEP_PAYLOAD >= 260 {
+            continue;
+        }
+        if std::fs::create_dir_all(&candidate).is_ok() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Move every entry of `from` into `to`, creating directories as needed.
+/// `std::fs::rename` across volumes fails, so fall back to copy + delete.
+#[cfg(windows)]
+fn move_tree(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let source = entry.path();
+        let destination = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            move_tree(&source, &destination)?;
+        } else {
+            if destination.exists() {
+                std::fs::remove_file(&destination)?;
+            }
+            if std::fs::rename(&source, &destination).is_err() {
+                std::fs::copy(&source, &destination)?;
+                std::fs::remove_file(&source)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn extract_msi_sync(
+    msi_path: &Path,
+    target_dir: &Path,
+    show_progress: bool,
+    expected_sha256: Option<&str>,
+) -> Result<()> {
     let file_name = msi_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -307,58 +463,29 @@ fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> 
 
     #[cfg(windows)]
     {
-        use std::process::Command;
-
-        let msi_path_str = msiexec_path_arg(msi_path);
-        let target_dir_str = format!("TARGETDIR={}", msiexec_path_arg(target_dir));
-
-        // Retry loop for handling error 1618 (another installation in progress)
-        // This can happen if system Windows Installer is busy with other operations
-        let mut last_error = None;
-        for attempt in 1..=MSI_MAX_RETRIES {
-            let status = Command::new("msiexec")
-                .args(["/a", &msi_path_str, "/qn", &target_dir_str])
-                .status()?;
-
-            if status.success() {
-                if let Some(pb) = pb {
-                    pb.finish_with_message(format!("MSI extracted: {}", file_name));
-                }
-                return Ok(());
+        let runner = SystemRunner;
+        let backend = MsiexecBackend::new(&runner);
+        // Windows Installer cannot write beyond MAX_PATH; if the real target
+        // is too deep, extract into a short temp root and move the tree into
+        // place afterwards (std::fs handles long paths).
+        let short_root = short_msi_root(target_dir);
+        let staging_target = short_root.as_deref().unwrap_or(target_dir);
+        let outcome = backend.extract(msi_path, staging_target, expected_sha256);
+        let outcome = match (outcome, short_root.as_deref()) {
+            (Ok(()), Some(temp)) => move_tree(temp, target_dir)
+                .and_then(|()| std::fs::remove_dir_all(temp).map_err(MsvcKitError::from)),
+            (Ok(()), None) => Ok(()),
+            (Err(error), Some(temp)) => {
+                let _ = std::fs::remove_dir_all(temp);
+                Err(error)
             }
-
-            // Check for error 1618 (another installation in progress)
-            // This can still happen if system-level installers are running
-            if let Some(code) = status.code() {
-                if code == 1618 && attempt < MSI_MAX_RETRIES {
-                    tracing::warn!(
-                        "msiexec returned 1618 (another installation in progress) for {}, retry {}/{}",
-                        file_name,
-                        attempt,
-                        MSI_MAX_RETRIES
-                    );
-                    if let Some(pb) = pb.as_ref() {
-                        pb.set_message(format!(
-                            "msiexec waiting (retry {}/{}) {}",
-                            attempt, MSI_MAX_RETRIES, file_name
-                        ));
-                    }
-                    std::thread::sleep(Duration::from_millis(MSI_RETRY_DELAY_MS));
-                    continue;
-                }
-            }
-
-            last_error = Some(status);
-            break;
-        }
-
-        if let Some(status) = last_error {
+            (Err(error), None) => Err(error),
+        };
+        if let Err(error) = outcome {
             if let Some(pb) = pb.as_ref() {
                 pb.abandon_with_message(format!("msiexec failed: {}", file_name));
             }
-            return Err(MsvcKitError::Other(format_msiexec_failure(
-                status, &file_name, msi_path, target_dir,
-            )));
+            return Err(error);
         }
     }
 
@@ -366,6 +493,19 @@ fn extract_msi_sync(msi_path: &Path, target_dir: &Path, show_progress: bool) -> 
     {
         // On non-Windows, try using msitools (msiextract)
         use std::process::Command;
+
+        // G-4 (R3): the same pre-execution digest check the Windows backend
+        // performs, so the guarantee holds on every platform.
+        if let Some(expected) = expected_sha256 {
+            let actual = super::msi::sha256_file(msi_path)?;
+            if !actual.eq_ignore_ascii_case(expected) {
+                return Err(MsvcKitError::HashMismatch {
+                    file: msi_path.display().to_string(),
+                    expected: expected.to_string(),
+                    actual,
+                });
+            }
+        }
 
         let status = Command::new("msiextract")
             .args([
@@ -437,18 +577,50 @@ pub async fn extract_cab(cab_path: &Path, target_dir: &Path) -> Result<()> {
 }
 
 fn extract_cab_sync(cab_path: &Path, target_dir: &Path, show_progress: bool) -> Result<()> {
-    let file = File::open(cab_path)?;
-    let cabinet = cab::Cabinet::new(file)
-        .map_err(|e| MsvcKitError::Cab(format!("Failed to open CAB: {}", e)))?;
+    // Pass 1: resolve and validate every entry name and size limit before
+    // anything is written, so a rejected archive leaves the target untouched.
+    // The cab crate looks files up by name, so duplicate entry names cannot be
+    // extracted unambiguously and are rejected outright.
+    let planned: Vec<(String, SafeRelativePath)> = {
+        let file = File::open(cab_path)?;
+        let cabinet = cab::Cabinet::new(file)
+            .map_err(|e| MsvcKitError::Cab(format!("Failed to open CAB: {}", e)))?;
+        let mut occupancy = PathOccupancy::default();
+        let mut planned = Vec::new();
+        let mut total_bytes = 0u64;
+        for entry in cabinet
+            .folder_entries()
+            .flat_map(|folder| folder.file_entries())
+        {
+            let name = entry.name().to_string();
+            let safe = SafeRelativePath::resolve(&name)
+                .map_err(|error| unsafe_entry_error(&name, &error))?;
+            // The cab crate resolves entries by name, so duplicates cannot be
+            // read unambiguously and must not be extracted.
+            if occupancy.contains_file(&safe.collision_key()) {
+                return Err(MsvcKitError::Other(format!(
+                    "Refusing CAB entry {name:?}: duplicate entry name in cabinet"
+                )));
+            }
+            occupancy.register_file(&safe).map_err(|conflict| {
+                MsvcKitError::Other(format!(
+                    "Refusing CAB entry {name:?}: file/directory path conflict with {conflict:?}"
+                ))
+            })?;
+            let size = entry.uncompressed_size() as u64;
+            if size > MAX_ENTRY_BYTES {
+                return Err(oversized_entry_error(&name, size));
+            }
+            total_bytes = total_bytes.saturating_add(size);
+            if total_bytes > MAX_ARCHIVE_OUTPUT_BYTES {
+                return Err(oversized_archive_error(total_bytes));
+            }
+            planned.push((name, safe));
+        }
+        planned
+    };
 
-    // Collect file names first by iterating through folders
-    let file_names: Vec<String> = cabinet
-        .folder_entries()
-        .flat_map(|folder| folder.file_entries())
-        .map(|entry| entry.name().to_string())
-        .collect();
-
-    let total_files = file_names.len() as u64;
+    let total_files = planned.len() as u64;
     let pb = if show_progress {
         let pb = ProgressBar::new(total_files.max(1));
         pb.set_draw_target(ProgressDrawTarget::stderr_with_hz(4));
@@ -464,20 +636,19 @@ fn extract_cab_sync(cab_path: &Path, target_dir: &Path, show_progress: bool) -> 
         None
     };
 
-    // Re-open cabinet for extraction (cab crate requires this pattern)
-    // Note: The cab crate's API requires re-opening for each file read.
-    // This is a limitation of the crate, not an efficiency issue we can fix here.
-    // A future optimization would be to use a different CAB library or implement
-    // streaming extraction.
-    for (idx, name) in file_names.iter().enumerate() {
-        let out_path = target_dir.join(name);
+    // Pass 2: extraction (cab crate requires re-opening for each file read).
+    for (idx, (name, safe)) in planned.iter().enumerate() {
+        let out_path = target_dir.join(safe.to_path_buf());
 
+        // G-6 (R7): check the full out_path before File::create would follow
+        // a pre-existing reparse point at the file path itself (TOCTOU).
+        super::path_safety::check_no_reparse_within(target_dir, &out_path)?;
         if let Some(parent) = out_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
         if let Some(pb) = pb.as_ref() {
-            pb.set_message(format!("{} ({}/{})", name, idx + 1, total_files));
+            pb.set_message(format!("{} ({}/{})", safe.display(), idx + 1, total_files));
         }
 
         // Re-open cabinet to read the file (cab crate limitation)
@@ -542,6 +713,67 @@ mod tests {
         assert!(explain_windows_installer_code(None).contains("non-zero"));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn test_needs_short_msi_root() {
+        // Deep staging roots (transactions/<id>/packages/<pkg>) overflow
+        // MAX_PATH with SDK 28000's ~187-character Reference payloads.
+        let deep = Path::new(
+            r"D:\b\.msvc-kit\transactions\20261123T175756-181b01dbe972\packages\sdk-a9d0df18",
+        );
+        assert!(needs_short_msi_root(deep));
+        let shallow = Path::new(r"D:\msvc");
+        assert!(!needs_short_msi_root(shallow));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_transaction_staging_overflows_max_path_but_short_root_fits() {
+        // Regression for the SDK 10.0.28000 CI failures: extracting straight
+        // into the transaction staging directory made the deepest Reference
+        // WinMD path cross MAX_PATH (Error 1304 -> exit 1603). A short root
+        // must leave enough headroom for the same payload.
+        const MAX_PATH: usize = 260;
+        let staging = Path::new(
+            r"D:\b\.msvc-kit\transactions\20261123T175756-181b01dbe972\packages\sdk-a9d0df18",
+        );
+        // The code reserves MSI_MAX_DEEP_PAYLOAD (200) for the deepest SDK
+        // Reference WinMD payload; that is the bound that matters here.
+        assert!(
+            staging.to_string_lossy().len() + 1 + MSI_MAX_DEEP_PAYLOAD > 260,
+            "staging path must reproduce the observed MAX_PATH overflow"
+        );
+        assert!(
+            needs_short_msi_root(staging),
+            "a staging path that overflows must request a short root"
+        );
+        let short_root = Path::new(r"D:\mk181b01d");
+        assert!(
+            short_root.to_string_lossy().len() + MSI_MAX_DEEP_PAYLOAD < MAX_PATH,
+            "short root must leave headroom for the deepest known payload"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_move_tree_relocates_nested_files_and_dirs() {
+        let from = tempfile::tempdir().unwrap();
+        let to = tempfile::tempdir().unwrap();
+        let nested = from.path().join("a").join("b");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("leaf.txt"), b"payload").unwrap();
+        std::fs::write(from.path().join("top.txt"), b"top").unwrap();
+
+        move_tree(from.path(), to.path()).unwrap();
+
+        assert_eq!(
+            std::fs::read(to.path().join("a").join("b").join("leaf.txt")).unwrap(),
+            b"payload"
+        );
+        assert_eq!(std::fs::read(to.path().join("top.txt")).unwrap(), b"top");
+    }
+
+    #[cfg(windows)]
     #[test]
     fn test_prefer_shorter_path() {
         let original = Path::new(
@@ -608,43 +840,6 @@ mod tests {
             arg.ends_with(r"Installers\Windows SDK Headers-x86.msi"),
             "backslash layout must be preserved: {arg}"
         );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn test_format_msiexec_failure_includes_guidance() {
-        use std::process::Command;
-
-        let status_1603 = Command::new("cmd")
-            .args(["/C", "exit", "1603"])
-            .status()
-            .unwrap();
-        let message_1603 = format_msiexec_failure(
-            status_1603,
-            "WinRT Intellisense UAP - en-us-x86_en-us.msi",
-            Path::new(
-                "C:/msvc-kit/downloads/sdk/Installers/WinRT Intellisense UAP - en-us-x86_en-us.msi",
-            ),
-            Path::new("C:/msvc-kit"),
-        );
-        assert!(message_1603.contains("1603"));
-        assert!(message_1603.contains("shorter --target-dir"));
-        assert!(message_1603.contains("Source MSI:"));
-        assert!(message_1603.contains("Target directory:"));
-
-        let status_1619 = Command::new("cmd")
-            .args(["/C", "exit", "1619"])
-            .status()
-            .unwrap();
-        let message_1619 = format_msiexec_failure(
-            status_1619,
-            "Application Verifier arm64 External Package (DesktopEditions)-arm64_en-us.msi",
-            Path::new("C:/msvc-kit/downloads/sdk/Installers/Application Verifier arm64 External Package (DesktopEditions)-arm64_en-us.msi"),
-            Path::new("C:/msvc-kit"),
-        );
-        assert!(message_1619.contains("1619"));
-        assert!(message_1619.contains("downloads/sdk cache"));
-        assert!(message_1619.contains("adjacent CAB source files"));
     }
 
     #[test]

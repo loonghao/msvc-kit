@@ -249,7 +249,7 @@ pub fn list_vs_msvc_versions(vs_path: &Path) -> Vec<String> {
 /// Find the MSVC toolchain version directory within an msvc-kit download directory.
 ///
 /// msvc-kit downloads to a structure like:
-///   <source_dir>/VC/Tools/MSVC/<version>/
+///   `<source_dir>/VC/Tools/MSVC/<version>/`
 pub fn find_msvc_kit_version(source_dir: &Path) -> Option<PathBuf> {
     let msvc_dir = source_dir.join("VC").join("Tools").join("MSVC");
     if !msvc_dir.exists() {

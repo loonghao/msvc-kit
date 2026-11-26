@@ -1,18 +1,38 @@
 //! Installation and extraction functionality
 
+pub mod cas;
+mod contracts;
+pub mod detection;
 mod extractor;
+pub mod lock_v2;
+pub use contracts::{InstalledFileEntry, InstalledManifest, INSTALLED_MANIFEST_SCHEMA};
+pub mod msi;
+mod path_safety;
+pub mod plan;
+pub mod provider;
+pub mod pruning;
+pub mod resolver;
+pub mod transaction;
+
+pub use plan::{
+    create_install_plan, create_install_plan_with_profile, load_and_verify_plan, revalidate_plan,
+    verify_downloaded_against_plan, DiskUsageEstimate, InstallPlanDocument, PlanAction,
+    PlanActionKind, PlanOptions, PlanPayload, PlanRequest, PlanRevalidation, PrivilegeRequirement,
+    ResolvedSummary,
+};
 
 use futures::{stream, StreamExt};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use crate::constants::{extraction as ext_const, progress as progress_const};
-use crate::error::Result;
+use crate::error::{MsvcKitError, Result};
 use crate::version::Architecture;
 
 pub use extractor::{extract_cab, extract_msi, extract_vsix, get_extractor};
@@ -21,7 +41,8 @@ use extractor::{
     inner_progress_enabled,
 };
 
-const SDK_OPTIONAL_MSI_SKIP_PATTERNS: &[&str] = &["application verifier", "winrt intellisense"];
+pub(crate) const SDK_OPTIONAL_MSI_SKIP_PATTERNS: &[&str] =
+    &["application verifier", "winrt intellisense"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SdkExtractionAction {
@@ -93,13 +114,22 @@ fn sdk_payloads_to_extract(files: &[PathBuf]) -> Vec<PathBuf> {
 
 /// Extract a package based on its file extension
 pub async fn extract_package(file: &Path, target_dir: &Path) -> Result<()> {
-    extract_package_with_progress(file, target_dir, inner_progress_enabled()).await
+    extract_package_with_progress(file, target_dir, inner_progress_enabled(), None).await
 }
 
-async fn extract_package_with_progress(
+/// Extract a package, verifying the *official* SHA256 of MSI payloads against
+/// the file immediately before the installer runs.
+///
+/// `expected_sha256` is the official digest for `file` (from the channel
+/// manifest / plan). It is only meaningful for MSI payloads; other formats
+/// carry their own integrity checks. G-4 (R3): the production install path
+/// always supplies it, so a payload swapped between the download-time
+/// verification and the installer invocation is rejected.
+pub(crate) async fn extract_package_with_progress(
     file: &Path,
     target_dir: &Path,
     show_progress: bool,
+    expected_sha256: Option<&str>,
 ) -> Result<()> {
     let extension = file
         .extension()
@@ -109,7 +139,7 @@ async fn extract_package_with_progress(
 
     match extension.as_str() {
         "vsix" | "zip" => extract_vsix_with_progress(file, target_dir, show_progress).await,
-        "msi" => extract_msi_with_progress(file, target_dir, show_progress).await,
+        "msi" => extract_msi_with_progress(file, target_dir, show_progress, expected_sha256).await,
         "cab" => extract_cab_with_progress(file, target_dir, show_progress).await,
         _ => {
             tracing::warn!("Unknown file type: {:?}, skipping extraction", file);
@@ -118,28 +148,78 @@ async fn extract_package_with_progress(
     }
 }
 
-async fn extraction_marker_path(marker_dir: &Path, file: &Path) -> PathBuf {
+/// Extraction marker schema. A v2 marker records the SHA256 of the source
+/// archive it was produced from, so a marker hit is tied to the exact bytes
+/// that were extracted instead of to mutable metadata (v1 used a
+/// path+size+mtime fingerprint and is ignored as legacy).
+pub(crate) const EXTRACTION_MARKER_SCHEMA: &str = "msvc-kit.extraction-marker.v2";
+
+/// Content of a v2 extraction marker file.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct ExtractionMarker {
+    pub schema: String,
+    /// SHA256 of the source archive this marker was produced from.
+    pub source_sha256: String,
+    /// Source archive file name, for diagnostics only.
+    pub source_name: String,
+}
+
+pub(crate) struct ExtractionMarkerProbe {
+    path: PathBuf,
+    source_sha256: String,
+    valid: bool,
+}
+
+/// Compute the v2 marker path and whether it currently proves that this exact
+/// archive was already extracted. Legacy v1 markers never validate: their
+/// file names lack the `-v2-` segment, so they are left in place and re-extraction
+/// upgrades the record.
+pub(crate) async fn probe_extraction_marker(
+    marker_dir: &Path,
+    file: &Path,
+) -> Result<ExtractionMarkerProbe> {
     let name = file
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("unknown");
-    let metadata = tokio::fs::metadata(file).await.ok();
-    let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
-    let modified = metadata
-        .and_then(|m| m.modified().ok())
-        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-
+        .unwrap_or("unknown")
+        .to_string();
+    let source_sha256 = crate::downloader::hash::compute_file_hash(file).await?;
     let mut hasher = Sha256::new();
-    hasher.update(file.to_string_lossy().as_bytes());
+    hasher.update(source_sha256.as_bytes());
     hasher.update(b"\0");
-    hasher.update(size.to_le_bytes());
-    hasher.update(b"\0");
-    hasher.update(modified.to_le_bytes());
+    hasher.update(name.as_bytes());
     let fingerprint = hex::encode(hasher.finalize());
+    let path = marker_dir.join(format!("{}-v2-{}.done", name, &fingerprint[..16]));
 
-    marker_dir.join(format!("{}-{}.done", name, &fingerprint[..16]))
+    let valid = match tokio::fs::read(&path).await {
+        Ok(bytes) => serde_json::from_slice::<ExtractionMarker>(&bytes).is_ok_and(|marker| {
+            marker.schema == EXTRACTION_MARKER_SCHEMA
+                && marker.source_sha256.eq_ignore_ascii_case(&source_sha256)
+        }),
+        Err(_) => false,
+    };
+    Ok(ExtractionMarkerProbe {
+        path,
+        source_sha256,
+        valid,
+    })
+}
+
+async fn persist_extraction_marker(
+    marker_path: PathBuf,
+    source_sha256: String,
+    source_name: String,
+) -> Result<()> {
+    let marker = ExtractionMarker {
+        schema: EXTRACTION_MARKER_SCHEMA.to_string(),
+        source_sha256,
+        source_name,
+    };
+    let bytes = serde_json::to_vec(&marker)?;
+    tokio::task::spawn_blocking(move || crate::storage::atomic_write(&marker_path, &bytes))
+        .await
+        .map_err(|error| MsvcKitError::Other(error.to_string()))??;
+    Ok(())
 }
 
 /// Extract multiple packages with a unified progress bar (parallel extraction)
@@ -173,17 +253,17 @@ pub async fn extract_packages_with_progress(
     let extracted_count = Arc::new(AtomicUsize::new(0));
     let skipped_count = Arc::new(AtomicUsize::new(0));
 
-    // Filter files that need extraction (not cached)
+    // Filter files that need extraction (not proven cached by a v2 marker)
     let mut files_to_extract = Vec::new();
     let mut cached_files = Vec::new();
 
     for file in files.iter() {
-        let marker = extraction_marker_path(&marker_dir, file).await;
+        let probe = probe_extraction_marker(&marker_dir, file).await?;
 
-        if marker.exists() {
+        if probe.valid {
             cached_files.push(file.clone());
         } else {
-            files_to_extract.push(file.clone());
+            files_to_extract.push((file.clone(), probe.path, probe.source_sha256));
         }
     }
 
@@ -206,9 +286,8 @@ pub async fn extract_packages_with_progress(
     let pb = Arc::new(pb);
 
     let results: Vec<Result<PathBuf>> = stream::iter(files_to_extract)
-        .map(|file| {
+        .map(|(file, marker_path, source_sha256)| {
             let target_dir = target_dir.clone();
-            let marker_dir = marker_dir.clone();
             let extracted_count = extracted_count.clone();
             let skipped_count = skipped_count.clone();
             let pb = pb.clone();
@@ -216,13 +295,25 @@ pub async fn extract_packages_with_progress(
             let total = total as usize;
 
             async move {
-                let marker = extraction_marker_path(&marker_dir, &file).await;
-
                 // Extract the package
-                extract_package_with_progress(&file, &target_dir, false).await?;
+                extract_package_with_progress(&file, &target_dir, false, None).await?;
 
-                // Mark as extracted
-                let _ = tokio::fs::write(&marker, b"ok").await;
+                // Record a content-identity marker; failure to write it only
+                // costs a re-extraction next run, never a false skip.
+                let source_name = file
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                if let Err(error) =
+                    persist_extraction_marker(marker_path, source_sha256, source_name).await
+                {
+                    tracing::warn!(
+                        "Failed to write extraction marker for {:?}: {}",
+                        file,
+                        error
+                    );
+                }
 
                 // Update progress
                 let done = extracted_count.fetch_add(1, Ordering::Relaxed) + 1;
@@ -271,6 +362,17 @@ pub struct InstallInfo {
 
     /// List of downloaded files
     pub downloaded_files: Vec<PathBuf>,
+
+    /// Official SHA256 digests of the downloaded payloads, keyed by payload
+    /// path.
+    ///
+    /// The digest is the one published by the channel manifest (not a digest
+    /// computed locally). It is carried from the download step to the
+    /// extraction step so an MSI can be re-verified immediately before the
+    /// Windows Installer runs (G-4 / R3) and so an MSI without an official
+    /// digest is rejected instead of being installed unverified.
+    #[serde(default)]
+    pub payload_sha256: HashMap<PathBuf, String>,
 
     /// Target architecture
     pub arch: Architecture,
@@ -357,12 +459,51 @@ impl InstallInfo {
 /// 2. Scans for the MSVC version directory to get the full version number
 /// 3. Updates InstallInfo with the complete version and correct paths
 pub async fn extract_and_finalize_msvc(info: &mut InstallInfo) -> Result<()> {
+    extract_and_finalize_msvc_with_profile(info, pruning::PruningProfile::Full).await
+}
+
+/// Like [`extract_and_finalize_msvc`] but prunes the staged tree with the
+/// given profile before committing (spec 06 section 1.5: staging-only).
+pub async fn extract_and_finalize_msvc_with_profile(
+    info: &mut InstallInfo,
+    profile: pruning::PruningProfile,
+) -> Result<()> {
     let target_dir = &info.install_path;
 
     tracing::info!("Extracting MSVC packages to {:?}", target_dir);
 
-    // Extract all packages
-    extract_packages_with_progress(&info.downloaded_files, target_dir, "MSVC").await?;
+    // Extract into a journaled transaction workspace, then commit file-by-file
+    // (backup/replace with rollback); the shared root is never replaced.
+    transaction::recover_pending(target_dir).await?;
+    let mut tx =
+        transaction::Transaction::begin(target_dir, "download", transaction::FaultHook::none())?;
+    let mut staged = tx
+        .stage_package("msvc", &info.downloaded_files, &info.payload_sha256, |_| {
+            true
+        })
+        .await?;
+    {
+        let context = pruning::PruningContext {
+            msvc_version: None,
+            sdk_version: Some(info.version.clone()),
+            host: Some(info.arch.msvc_host_dir().to_string()),
+            target: Some(info.arch.to_string()),
+            selected_arches: Default::default(),
+        };
+        tx.prune_staged(&mut staged, profile, &context).await?;
+    }
+    let merged = tx.merge(std::slice::from_ref(&staged))?;
+    if let Err(error) = tx.commit(&merged).await {
+        // A fault after the Committed marker means the install is durable.
+        if transaction::journal_has_committed(tx.journal_path()) {
+            tracing::warn!("Transaction committed; post-commit step failed: {}", error);
+        } else if let Err(rollback) = tx.rollback(&error.to_string()).await {
+            tracing::error!("Rollback failed: {}", rollback);
+            return Err(error);
+        } else {
+            return Err(error);
+        }
+    }
 
     // Find the actual MSVC version directory and extract the full version number
     let vc_tools_path = target_dir.join("VC").join("Tools").join("MSVC");
@@ -395,6 +536,15 @@ pub async fn extract_and_finalize_msvc(info: &mut InstallInfo) -> Result<()> {
 /// 1. Extracts downloaded packages to the target directory
 /// 2. Verifies the SDK installation path
 pub async fn extract_and_finalize_sdk(info: &InstallInfo) -> Result<()> {
+    extract_and_finalize_sdk_with_profile(info, pruning::PruningProfile::Full).await
+}
+
+/// Like [`extract_and_finalize_sdk`] but prunes the staged tree with the
+/// given profile before committing (spec 06 section 1.5: staging-only).
+pub async fn extract_and_finalize_sdk_with_profile(
+    info: &InstallInfo,
+    profile: pruning::PruningProfile,
+) -> Result<()> {
     let target_dir = &info.install_path;
 
     tracing::info!("Extracting Windows SDK packages to {:?}", target_dir);
@@ -403,8 +553,39 @@ pub async fn extract_and_finalize_sdk(info: &InstallInfo) -> Result<()> {
     // stay beside their MSI files for msiexec, but they are not standalone archives
     // to unpack. Some optional SDK MSIs also fail administrative extraction while
     // being unnecessary for MSVC/Rust toolchains.
-    let sdk_files = sdk_payloads_to_extract(&info.downloaded_files);
-    extract_packages_with_progress(&sdk_files, target_dir, "Windows SDK").await?;
+    transaction::recover_pending(target_dir).await?;
+    let mut tx =
+        transaction::Transaction::begin(target_dir, "download", transaction::FaultHook::none())?;
+    let sdk_files: Vec<PathBuf> = sdk_payloads_to_extract(&info.downloaded_files);
+    let mut staged = tx
+        .stage_package("sdk", &sdk_files, &info.payload_sha256, |payload| {
+            matches!(
+                classify_sdk_payload_for_extraction(payload),
+                SdkExtractionAction::Extract
+            )
+        })
+        .await?;
+    {
+        let context = pruning::PruningContext {
+            msvc_version: None,
+            sdk_version: None,
+            host: Some(info.arch.msvc_host_dir().to_string()),
+            target: Some(info.arch.to_string()),
+            selected_arches: Default::default(),
+        };
+        tx.prune_staged(&mut staged, profile, &context).await?;
+    }
+    let merged = tx.merge(std::slice::from_ref(&staged))?;
+    if let Err(error) = tx.commit(&merged).await {
+        if transaction::journal_has_committed(tx.journal_path()) {
+            tracing::warn!("Transaction committed; post-commit step failed: {}", error);
+        } else if let Err(rollback) = tx.rollback(&error.to_string()).await {
+            tracing::error!("Rollback failed: {}", rollback);
+            return Err(error);
+        } else {
+            return Err(error);
+        }
+    }
 
     Ok(())
 }
@@ -522,6 +703,7 @@ mod tests {
                     .join("WinRT Intellisense UAP - en-us-x86_en-us.msi"),
             ],
             arch: Architecture::X64,
+            payload_sha256: Default::default(),
         };
 
         let installed = install_sdk(&info).await.unwrap();

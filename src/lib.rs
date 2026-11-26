@@ -116,7 +116,38 @@ pub use downloader::{
 };
 pub use env::{get_env_vars, setup_environment, MsvcEnvironment, ToolPaths};
 pub use error::{MsvcKitError, Result};
-pub use installer::{extract_and_finalize_msvc, extract_and_finalize_sdk, InstallInfo};
+pub use installer::cas::{BlobPins, BlobSourceRef, BlobStore, GcReport, ImportOutcome};
+pub use installer::detection::{
+    detect_build_tool, detect_msvc, detect_windows_sdk, plan_reuse, BuildToolId, CheckStatus,
+    DetectedToolchain, DetectionOrigin, ReuseDecision, ToolchainKind, ValidationCheck,
+    ValidationSummary,
+};
+pub use installer::lock_v2::{
+    detect_installed_mutation, verify_installed_tree, CabRelation, InstalledDiff, LockProvenance,
+    PruningRecord, ToolchainLockV2,
+};
+pub use installer::msi::{
+    MsiBackendPreference, MsiProcessRunner, RunOutcome, RunRecord, SystemRunner,
+};
+pub use installer::provider::{
+    BuildToolProvider, MsvcToolchainProvider, SimpleBuildToolProvider, ToolchainProvider,
+};
+pub use installer::pruning::{
+    PruneAction, PruningContext, PruningProfile, PruningRule, PruningRulesDocument,
+};
+pub use installer::resolver::{
+    BuildProfile, BuildProfileDocument, DependencySpec, ResolvedPackage, ResolvedToolchain,
+    ResolverError,
+};
+pub use installer::{
+    create_install_plan, create_install_plan_with_profile, extract_and_finalize_msvc,
+    extract_and_finalize_msvc_with_profile, extract_and_finalize_sdk,
+    extract_and_finalize_sdk_with_profile, load_and_verify_plan, revalidate_plan,
+    verify_downloaded_against_plan, DiskUsageEstimate, InstallInfo, InstallPlanDocument,
+    InstalledFileEntry, InstalledManifest, PlanAction, PlanActionKind, PlanOptions, PlanPayload,
+    PlanRequest, PlanRevalidation, PrivilegeRequirement, ResolvedSummary,
+    INSTALLED_MANIFEST_SCHEMA,
+};
 pub use query::{
     query_installation, query_installation_with_sdk_root, ComponentInfo, QueryComponent,
     QueryOptions, QueryOptionsBuilder, QueryProperty, QueryResult,

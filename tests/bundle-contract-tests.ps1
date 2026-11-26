@@ -58,6 +58,9 @@ try {
         $processInfo.WorkingDirectory = $root
         foreach ($argument in @('-NoProfile', '-File', $script)) { $processInfo.ArgumentList.Add($argument) }
         $processInfo.Environment['BUNDLE_ARCH'] = 'x64'
+        # The workflow's activation steps navigate to $env:BUNDLE_DIR; point
+        # it at this fixture's bundle so the extracted step runs unchanged.
+        $processInfo.Environment['BUNDLE_DIR'] = $bundle
         $processInfo.Environment['BUNDLE_CL'] = if ($fixture.NormalizeExpected) { Join-Path $selected '.\cl.exe' } else { $selectedCompiler }
         $process = [Diagnostics.Process]::Start($processInfo)
         $stdout = $process.StandardOutput.ReadToEndAsync()

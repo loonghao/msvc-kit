@@ -1,0 +1,6 @@
+# msvc-kit: the CLI binary derives a very large async state machine
+# (`#[tokio::main]` embeds every match arm's inner futures inline). The
+# 1 MB default main-thread stack on Windows overflows in debug builds.
+# Reserve 16 MB for the main thread on MSVC targets.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "link-args=/STACK:16777216,16777216"]

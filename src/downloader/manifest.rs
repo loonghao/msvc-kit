@@ -123,6 +123,18 @@ pub struct PackagePayload {
     pub sha256: Option<String>,
 }
 
+/// Identity of the package manifest a channel served.
+///
+/// `sha256` is the digest the fresh channel declared for the manifest, which
+/// the fetch verified before parsing; install plans record it so an apply run
+/// can detect that upstream republished the manifest underneath a plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestIdentity {
+    pub url: String,
+    pub sha256: String,
+    pub file_name: String,
+}
+
 impl VsManifest {
     /// Fetch and parse the VS manifest from the newest available channel (cached).
     ///
@@ -178,22 +190,39 @@ impl VsManifest {
         }
     }
 
-    /// Try every known channel newest first until one serves a usable manifest
-    async fn fetch_auto(cache_dir: &Path) -> Result<(Self, VsChannelSpec)> {
-        Self::fetch_auto_from(&vs_channel::known_channels(), cache_dir).await
+    /// Like [`Self::fetch_with_selection`] but also returns the identity of the
+    /// package manifest that served the parse: exact URL, the official SHA256
+    /// the fresh channel declared for it, and its file name.
+    ///
+    /// Install plans record this identity in their observations so an apply run
+    /// can detect that the manifest changed underneath a plan.
+    pub async fn fetch_with_identity(
+        selection: VsChannelSelection,
+        cache_dir: &Path,
+    ) -> Result<(Self, VsChannelSpec, ManifestIdentity)> {
+        match selection {
+            VsChannelSelection::Auto => {
+                Self::fetch_auto_inner(&vs_channel::known_channels(), cache_dir).await
+            }
+            VsChannelSelection::Pinned(spec) => {
+                let (manifest, identity) = Self::fetch_channel_inner(&spec, cache_dir).await?;
+                Ok((manifest, spec, identity))
+            }
+        }
     }
 
-    /// Try the given channels in order until one serves a usable manifest
-    ///
-    /// Channels that upstream has not published yet (HTML instead of JSON) are
-    /// skipped and remembered for [`channel_availability::UNAVAILABLE_TTL`],
-    /// so an unpublished release is not re-probed on every call. Explicitly
-    /// pinned channels bypass that cache, and a channel that serves a manifest
-    /// drops its entry again.
-    async fn fetch_auto_from(
+    /// Try every known channel newest first until one serves a usable manifest
+    async fn fetch_auto(cache_dir: &Path) -> Result<(Self, VsChannelSpec)> {
+        let (manifest, spec, _identity) =
+            Self::fetch_auto_inner(&vs_channel::known_channels(), cache_dir).await?;
+        Ok((manifest, spec))
+    }
+
+    /// [`Self::fetch_auto`] plus the serving channel's manifest identity.
+    async fn fetch_auto_inner(
         candidates: &[VsChannelSpec],
         cache_dir: &Path,
-    ) -> Result<(Self, VsChannelSpec)> {
+    ) -> Result<(Self, VsChannelSpec, ManifestIdentity)> {
         let mut skipped: Vec<String> = Vec::new();
 
         for candidate in candidates {
@@ -207,8 +236,8 @@ impl VsManifest {
                 continue;
             }
 
-            match Self::fetch_channel(candidate, cache_dir).await {
-                Ok(manifest) => {
+            match Self::fetch_channel_inner(candidate, cache_dir).await {
+                Ok((manifest, identity)) => {
                     channel_availability::forget(cache_dir, candidate).await;
                     if !skipped.is_empty() {
                         // Auto selection is *expected* to walk past unpublished
@@ -218,7 +247,7 @@ impl VsManifest {
                             skipped.join("; ")
                         );
                     }
-                    return Ok((manifest, candidate.clone()));
+                    return Ok((manifest, candidate.clone(), identity));
                 }
                 Err(MsvcKitError::ChannelUnavailable { reason, .. }) => {
                     channel_availability::record(cache_dir, candidate, &reason).await;
@@ -249,6 +278,17 @@ impl VsManifest {
 
     /// Fetch and parse the manifest of a single channel (cached)
     async fn fetch_channel(channel: &VsChannelSpec, cache_dir: &Path) -> Result<Self> {
+        Self::fetch_channel_inner(channel, cache_dir)
+            .await
+            .map(|(manifest, _)| manifest)
+    }
+
+    /// [`Self::fetch_channel`] plus the identity of the package manifest that
+    /// served the parse.
+    async fn fetch_channel_inner(
+        channel: &VsChannelSpec,
+        cache_dir: &Path,
+    ) -> Result<(Self, ManifestIdentity)> {
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .build()
@@ -421,7 +461,14 @@ impl VsManifest {
             channel,
             manifest.packages.len()
         );
-        Ok(manifest)
+        Ok((
+            manifest,
+            ManifestIdentity {
+                url: manifest_url,
+                sha256: manifest_sha256.to_string(),
+                file_name: manifest_file_name,
+            },
+        ))
     }
 
     /// Get latest MSVC toolset version prefix (e.g. "14.42")
@@ -1746,7 +1793,7 @@ mod tests {
             ),
         ];
 
-        let err = VsManifest::fetch_auto_from(&candidates, cache_dir.path())
+        let err = VsManifest::fetch_auto_inner(&candidates, cache_dir.path())
             .await
             .expect_err("a transport failure must not be swallowed");
 
@@ -1874,9 +1921,10 @@ mod tests {
             ),
         ];
 
-        let (manifest, used) = VsManifest::fetch_auto_from(&candidates, cache_dir.path())
-            .await
-            .expect("should fall back to the published channel");
+        let (manifest, used, _identity) =
+            VsManifest::fetch_auto_inner(&candidates, cache_dir.path())
+                .await
+                .expect("should fall back to the published channel");
 
         assert_eq!(used.major, 18);
         assert_eq!(manifest.list_msvc_versions(), vec!["14.50".to_string()]);
@@ -1906,7 +1954,7 @@ mod tests {
             format!("{}/vs/19/release/channel", server.url()),
         )];
 
-        let err = VsManifest::fetch_auto_from(&candidates, cache_dir.path())
+        let err = VsManifest::fetch_auto_inner(&candidates, cache_dir.path())
             .await
             .expect_err("no channel is usable");
 
@@ -1971,7 +2019,7 @@ mod tests {
         ];
 
         for _ in 0..2 {
-            let (_, used) = VsManifest::fetch_auto_from(&candidates, cache_dir.path())
+            let (_, used, _identity) = VsManifest::fetch_auto_inner(&candidates, cache_dir.path())
                 .await
                 .expect("should fall back to the published channel");
             assert_eq!(used.major, 18);
@@ -2014,8 +2062,8 @@ mod tests {
             VsChannelSpec::new(19, None, format!("{}/vs/19/release/channel", server.url()));
         channel_availability::record_at(cache_dir.path(), &channel, "not published yet", 0).await;
 
-        let (manifest, used) =
-            VsManifest::fetch_auto_from(std::slice::from_ref(&channel), cache_dir.path())
+        let (manifest, used, _identity) =
+            VsManifest::fetch_auto_inner(std::slice::from_ref(&channel), cache_dir.path())
                 .await
                 .expect("the channel is published now");
 
@@ -2053,7 +2101,7 @@ mod tests {
         );
 
         // Auto selection records the channel as unavailable...
-        VsManifest::fetch_auto_from(std::slice::from_ref(&channel), cache_dir.path())
+        VsManifest::fetch_auto_inner(std::slice::from_ref(&channel), cache_dir.path())
             .await
             .expect_err("no channel is usable");
         assert!(entry_file(cache_dir.path(), &channel).exists());

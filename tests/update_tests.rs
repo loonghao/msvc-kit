@@ -8,24 +8,34 @@ use std::process::Command;
 
 /// Helper function to get the path to the msvc-kit binary
 fn get_binary_path() -> std::path::PathBuf {
-    let mut path = std::env::current_exe()
+    let exe_name = if cfg!(windows) {
+        "msvc-kit.exe"
+    } else {
+        "msvc-kit"
+    };
+    let exe_dir = std::env::current_exe()
         .expect("Failed to get current executable path")
         .parent()
         .expect("Failed to get parent directory")
         .to_path_buf();
 
-    // Navigate from target/{debug|release}/deps to target/{debug|release}
-    if path.ends_with("deps") {
-        path.pop();
+    // cargo >= 1.100 runs test executables from
+    // target/{debug|release}/build/<pkg>/<hash>/out, older ones from
+    // target/{debug|release}/deps. The CLI binary is linked into
+    // target/{debug|release}, so search upward until it is found and fall back
+    // to the classic sibling path so a missing binary keeps the same error.
+    let mut dir = exe_dir.clone();
+    for _ in 0..6 {
+        let candidate = dir.join(exe_name);
+        if candidate.is_file() {
+            return candidate;
+        }
+        if !dir.pop() {
+            break;
+        }
     }
 
-    path.push(if cfg!(windows) {
-        "msvc-kit.exe"
-    } else {
-        "msvc-kit"
-    });
-
-    path
+    exe_dir.join(exe_name)
 }
 
 /// Helper function to run msvc-kit command and capture output

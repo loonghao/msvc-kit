@@ -131,6 +131,7 @@ impl SdkDownloader {
                 install_path: self.downloader.options.target_dir.clone(),
                 downloaded_files: vec![],
                 arch: self.downloader.options.arch,
+                payload_sha256: Default::default(),
             });
         }
 
@@ -206,6 +207,10 @@ impl SdkDownloader {
             .downloader
             .download_packages(&packages, &download_dir, "Windows SDK")
             .await?;
+        // Official digests travel with the install info so the extraction step
+        // can re-verify an MSI right before the installer runs (G-4 / R3).
+        let payload_sha256 =
+            crate::downloader::common::official_digests_by_path(&packages, &download_dir)?;
 
         tracing::info!("Downloaded {} SDK packages", downloaded_files.len());
 
@@ -215,6 +220,7 @@ impl SdkDownloader {
             version,
             install_path: self.downloader.options.target_dir.clone(),
             downloaded_files,
+            payload_sha256,
             arch: self.downloader.options.arch,
         })
     }
@@ -271,7 +277,7 @@ mod tests {
 #[cfg(test)]
 mod selection_tests {
     use super::*;
-    use crate::downloader::manifest::VsPackage;
+    use crate::downloader::VsPackage;
     use std::collections::HashMap;
 
     fn manifest() -> VsManifest {
