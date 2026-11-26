@@ -60,11 +60,32 @@ pub enum FaultPoint {
     BeforeCleanup,
 }
 
+/// A test-only side effect registered to run at a fault point.
+type FaultAction = Arc<dyn Fn() + Send + Sync>;
+
 /// Points at which a transaction must fail (after doing everything up to and
 /// including the named step). Empty = normal operation.
-#[derive(Debug, Clone, Default)]
+///
+/// `FaultHook` is a test-only control surface: it both records fault points
+/// (an error is returned when the point is hit) and can run a registered
+/// side effect at a point (used to deterministically change the file system
+/// *between* a transaction's pre-write re-check and the write itself, to
+/// reproduce TOCTOU races). Production code always uses [`FaultHook::none`].
+#[derive(Clone, Default)]
 pub struct FaultHook {
     points: Arc<Mutex<Vec<FaultPoint>>>,
+    actions: Arc<Mutex<Vec<(FaultPoint, FaultAction)>>>,
+}
+
+impl std::fmt::Debug for FaultHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let points = self.points.lock().expect("fault hook mutex poisoned");
+        let actions = self.actions.lock().expect("fault hook mutex poisoned");
+        f.debug_struct("FaultHook")
+            .field("points", &*points)
+            .field("action_count", &actions.len())
+            .finish()
+    }
 }
 
 impl FaultHook {
@@ -75,10 +96,30 @@ impl FaultHook {
     pub fn with_points(points: &[FaultPoint]) -> Self {
         Self {
             points: Arc::new(Mutex::new(points.to_vec())),
+            actions: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Register a test-only side effect that runs when `point` is hit, before
+    /// the fault check. Used to inject a deterministic file-system change at
+    /// an exact transaction boundary (e.g. swapping a target's parent
+    /// directory for a reparse point between the pre-write re-check and the
+    /// write), so a TOCTOU race is reproduced without sleeps or timing.
+    pub fn with_action(point: FaultPoint, action: impl Fn() + Send + Sync + 'static) -> Self {
+        Self {
+            points: Arc::new(Mutex::new(Vec::new())),
+            actions: Arc::new(Mutex::new(vec![(point, Arc::new(action))])),
         }
     }
 
     fn hit(&self, point: FaultPoint) -> Result<()> {
+        let actions = self.actions.lock().expect("fault hook mutex poisoned");
+        for (registered, action) in actions.iter() {
+            if *registered == point {
+                action();
+            }
+        }
+        drop(actions);
         let active = self
             .points
             .lock()

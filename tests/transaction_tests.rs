@@ -1189,7 +1189,12 @@ async fn legacy_detection_rejects_receipts_junction() {
         Err(error) => error,
         Ok(mut tx) => {
             let staged = tx
-                .stage_package(PKG, &[fx.payload.clone()], &HashMap::new(), |_| true)
+                .stage_package(
+                    PKG,
+                    std::slice::from_ref(&fx.payload),
+                    &HashMap::new(),
+                    |_| true,
+                )
                 .await
                 .unwrap();
             let merged = tx.merge(std::slice::from_ref(&staged)).unwrap();
@@ -1237,7 +1242,12 @@ async fn legacy_detection_rejects_extracted_marker_symlink() {
         Err(error) => error,
         Ok(mut tx) => {
             let staged = tx
-                .stage_package(PKG, &[fx.payload.clone()], &HashMap::new(), |_| true)
+                .stage_package(
+                    PKG,
+                    std::slice::from_ref(&fx.payload),
+                    &HashMap::new(),
+                    |_| true,
+                )
                 .await
                 .unwrap();
             let merged = tx.merge(std::slice::from_ref(&staged)).unwrap();
@@ -1291,7 +1301,12 @@ async fn genuine_legacy_receipt_still_allows_managed_replace() {
 
     let mut tx = transaction::Transaction::begin(&fx.root, "plan", FaultHook::none()).unwrap();
     let staged = tx
-        .stage_package(PKG, &[fx.payload.clone()], &HashMap::new(), |_| true)
+        .stage_package(
+            PKG,
+            std::slice::from_ref(&fx.payload),
+            &HashMap::new(),
+            |_| true,
+        )
         .await
         .unwrap();
     let merged = tx.merge(std::slice::from_ref(&staged)).unwrap();
@@ -1400,19 +1415,182 @@ async fn transactions_have_unique_ids_for_same_plan() {
     assert!(second.journal_path().is_file());
 }
 
-/// P1-C: a junction planted between the pre-pass and the write must be
+/// P1-C: a junction planted *between* the pre-pass and the write must be
 /// refused at the write; no bytes may leak outside the install root.
+///
+/// This is a deterministic TOCTOU race injection: `FaultHook::with_action`
+/// swaps the target's parent directory (`root/VC`) for a reparse point aimed
+/// at an outside directory at the exact transaction boundary between the
+/// pre-write re-check and `std::fs::copy`. No sleeps or timing are involved —
+/// the hook runs synchronously at the fault point, so the race is reproduced
+/// every run (or skipped when the platform cannot create a reparse point).
 #[tokio::test]
 async fn commit_rechecks_target_before_write() {
-    // This test verifies the TOCTOU guard statically/dynamically via the
-    // existing junction test; it documents the boundary for reviewers.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
     let fx = Fixture::new(&[(REL_FILE, b"content")]);
-    let mut tx = transaction::Transaction::begin(&fx.root, "plan", FaultHook::none()).unwrap();
+    // Outside tree the junction will target; holds a sentinel so we can prove
+    // no bytes leaked through the link.
+    let outside = fx._guard.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("sentinel.txt"), b"keep").unwrap();
+
+    // The hook swaps `root/VC` for a junction to `outside` at the instant the
+    // transaction is about to copy the staged file. It runs after the first
+    // pre-write re-check (which created `VC/Tools/plan`) and before the second
+    // re-check immediately preceding `std::fs::copy`.
+    let root = fx.root.clone();
+    let outside_for_action = outside.clone();
+    let created = Arc::new(AtomicBool::new(false));
+    let created_for_action = Arc::clone(&created);
+    let hooks = FaultHook::with_action(FaultPoint::BeforeInstall, move || {
+        let vc = root.join("VC");
+        let _ = std::fs::remove_dir_all(&vc);
+        let ok = make_directory_link(&vc, &outside_for_action);
+        created_for_action.store(ok, Ordering::SeqCst);
+    });
+
+    let mut tx = transaction::Transaction::begin(&fx.root, "plan", hooks).unwrap();
+    let tx_id = tx.transaction_id().to_string();
     let staged = tx
-        .stage_package(PKG, &[fx.payload.clone()], &HashMap::new(), |_| true)
+        .stage_package(
+            PKG,
+            std::slice::from_ref(&fx.payload),
+            &HashMap::new(),
+            |_| true,
+        )
         .await
         .unwrap();
     let merged = tx.merge(std::slice::from_ref(&staged)).unwrap();
-    tx.commit(&merged).await.unwrap();
-    assert_eq!(std::fs::read(fx.root.join(REL_FILE)).unwrap(), b"content");
+
+    let commit_result = tx.commit(&merged).await;
+    if !created.load(Ordering::SeqCst) {
+        eprintln!("SKIP: cannot create a directory reparse point");
+        return;
+    }
+
+    // The commit must refuse to write through the junction.
+    let error = commit_result.unwrap_err();
+    assert!(
+        error.to_string().contains("reparse point"),
+        "commit must refuse a parent swapped to a reparse point before the write, got: {error}"
+    );
+
+    // No bytes leaked into the outside tree.
+    let leaked = outside.join("Tools").join("plan").join("file.txt");
+    assert!(
+        !leaked.exists(),
+        "commit wrote outside the install boundary"
+    );
+    assert_eq!(
+        std::fs::read(outside.join("sentinel.txt")).unwrap(),
+        b"keep",
+        "outside sentinel must be untouched"
+    );
+
+    // The transaction must NOT be recorded as committed or cleanly rolled
+    // back: the rollback path also refuses to traverse the reparse point, so
+    // it is parked in needs_recovery for a human decision. This proves the
+    // failure was not silently absorbed.
+    assert!(!transaction::journal_has_committed(
+        &fx.root
+            .join(".msvc-kit")
+            .join("transactions")
+            .join(&tx_id)
+            .join("journal.jsonl")
+    ));
+    let report = transaction::recover_pending(&fx.root).await.unwrap();
+    assert_eq!(report.needs_recovery, vec![tx_id.clone()], "{report:?}");
+    assert!(
+        report.rolled_back.is_empty() && report.cleaned_staging.is_empty(),
+        "a refused rollback must not be reported as success: {report:?}"
+    );
+}
+
+/// P1-C (replace path): a junction planted before the backup rename must be
+/// refused, so neither the backup nor the install traverses the reparse
+/// point. The outside tree (and the original file it mirrors) stays intact.
+#[tokio::test]
+async fn commit_rechecks_replace_target_before_backup() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let fx = Fixture::new(&[(REL_FILE, b"new-bytes")]);
+    fx.make_legacy_with_conflicting_file(REL_FILE, b"old-bytes");
+    // Outside tree the junction targets; it already mirrors the old file so a
+    // backup/install through the link would touch it. A sentinel proves no
+    // unrelated bytes leaked.
+    let outside = fx._guard.path().join("outside-replace");
+    let outside_file = outside.join("Tools").join("plan").join("file.txt");
+    std::fs::create_dir_all(outside_file.parent().unwrap()).unwrap();
+    std::fs::write(&outside_file, b"old-bytes").unwrap();
+    std::fs::write(outside.join("sentinel.txt"), b"keep").unwrap();
+
+    // Swap `root/VC` for a junction at BeforeBackup: after the target re-check
+    // and before the backup rename. The following re-check (and the
+    // backup-path reparse guard) must refuse.
+    let root = fx.root.clone();
+    let outside_for_action = outside.clone();
+    let created = Arc::new(AtomicBool::new(false));
+    let created_for_action = Arc::clone(&created);
+    let hooks = FaultHook::with_action(FaultPoint::BeforeBackup, move || {
+        let vc = root.join("VC");
+        let _ = std::fs::remove_dir_all(&vc);
+        let ok = make_directory_link(&vc, &outside_for_action);
+        created_for_action.store(ok, Ordering::SeqCst);
+    });
+
+    let mut tx = transaction::Transaction::begin(&fx.root, "plan", hooks).unwrap();
+    let tx_id = tx.transaction_id().to_string();
+    let staged = tx
+        .stage_package(
+            PKG,
+            std::slice::from_ref(&fx.payload),
+            &HashMap::new(),
+            |_| true,
+        )
+        .await
+        .unwrap();
+    let merged = tx.merge(std::slice::from_ref(&staged)).unwrap();
+
+    let commit_result = tx.commit(&merged).await;
+    if !created.load(Ordering::SeqCst) {
+        eprintln!("SKIP: cannot create a directory reparse point");
+        return;
+    }
+
+    let error = commit_result.unwrap_err();
+    assert!(
+        error.to_string().contains("reparse point"),
+        "commit must refuse a parent swapped to a reparse point before the backup, got: {error}"
+    );
+
+    // Neither the backup nor the install may have traversed the link: the
+    // outside copy of the old file and the sentinel are byte-identical.
+    assert_eq!(
+        std::fs::read(&outside_file).unwrap(),
+        b"old-bytes",
+        "backup/install must not write through the reparse point"
+    );
+    assert_eq!(
+        std::fs::read(outside.join("sentinel.txt")).unwrap(),
+        b"keep"
+    );
+
+    // Not committed, and recovery must park it (needs_recovery), not roll it
+    // back: the rollback path also refuses the reparse point.
+    assert!(!transaction::journal_has_committed(
+        &fx.root
+            .join(".msvc-kit")
+            .join("transactions")
+            .join(&tx_id)
+            .join("journal.jsonl")
+    ));
+    let report = transaction::recover_pending(&fx.root).await.unwrap();
+    assert_eq!(report.needs_recovery, vec![tx_id.clone()], "{report:?}");
+    assert!(
+        report.rolled_back.is_empty() && report.cleaned_staging.is_empty(),
+        "a refused rollback must not be reported as success: {report:?}"
+    );
 }
